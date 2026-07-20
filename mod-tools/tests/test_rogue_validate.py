@@ -309,6 +309,33 @@ def _build_complete_fixture(root: Path) -> None:
     _write_json(assets_dir / shop.SHOP_JSON, server_shop)
     _write_json(assets_dir / shop.SHOP_ID_MAP_JSON, id_map)
 
+    client_rounds = {
+        rewards.EVENT_ID: {
+            str(round_number): _leaf(
+                [[str(700099000 + round_number), "1", str(round_number)]]
+            )
+            for round_number in range(1, 16)
+        }
+    }
+    client_rounds[rewards.EVENT_ID]["99"] = _leaf(
+        [["700099099", "2", "0"]]
+    )
+    _write_table(store, rogue_build.Q_QUEST, client_rounds)
+    server_rounds = {
+        str(700099000 + round_number): {
+            "rushEventId": 700099,
+            "rushEventFolderId": 1,
+            "rushEventRound": round_number,
+        }
+        for round_number in range(1, 16)
+    }
+    server_rounds["700099099"] = {
+        "rushEventId": 700099,
+        "rushEventFolderId": 2,
+        "rushEventRound": 0,
+    }
+    _write_json(assets_dir / "rush_event_quest.json", server_rounds)
+
     for index, spec in enumerate(rewards.WEAPONS):
         image = Image.new("RGBA", (20, 20), (0, 0, 0, 0))
         image.paste(
@@ -510,6 +537,50 @@ class TestCompleteRelease(CompleteFixtureCase):
                 )
         self.assertEqual(15, stdout.getvalue().count("[ABILITY]"))
         self.assertIn("equipment[8000101].missing", stderr.getvalue())
+
+    def test_data_only_client_round_gate_does_not_expand_legacy_validate_scope(self):
+        rounds = _read_table(self.store, rogue_build.Q_QUEST)
+        round_one = core.read_csv_lines(rounds[rewards.EVENT_ID]["1"])
+        round_one[0][2] = "2"
+        rounds[rewards.EVENT_ID]["1"] = _leaf(round_one)
+        _write_table(self.store, rogue_build.Q_QUEST, rounds)
+        with self.assertRaisesRegex(
+            validate.RogueValidationError,
+            r"rush_event_quest\[1\]\.mapping",
+        ):
+            validate.validate_release_data_only(self.store, self.assets_dir)
+        result = self.validate()
+
+        self.assertEqual((), result.errors)
+        self.assertIsNotNone(result.snapshot)
+        self.assertEqual(15, len(result.descriptions))
+
+    def test_data_only_server_round_gate_does_not_expand_require_release_ready_scope(self):
+        server_rounds_path = self.assets_dir / "rush_event_quest.json"
+        server_rounds = json.loads(server_rounds_path.read_text(encoding="utf-8"))
+        server_rounds["700099001"]["rushEventFolderId"] = 9
+        _write_json(server_rounds_path, server_rounds)
+        with self.assertRaisesRegex(
+            validate.RogueValidationError,
+            r"assets\.rush_event_quest\[1\]\.mapping",
+        ):
+            validate.validate_release_data_only(self.store, self.assets_dir)
+        with mock.patch.object(
+            validate.apk_builder,
+            "export_verified_class",
+            side_effect=lambda _swf, export_dir, _ffdec, _java: _write_fake_export(
+                Path(export_dir)
+            ),
+        ):
+            snapshot = validate.require_release_ready(
+                self.store,
+                self.assets_dir,
+                self.report_path,
+                ffdec=self.ffdec,
+                java=self.java,
+            )
+
+        self.assertEqual(21, len(snapshot.entries))
 
 
 class TestMasterBoundaries(CompleteFixtureCase):

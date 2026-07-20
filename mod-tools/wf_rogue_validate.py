@@ -10,6 +10,7 @@ import json
 import sys
 import tempfile
 import zipfile
+import zlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -25,6 +26,22 @@ import wf_rogue_shop as shop
 
 ROOT = Path(__file__).resolve().parents[1]
 ASSETS_DIR = ROOT / "assets"
+
+
+def _strict_json_load(text: str) -> Any:
+    """JSON input is release evidence: duplicates and NaN are not benign."""
+    def reject_constant(value: str) -> Any:
+        raise ValueError(f"non-standard JSON constant {value}")
+
+    def reject_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(f"duplicate JSON key {key!r}")
+            result[key] = value
+        return result
+
+    return json.loads(text, parse_constant=reject_constant, object_pairs_hook=reject_duplicates)
 
 
 def _load_task7_builder():
@@ -92,6 +109,20 @@ class ValidationResult:
     snapshot: ReleaseSnapshot | None = None
 
 
+class RogueValidationError(RuntimeError):
+    """The offline bundle's roguelike content is incomplete or inconsistent."""
+
+
+@dataclass(frozen=True, slots=True)
+class RogueDataReport:
+    event_id: int
+    round_count: int
+    token_id: int
+    weapon_ids: tuple[int, ...]
+    missing_logicals: tuple[str, ...]
+    ready: bool
+
+
 def release_logicals() -> list[str]:
     """Return the complete explicit release allowlist in deterministic order."""
     return [
@@ -108,18 +139,10 @@ def release_logicals() -> list[str]:
     ]
 
 
-def validate_release(
-    store: Path,
-    assets_dir: Path,
-    report_path: Path,
-    *,
-    ffdec: Path,
-    java: Path,
-) -> ValidationResult:
-    """Validate a materialized release without changing it."""
+def _validate_release_data(store: Path, assets_dir: Path) -> ValidationResult:
+    """Validate every store/server roguelike invariant, without APK tooling."""
     store = Path(store)
     assets_dir = Path(assets_dir)
-    report_path = Path(report_path)
     errors: list[str] = []
     release_entries: list[ReleaseEntry] = []
 
@@ -163,7 +186,6 @@ def validate_release(
         errors,
     )
     _validate_pngs(store, assets_dir, errors, release_entries)
-    _validate_client_verification(report_path, Path(ffdec), Path(java), errors)
 
     expected_logicals = release_logicals()
     actual_logicals = [entry.logical for entry in release_entries]
@@ -184,6 +206,156 @@ def validate_release(
         descriptions=tuple(descriptions),
         snapshot=snapshot,
     )
+
+
+def validate_release_data_only(store: Path, assets_dir: Path) -> RogueDataReport:
+    """Run the strict offline-only data gate without APK tooling.
+
+    The historical ``validate_release`` scope remains table/icon/shop plus its
+    client report.  This offline API layers the exact 1..15/99 client/server
+    round mapping on top of those unchanged predicates.
+    """
+    result = _validate_release_data(store, assets_dir)
+    errors = list(result.errors)
+    round_count = _validate_offline_rounds(Path(store), Path(assets_dir), errors)
+    if errors:
+        raise RogueValidationError(
+            "rogue release data validation failed: " + "; ".join(errors)
+        )
+    return RogueDataReport(
+        event_id=int(rewards.EVENT_ID),
+        round_count=round_count,
+        token_id=int(rewards.TOKEN_ID),
+        weapon_ids=tuple(int(spec.id) for spec in rewards.WEAPONS),
+        missing_logicals=(),
+        ready=True,
+    )
+
+
+def _parse_quest_node_strict(raw: bytes, label: str) -> object:
+    """Parse a quest tree while rejecting duplicate keys at every map level."""
+    if not raw:
+        return ""
+    parsed = q._try_parse_map(raw)
+    if parsed is not None:
+        keys, chunks = parsed
+        if len(set(keys)) != len(keys):
+            raise ValueError(f"duplicate quest-map key in {label}")
+        return {
+            key: _parse_quest_node_strict(chunk, f"{label}/{key}")
+            for key, chunk in zip(keys, chunks)
+        }
+    try:
+        return zlib.decompress(raw).decode("utf-8")
+    except (UnicodeDecodeError, zlib.error) as exc:
+        raise ValueError(f"unreadable quest-map leaf in {label}") from exc
+
+
+def _validate_offline_rounds(store: Path, assets_dir: Path, errors: list[str]) -> int:
+    """Validate the 15 normal rounds in both client and server representations."""
+    path = store / q.hashed_rel(rogue_build.Q_QUEST)
+    rounds: list[int] = []
+    try:
+        client = _parse_quest_node_strict(path.read_bytes(), rogue_build.Q_QUEST)
+        event = client.get(rewards.EVENT_ID) if isinstance(client, dict) else None
+        if not isinstance(event, dict):
+            raise ValueError("event map is absent")
+        expected_round_keys = {str(value) for value in range(1, 16)} | {"99"}
+        if set(event) != expected_round_keys:
+            rounds = sorted(int(key) for key in event if isinstance(key, str) and key in expected_round_keys and key != "99")
+            errors.append(f"rush_event_quest[{rewards.EVENT_ID}].rounds: expected=1..15 actual={rounds}")
+        else:
+            rounds = list(range(1, 16))
+        for round_number in range(1, 16):
+            rows = _leaf_rows(event[str(round_number)], f"rush_event_quest[{round_number}]", errors)
+            expected_id = str(700099000 + round_number)
+            if (
+                rows is None or len(rows) != 1 or len(rows[0]) < 3
+                or rows[0][0] != expected_id
+                or rows[0][1] != "1"
+                or rows[0][2] != str(round_number)
+            ):
+                errors.append(f"rush_event_quest[{round_number}].mapping")
+        rows99 = _leaf_rows(event["99"], "rush_event_quest[99]", errors)
+        if (
+            rows99 is None or len(rows99) != 1 or len(rows99[0]) < 3
+            or rows99[0][0] != "700099099"
+            or rows99[0][1] != "2"
+            or rows99[0][2] != "0"
+        ):
+            errors.append("rush_event_quest[99].mapping")
+    except Exception as exc:
+        errors.append(f"rush_event_quest[{rewards.EVENT_ID}].invalid: {type(exc).__name__}: {exc}")
+    server_path = assets_dir / "rush_event_quest.json"
+    try:
+        server = _strict_json_load(server_path.read_text(encoding="utf-8"))
+        if not isinstance(server, dict):
+            raise ValueError("root is not object")
+        expected_keys = {str(700099000 + value) for value in range(1, 16)}
+        event_keys = {
+            key for key in server
+            if isinstance(key, str) and key.startswith("700099") and key[6:].isdigit()
+        }
+        allowed_keys = expected_keys | {"700099099"}
+        actual_keys = event_keys & expected_keys
+        if actual_keys != expected_keys:
+            errors.append("assets.rush_event_quest.rounds: expected exactly 15 event rounds")
+        extras = sorted(event_keys - allowed_keys)
+        if extras:
+            errors.append(f"assets.rush_event_quest.extra_rounds: {extras}")
+        for round_number in range(1, 16):
+            row = server.get(str(700099000 + round_number))
+            if (
+                not isinstance(row, dict)
+                or type(row.get("rushEventId")) is not int
+                or type(row.get("rushEventFolderId")) is not int
+                or type(row.get("rushEventRound")) is not int
+                or row.get("rushEventId") != 700099
+                or row.get("rushEventFolderId") != 1
+                or row.get("rushEventRound") != round_number
+            ):
+                errors.append(f"assets.rush_event_quest[{round_number}].mapping")
+        row99 = server.get("700099099")
+        if (
+            not isinstance(row99, dict)
+            or type(row99.get("rushEventId")) is not int
+            or type(row99.get("rushEventFolderId")) is not int
+            or type(row99.get("rushEventRound")) is not int
+            or row99.get("rushEventId") != 700099
+            or row99.get("rushEventFolderId") != 2
+            or row99.get("rushEventRound") != 0
+        ):
+            errors.append("assets.rush_event_quest[99].mapping")
+    except Exception as exc:
+        errors.append(f"assets.rush_event_quest.invalid: {type(exc).__name__}: {exc}")
+    return len(rounds)
+
+
+def validate_rogue_data(store: Path, assets_dir: Path) -> RogueDataReport:
+    report = validate_release_data_only(store, assets_dir)
+    if report.event_id != 700099 or report.round_count != 15:
+        raise RogueValidationError("rush event 700099 must have exactly 15 rounds")
+    if report.token_id != 2370099 or report.weapon_ids != tuple(range(8000101, 8000116)):
+        raise RogueValidationError("rogue token or weapon set mismatch")
+    if report.missing_logicals or not report.ready:
+        raise RogueValidationError("rogue shop/mirror/reward/icon content is incomplete")
+    return report
+
+
+def validate_release(
+    store: Path,
+    assets_dir: Path,
+    report_path: Path,
+    *,
+    ffdec: Path,
+    java: Path,
+) -> ValidationResult:
+    """Validate a materialized release without changing it."""
+    result = _validate_release_data(store, assets_dir)
+    errors = list(result.errors)
+    _validate_client_verification(Path(report_path), Path(ffdec), Path(java), errors)
+    snapshot = result.snapshot if not errors else None
+    return ValidationResult(tuple(errors), result.descriptions, snapshot)
 
 
 def require_release_ready(
@@ -290,7 +462,7 @@ def _load_json(
         errors.append(f"assets.{stem}.missing: {path}")
         return None
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        return _strict_json_load(path.read_text(encoding="utf-8"))
     except Exception as exc:
         errors.append(
             f"assets.{stem}.invalid: {type(exc).__name__}: {exc}"
@@ -842,7 +1014,7 @@ def _validate_client_verification(
         )
         return
     try:
-        data = json.loads(report_path.read_text(encoding="utf-8"))
+        data = _strict_json_load(report_path.read_text(encoding="utf-8"))
     except Exception as exc:
         errors.append(
             f"client_verification.report.invalid: "
