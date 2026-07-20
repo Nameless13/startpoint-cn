@@ -426,6 +426,16 @@ def read_orderedmap_file_from_bytes(raw: bytes) -> dict[str, str]:
     return out
 
 
+def read_orderedmap_raw_rows_from_bytes(
+    raw: bytes, logical_path: str = "[memory-bytes]"
+) -> OrderedMap:
+    """Decode an orderedmap index while preserving every stored row byte."""
+    keys, rows = _strict_orderedmap_rows(
+        raw, label=logical_path, compressed_rows=False
+    )
+    return OrderedMap(logical_path, keys, rows, Path(logical_path))
+
+
 def build_orderedmap(ordered: OrderedMap) -> bytes:
     """写 orderedmap,row_offset 使用行尾语义(与游戏客户端一致)。"""
     key_blob = b""
