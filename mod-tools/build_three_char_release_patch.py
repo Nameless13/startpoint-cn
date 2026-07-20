@@ -36,6 +36,7 @@ import tempfile
 import zipfile
 import zlib
 from pathlib import Path
+from typing import Literal
 
 MOD_DIR = Path(__file__).resolve().parent
 ROOT = MOD_DIR.parent
@@ -43,6 +44,7 @@ sys.path.insert(0, str(MOD_DIR))
 
 import wf_quest_lib as quest  # noqa: E402
 import wf_mod_tool as core  # noqa: E402
+from wf_character_pack import ARCHIVE_PREFIXES  # noqa: E402
 
 ACTIVE_DIR = ROOT / "assets" / "asset-patch" / "active"
 FROM_VERSION = "1.4.106"
@@ -68,6 +70,11 @@ PACKAGES = {
     },
 }
 CLIENT_ROOTS = ("android", "common", "medium")
+RootName = Literal["common", "medium", "android"]
+RootedKey = tuple[RootName, str]
+PREFIX_TO_ROOT = {
+    prefix.rstrip("/"): root for root, prefix in ARCHIVE_PREFIXES.items()
+}
 # Known manifest under-claims (sealed credentials cannot be edited): the
 # Gerald 1.4.167 PF release added this key without a manifest table claim.
 EXTRA_SANCTIONED = {
@@ -103,16 +110,31 @@ def edge_sort_key(name: str):
     )
 
 
-def repo_tail_state() -> dict[str, bytes]:
-    state: dict[str, bytes] = {}
+def parse_archive_member(name: str) -> RootedKey:
+    normalized = name.replace("\\", "/").strip("/")
+    for prefix, root in PREFIX_TO_ROOT.items():
+        marker = prefix + "/"
+        if normalized.startswith(marker):
+            relative = normalized[len(marker):]
+            if not re.fullmatch(r"[0-9a-f]{2}/[0-9a-f]{38}", relative):
+                raise ValueError(f"invalid hashed member: {name}")
+            return root, relative
+    raise ValueError(f"unknown archive root: {name}")
+
+
+def archive_member_name(key: RootedKey) -> str:
+    root, relative = key
+    return f"{ARCHIVE_PREFIXES[root]}{relative}"
+
+
+def repo_tail_state() -> dict[RootedKey, bytes]:
+    state: dict[RootedKey, bytes] = {}
     for name in sorted(
         (p.name for p in ACTIVE_DIR.glob("*.zip")), key=edge_sort_key
     ):
         with zipfile.ZipFile(ACTIVE_DIR / name) as zf:
             for member in zf.namelist():
-                if member.startswith("production/upload/"):
-                    rel = member.split("production/upload/", 1)[1]
-                    state[rel] = zf.read(member)
+                state[parse_archive_member(member)] = zf.read(member)
     return state
 
 
@@ -142,15 +164,15 @@ def rows_equal(a: bytes, b: bytes) -> bool:
 def official_table_bytes(rel: str) -> bytes | None:
     if not OFFICIAL_FULL.exists():
         return None
+    member_name = archive_member_name(("common", rel))
     with zipfile.ZipFile(OFFICIAL_FULL) as zf:
-        for member in zf.namelist():
-            if member.endswith(rel):
-                return zf.read(member)
+        if member_name in zf.namelist():
+            return zf.read(member_name)
     return None
 
 
-def collect() -> tuple[dict[str, tuple[bytes, str]], list[str]]:
-    """rel -> (bytes, description); plus human-readable notes."""
+def collect() -> tuple[dict[RootedKey, tuple[bytes, str]], list[str]]:
+    """(root, rel) -> (bytes, description); plus human-readable notes."""
     notes: list[str] = []
     tail = repo_tail_state()
     notes.append(f"repo tail: {len(tail)} members across chain")
@@ -158,7 +180,7 @@ def collect() -> tuple[dict[str, tuple[bytes, str]], list[str]]:
     if not store.exists():
         raise SystemExit(f"store not found: {store}")
 
-    members: dict[str, tuple[bytes, str]] = {}
+    members: dict[RootedKey, tuple[bytes, str]] = {}
     claims: dict[str, set[str]] = {}
 
     for package_id, spec in PACKAGES.items():
@@ -184,9 +206,10 @@ def collect() -> tuple[dict[str, tuple[bytes, str]], list[str]]:
                         f"{package_id}: payload drift {root}:{logical}"
                     )
                 rel = quest.hashed_rel(logical)
-                if rel in tail and sha256(tail[rel]) == entry["sha256"]:
+                key = (root, rel)
+                if key in tail and sha256(tail[key]) == entry["sha256"]:
                     continue  # chain already current (afterchain partial)
-                members[rel] = (data, f"{package_id}:{root}:{logical}")
+                members[key] = (data, f"{package_id}:{root}:{logical}")
                 file_count += 1
         notes.append(f"{package_id}: {file_count} file payload members")
         for table in manifest.get("tables", []):
@@ -200,9 +223,10 @@ def collect() -> tuple[dict[str, tuple[bytes, str]], list[str]]:
     table_count = 0
     for logical in sorted(claims):
         rel = quest.hashed_rel(logical)
+        key = ("common", rel)
         live = (store / rel).read_bytes()
-        if rel in tail:
-            baseline, baseline_src = tail[rel], "chain-tail"
+        if key in tail:
+            baseline, baseline_src = tail[key], "chain-tail"
         else:
             official = official_table_bytes(rel)
             if official is None:
@@ -224,7 +248,7 @@ def collect() -> tuple[dict[str, tuple[bytes, str]], list[str]]:
             raise SystemExit(
                 f"{logical}: unsanctioned rows vs {baseline_src}: {unsanctioned[:5]}"
             )
-        members[rel] = (live, f"table:{logical} (+{len(touched)} rows)")
+        members[key] = (live, f"table:{logical} (+{len(touched)} rows)")
         table_count += 1
     notes.append(f"tables: {table_count} surgical members")
     return members, notes
@@ -234,23 +258,26 @@ def deflated_size(data: bytes) -> int:
     return len(zlib.compress(data, 9)) + 120  # entry overhead estimate
 
 
-def build_parts(members: dict[str, tuple[bytes, str]]) -> list[tuple[str, bytes]]:
+def build_parts(
+    members: dict[RootedKey, tuple[bytes, str]],
+    max_part_bytes: int = PART_BUDGET,
+) -> list[tuple[str, bytes]]:
     ordered = sorted(members.items())
-    bins: list[list[tuple[str, bytes]]] = [[]]
+    bins: list[list[tuple[RootedKey, bytes]]] = [[]]
     budget = 0
-    for rel, (data, _desc) in ordered:
+    for key, (data, _desc) in ordered:
         est = deflated_size(data)
-        if budget + est > PART_BUDGET and bins[-1]:
+        if budget + est > max_part_bytes and bins[-1]:
             bins.append([])
             budget = 0
-        bins[-1].append((rel, data))
+        bins[-1].append((key, data))
         budget += est
     parts: list[tuple[str, bytes]] = []
     for index, entries in enumerate(bins, start=1):
         buffer = io.BytesIO()
         with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as zf:
-            for rel, data in entries:
-                info = zipfile.ZipInfo(f"production/upload/{rel}", ZIP_DATE)
+            for key, data in entries:
+                info = zipfile.ZipInfo(archive_member_name(key), ZIP_DATE)
                 info.compress_type = zipfile.ZIP_DEFLATED
                 info.external_attr = 0o644 << 16
                 zf.writestr(info, data, compresslevel=9)
@@ -277,7 +304,8 @@ def main() -> None:
 
     parts = build_parts(members)
     listing = "".join(
-        f"{rel}:{sha256(data)}\n" for rel, (data, _d) in sorted(members.items())
+        f"{archive_member_name(key)}:{sha256(data)}\n"
+        for key, (data, _d) in sorted(members.items())
     )
     print(f"[plan] aggregate member sha256: {sha256(listing.encode('utf-8'))}")
     for name, blob in parts:
