@@ -747,7 +747,7 @@ def _ffdec_args(config: _ResolvedConfig, transaction: Path, runner: Runner):
         "ffdec": Path(config.toolchain.ffdec),
         "java": Path(config.toolchain.java),
         "profile_dir": transaction / "profile",
-        "work_dir": transaction / "stage-work",
+        "work_dir": transaction / "w",
         "runner": runner,
     }
 
@@ -947,7 +947,7 @@ def verify_signed_apk(
         if not _same_digest(_sha256_file(final_swf), _sha256_file(final_stage_swf)):
             raise ApkBuildError("signed APK SWF differs from the final patch stage")
         stage_runner = _CheckedStageRunner(runner, config.signing)
-        args = _ffdec_args(config, transaction / "final-verify", stage_runner)
+        args = _ffdec_args(config, transaction / "v", stage_runner)
         abyss_report = verify_abyss_gate(final_swf, **args)
         seris_report = SERIS.verify_seris_phase4(
             final_swf, lock, timeout=STAGE_TIMEOUT_SECONDS, **args

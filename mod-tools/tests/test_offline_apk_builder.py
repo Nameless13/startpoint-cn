@@ -13,7 +13,7 @@ import types
 import unittest
 import zipfile
 from contextlib import ExitStack
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from unittest import mock
 
 
@@ -307,6 +307,8 @@ class BuilderFixture(unittest.TestCase):
         self.stage_events: list[str] = []
         self.verify_events: list[str] = []
         self.stage_locks: list[object] = []
+        self.stage_work_dirs: list[tuple[str, Path]] = []
+        self.seris_verify_work_dirs: list[Path] = []
 
     def tearDown(self) -> None:
         self.temp.cleanup()
@@ -314,6 +316,7 @@ class BuilderFixture(unittest.TestCase):
     def fake_apply(self, stage: str):
         def apply(source: Path, output: Path, *args, **kwargs):
             self.stage_events.append(stage)
+            self.stage_work_dirs.append((stage, Path(kwargs["work_dir"])))
             if args:
                 self.stage_locks.append(args[0])
             Path(output).write_bytes(Path(source).read_bytes() + stage.encode("ascii"))
@@ -358,6 +361,7 @@ class BuilderFixture(unittest.TestCase):
 
     def fake_seris_verify(self, output: Path, lock, **kwargs):
         self.verify_events.append("seris-phase4")
+        self.seris_verify_work_dirs.append(Path(kwargs["work_dir"]))
         return types.SimpleNamespace(
             output_path=Path(output),
             input_sha256="3" * 64,
@@ -515,6 +519,61 @@ class OfflineApkBuilderTests(BuilderFixture):
         self.assertTrue(report.verified)
         self.assertTrue(self.output.is_file())
         self.assertTrue(self.report.is_file())
+
+    def test_ffdec_internal_paths_stay_below_windows_classic_max_path(self) -> None:
+        with self.patches():
+            self.module.build_offline_apk(self.config, runner=FakeRunner())
+
+        apply_work = next(
+            path for stage, path in self.stage_work_dirs if stage == "seris-phase4"
+        )
+        verify_work = self.seris_verify_work_dirs[0]
+
+        def relative_to_transaction(path: Path) -> PureWindowsPath:
+            transaction = next(
+                parent
+                for parent in (path, *path.parents)
+                if parent.name.startswith(".offline-apk-")
+            )
+            return PureWindowsPath(*path.relative_to(transaction).parts)
+
+        transaction = PureWindowsPath(
+            r"D:\WF\startpoint-cn\out\wf-offline-android\1.4.196"
+            r"\.staging-ed8b36a0a2194376af553988ebcb4a15\apk-work"
+            r"\.offline-apk-7a_mmq0j"
+        )
+        class_leaf = PureWindowsPath(
+            "scripts",
+            "pinball",
+            "scene",
+            "battle",
+            "viewInput",
+            "processor",
+            "flipButton",
+            "CharacterSpriteView.pcode",
+        )
+        apply_relative = relative_to_transaction(apply_work)
+        verify_relative = relative_to_transaction(verify_work)
+        self.assertEqual(PureWindowsPath("w"), apply_relative)
+        self.assertEqual(PureWindowsPath("v", "w"), verify_relative)
+
+        apply_target = (
+            transaction
+            / apply_relative
+            / ".seris-phase4-12345678"
+            / "08-before-export"
+            / class_leaf
+        )
+        verify_target = (
+            transaction
+            / verify_relative
+            / ".seris-verify-12345678"
+            / "reopen-export"
+            / class_leaf
+        )
+
+        self.assertLess(len(str(apply_target)), 260, str(apply_target))
+        self.assertLess(len(str(verify_target)), 260, str(verify_target))
 
     def test_rewrite_strips_only_top_level_signatures_and_preserves_air(self) -> None:
         swf = self.root / "patched.swf"
