@@ -10,6 +10,7 @@ import importlib.util
 import json
 import os
 import re
+import secrets
 import shutil
 import stat
 import sys
@@ -21,6 +22,8 @@ from typing import Any, Callable, Mapping
 
 HERE = Path(__file__).resolve().parent
 SERIS_PATH = HERE / "seris_phase4_pcode.py"
+RENDER_SCALE_PATH = HERE / "render_scale_pcode.py"
+RESOURCE_VERSION_PATH = HERE / "resource_version_pcode.py"
 TARGET_SWF = "assets/worldflipper_android_release.swf"
 EXPECTED_BASE_APK_SHA256 = "4f6884f33641788108c0522c7c70036c63ba530e1fdb183105b3cd395bdd66f6"
 EXPECTED_SWF_SHA256 = "08187f538703aecadce264b7bd5e085411f8e3aedb5f48adf2cf035a100f550d"
@@ -128,7 +131,7 @@ MERGE_CONTRACTS = {
         ("offline_base_power_flip", "seris_human_dragon_selection"),
     ),
 }
-TOP_LEVEL_KEYS = {
+BASE_TOP_LEVEL_KEYS = {
     "schema_version",
     "status",
     "stage",
@@ -149,6 +152,58 @@ TOP_LEVEL_KEYS = {
     "sites",
     "native_compatibility",
     "three_way_merges",
+}
+EXTENSION_KEYS = {
+    "render_site_ids",
+    "render_sites",
+    "resource_version",
+}
+EXTENDED_TOP_LEVEL_KEYS = BASE_TOP_LEVEL_KEYS | EXTENSION_KEYS
+# Backwards-compatible public name for Task 9 callers and tests.
+TOP_LEVEL_KEYS = BASE_TOP_LEVEL_KEYS
+RENDER_SITE_IDS = ("pixel-art", "member-view", "character-cell")
+RENDER_SITE_IDENTITIES = {
+    "pixel-art": (
+        "pinball.ui.component.pixelArtCharacter.PixelArtCharacterView",
+        "pinball.ui.component.pixelArtCharacter:PixelArtCharacterView/spriteSheetLoadCompleted",
+        "9475368c4dd326f0d8230ba724d96a60af5d30dba37ac5d43d5bdd04a85b038b",
+    ),
+    "member-view": (
+        "pinball.scene.battle.battle.squad.member.MemberView",
+        "pinball.scene.battle.battle.squad.member:MemberView/MemberView",
+        "0ca2af059a85e432c9c6dc991126d0eeba57acaa5ecc152aee83e36ed19a9d77",
+    ),
+    "character-cell": (
+        "pinball.scene.character.cell.CharacterCellView",
+        "pinball.scene.character.cell:CharacterCellView/drawWithAdvanceFlag",
+        "cc64eafcb0bbaeb4f1ae705944da569cc1d59bf9dc7636b1bbfe64342175e3a7",
+    ),
+}
+RENDER_SITE_KEYS = {
+    "class_name",
+    "method_name",
+    "before_pcode_sha256",
+    "after_pcode_sha256",
+    "before_abc_sha256",
+    "after_abc_sha256",
+}
+RESOURCE_VERSION_KEYS = {
+    "site_id",
+    "class_name",
+    "method_name",
+    "source_version",
+    "target_version",
+    "before_pcode_sha256",
+    "after_pcode_sha256",
+    "before_abc_sha256",
+    "after_abc_sha256",
+}
+RESOURCE_VERSION_IDENTITY = {
+    "site_id": "full-resource-version",
+    "class_name": "pinball.config.core.DevConfig",
+    "method_name": "boot_ffc6#$script364/$init",
+    "source_version": "1.4.54",
+    "target_version": "1.4.196",
 }
 
 
@@ -307,9 +362,81 @@ def _require_hash_mapping(value: Any, field: str, *, nonempty: bool = True) -> M
     return value
 
 
-def validate_lock_document(value: Mapping[str, Any], *, expected_status: str) -> Mapping[str, Any]:
-    if not isinstance(value, Mapping) or set(value) != TOP_LEVEL_KEYS:
+def _validate_lock_extensions(value: Mapping[str, Any]) -> None:
+    if tuple(value.get("render_site_ids", ())) != RENDER_SITE_IDS:
+        raise LockDiscoveryError("render site order mismatch")
+    sites = value.get("render_sites")
+    if (
+        not isinstance(sites, Mapping)
+        or len(sites) != len(RENDER_SITE_IDS)
+        or set(sites) != set(RENDER_SITE_IDS)
+    ):
+        raise LockDiscoveryError("render site mapping mismatch")
+    for site_id in RENDER_SITE_IDS:
+        entry = sites[site_id]
+        if not isinstance(entry, Mapping) or set(entry) != RENDER_SITE_KEYS:
+            raise LockDiscoveryError(f"render site schema mismatch for {site_id}")
+        class_name, method_name, before_abc = RENDER_SITE_IDENTITIES[site_id]
+        if (
+            entry["class_name"] != class_name
+            or entry["method_name"] != method_name
+            or entry["before_abc_sha256"] != before_abc
+        ):
+            raise LockDiscoveryError(f"render site identity mismatch for {site_id}")
+        for field in (
+            "before_pcode_sha256",
+            "after_pcode_sha256",
+            "before_abc_sha256",
+            "after_abc_sha256",
+        ):
+            _require_hash(entry[field], f"render_sites.{site_id}.{field}")
+        if (
+            entry["before_pcode_sha256"] == entry["after_pcode_sha256"]
+            or entry["before_abc_sha256"] == entry["after_abc_sha256"]
+        ):
+            raise LockDiscoveryError(f"unchanged render site lock for {site_id}")
+
+    resource = value.get("resource_version")
+    if not isinstance(resource, Mapping) or set(resource) != RESOURCE_VERSION_KEYS:
+        raise LockDiscoveryError("resource-version schema mismatch")
+    for field, expected in RESOURCE_VERSION_IDENTITY.items():
+        if resource[field] != expected:
+            raise LockDiscoveryError(f"resource-version identity mismatch at {field}")
+    for field in (
+        "before_pcode_sha256",
+        "after_pcode_sha256",
+        "before_abc_sha256",
+        "after_abc_sha256",
+    ):
+        _require_hash(resource[field], f"resource_version.{field}")
+    if resource["before_abc_sha256"] != value["offline_method_sha256"][
+        "boot_ffc6#$script364/$init"
+    ]:
+        raise LockDiscoveryError("resource-version baseline identity mismatch")
+    if (
+        resource["before_pcode_sha256"] == resource["after_pcode_sha256"]
+        or resource["before_abc_sha256"] == resource["after_abc_sha256"]
+    ):
+        raise LockDiscoveryError("unchanged resource-version lock")
+
+
+def validate_lock_document(
+    value: Mapping[str, Any],
+    *,
+    expected_status: str,
+    require_extensions: bool = False,
+) -> Mapping[str, Any]:
+    keys = set(value) if isinstance(value, Mapping) else set()
+    has_extensions = keys == EXTENDED_TOP_LEVEL_KEYS
+    if not isinstance(value, Mapping) or keys not in (
+        BASE_TOP_LEVEL_KEYS,
+        EXTENDED_TOP_LEVEL_KEYS,
+    ):
         raise LockDiscoveryError("lock top-level schema mismatch")
+    if require_extensions and not has_extensions:
+        raise LockDiscoveryError("lock extensions are required")
+    if has_extensions and expected_status != "accepted":
+        raise LockDiscoveryError("lock extensions require accepted status")
     _privacy_scan(value)
     if value.get("schema_version") != 4 or value.get("status") != expected_status:
         raise LockDiscoveryError("lock schema/status mismatch")
@@ -419,6 +546,26 @@ def validate_lock_document(value: Mapping[str, Any], *, expected_status: str) ->
             raise LockDiscoveryError(f"three-way post-abyss identity mismatch for {site_id}")
         if tuple(entry["preserved_semantics"]) != semantics or entry["verified"] is not True:
             raise LockDiscoveryError(f"three-way semantic proof mismatch for {site_id}")
+    if has_extensions:
+        _validate_lock_extensions(value)
+    return value
+
+
+def validate_extension_candidate(
+    value: Mapping[str, Any],
+    accepted_base: Mapping[str, Any],
+) -> Mapping[str, Any]:
+    validate_lock_document(accepted_base, expected_status="accepted")
+    if set(accepted_base) != BASE_TOP_LEVEL_KEYS:
+        raise LockDiscoveryError("extension base must be an unextended accepted lock")
+    validate_lock_document(
+        value,
+        expected_status="accepted",
+        require_extensions=True,
+    )
+    for key in BASE_TOP_LEVEL_KEYS:
+        if value[key] != accepted_base[key]:
+            raise LockDiscoveryError(f"extension candidate changed Task 9 field {key}")
     return value
 
 
@@ -529,7 +676,298 @@ def _write_exclusive_canonical(value: Mapping[str, Any], output: Path) -> None:
                 original_error.add_note(f"failed to clean staged lock: {cleanup_error}")
 
 
+class _CasOwnedFile:
+    """Mutable path ownership for one handle-bound accepted-lock CAS."""
+
+    __slots__ = (
+        "path",
+        "identity",
+        "handle",
+        "pending_paths",
+        "pending_label",
+    )
+
+    def __init__(self, path: Path, identity, handle) -> None:
+        self.path = Path(path)
+        self.identity = identity
+        self.handle = handle
+        self.pending_paths = None
+        self.pending_label = None
+
+
+def _reconcile_cas_owner_path(owned, first: Path, second: Path, label: str) -> Path:
+    candidates = []
+    seen = set()
+    for value in (first, second):
+        path = Path(value)
+        key = os.path.normcase(str(path))
+        if key not in seen:
+            seen.add(key)
+            candidates.append(path)
+    matches = []
+    try:
+        for path in candidates:
+            actual = SERIS.PUBLISH_TOOLS._file_identity(
+                path,
+                f"{label} path",
+                missing_ok=True,
+            )
+            if actual == owned.identity:
+                matches.append(path)
+    except SERIS.PUBLISH_TOOLS.BuildError as exc:
+        raise LockDiscoveryError(
+            f"cannot reconcile accepted-lock owner after {label}"
+        ) from exc
+    if len(matches) != 1:
+        raise LockDiscoveryError(
+            f"accepted-lock owner is ambiguous after {label}: {len(matches)} matches"
+        )
+    owned.path = matches[0]
+    owned.pending_paths = None
+    owned.pending_label = None
+    return matches[0]
+
+
+def _settle_pending_cas_owner(
+    owned,
+    original_error: BaseException | None,
+    *,
+    context: str,
+) -> bool:
+    """Retry one unresolved handle rename, or close and report both candidates."""
+    if owned.pending_paths is None:
+        return True
+    pending_paths = tuple(owned.pending_paths)
+    pending_label = owned.pending_label or "accepted-lock cleanup"
+    try:
+        _reconcile_cas_owner_path(
+            owned,
+            pending_paths[0],
+            pending_paths[1],
+            pending_label,
+        )
+    except BaseException as reconcile_error:
+        existing_candidates = [
+            path for path in pending_paths if os.path.lexists(path)
+        ]
+        close_failed = False
+        try:
+            _close_owned_existing(owned)
+        except BaseException as close_error:
+            close_failed = True
+            reconcile_error.add_note(
+                "failed to close unreconciled accepted-lock handle: "
+                f"{type(close_error).__name__}: {close_error}"
+            )
+        close_status = "handle close failed" if close_failed else "handle closed"
+        existing_text = ", ".join(str(path) for path in existing_candidates)
+        detail = (
+            f"{context}; {close_status}; existing pending paths="
+            f"[{existing_text}]; error={type(reconcile_error).__name__}: "
+            f"{reconcile_error}"
+        )
+        if original_error is None:
+            reconcile_error.add_note(detail)
+            raise
+        original_error.add_note(detail)
+        return False
+    return True
+
+
+def _rename_cas_owner_no_replace(owned, destination: Path, label: str) -> None:
+    if owned.pending_paths is not None:
+        raise LockDiscoveryError(
+            "accepted-lock owner has an unresolved handle rename"
+        )
+    previous = Path(owned.path)
+    target = Path(destination)
+    owned.pending_paths = (previous, target)
+    owned.pending_label = label
+    try:
+        SERIS.PUBLISH_TOOLS._rename_staging_handle_no_replace(owned, target)
+    except BaseException as error:
+        try:
+            _reconcile_cas_owner_path(owned, previous, target, label)
+        except BaseException as reconcile_error:
+            error.add_note(
+                f"failed to reconcile accepted-lock owner after {label}: "
+                f"{type(reconcile_error).__name__}: {reconcile_error}"
+            )
+        raise
+    actual = _reconcile_cas_owner_path(owned, previous, target, label)
+    if os.path.normcase(str(actual)) != os.path.normcase(str(target)):
+        raise LockDiscoveryError(
+            f"accepted-lock handle rename did not reach target during {label}"
+        )
+
+
+def _publish_candidate_owner_no_replace(owned, destination: Path) -> None:
+    try:
+        _rename_cas_owner_no_replace(owned, destination, "candidate publication")
+    except OSError as exc:
+        raise LockDiscoveryError(
+            "failed to publish extension candidate for CAS"
+        ) from exc
+
+
+def _open_existing_for_cas(path: Path):
+    """Open and freeze one existing Windows file for an identity-bound rename."""
+    if os.name != "nt":
+        raise LockDiscoveryError("lock compare-and-swap requires Windows")
+    import msvcrt
+
+    handle = None
+    try:
+        ctypes, _wintypes, kernel32 = SERIS.PUBLISH_TOOLS._windows_file_api()
+        generic_read = 0x80000000
+        delete_access = 0x00010000
+        share_read = 0x00000001
+        open_existing = 3
+        normal_attribute = 0x00000080
+        raw_handle = kernel32.CreateFileW(
+            str(path),
+            generic_read | delete_access,
+            share_read,
+            None,
+            open_existing,
+            normal_attribute,
+            None,
+        )
+        if raw_handle == ctypes.c_void_p(-1).value:
+            raise ctypes.WinError(ctypes.get_last_error())
+        try:
+            descriptor = msvcrt.open_osfhandle(raw_handle, os.O_RDONLY | os.O_BINARY)
+        except BaseException:
+            kernel32.CloseHandle(raw_handle)
+            raise
+        try:
+            handle = os.fdopen(descriptor, "rb")
+        except BaseException as error:
+            try:
+                os.close(descriptor)
+            except BaseException as close_error:
+                error.add_note(
+                    "failed to close accepted-lock descriptor after fdopen "
+                    f"failure: {type(close_error).__name__}: {close_error}"
+                )
+            raise
+        owned = _CasOwnedFile(
+            Path(path),
+            SERIS.PUBLISH_TOOLS._identity_from_stat(
+                os.fstat(handle.fileno()), "accepted lock handle"
+            ),
+            handle,
+        )
+        SERIS.PUBLISH_TOOLS._require_file_identity(
+            owned.path, owned.identity, "accepted lock"
+        )
+        return owned
+    except LockDiscoveryError:
+        if handle is not None:
+            handle.close()
+        raise
+    except (OSError, SERIS.PUBLISH_TOOLS.BuildError) as exc:
+        if handle is not None:
+            try:
+                handle.close()
+            except OSError as close_error:
+                exc.add_note(f"failed to close rejected CAS handle: {close_error}")
+        raise LockDiscoveryError(f"cannot freeze accepted lock for CAS: {exc}") from exc
+    except BaseException:
+        if handle is not None:
+            handle.close()
+        raise
+
+
+def _read_owned_existing(owned) -> bytes:
+    try:
+        SERIS.PUBLISH_TOOLS._require_file_identity(
+            owned.path, owned.identity, "accepted lock"
+        )
+        opened = os.fstat(owned.handle.fileno())
+        if opened.st_size <= 0 or opened.st_size > MAX_LOCK_BYTES:
+            raise LockDiscoveryError("accepted lock size is invalid")
+        owned.handle.seek(0)
+        raw = owned.handle.read(MAX_LOCK_BYTES + 1)
+        finished = os.fstat(owned.handle.fileno())
+        if len(raw) != opened.st_size or len(raw) > MAX_LOCK_BYTES:
+            raise LockDiscoveryError("accepted lock size changed while reading")
+        stable_fields = ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")
+        if any(getattr(opened, field) != getattr(finished, field) for field in stable_fields):
+            raise LockDiscoveryError("accepted lock changed while reading")
+        SERIS.PUBLISH_TOOLS._require_file_identity(
+            owned.path, owned.identity, "accepted lock"
+        )
+        return raw
+    except LockDiscoveryError:
+        raise
+    except (OSError, SERIS.PUBLISH_TOOLS.BuildError) as exc:
+        raise LockDiscoveryError(f"cannot read accepted lock for CAS: {exc}") from exc
+
+
+def _retire_existing_no_replace(owned, destination: Path):
+    """Move the exact opened old lock to a unique recovery name."""
+    for _attempt in range(128):
+        recovery = destination.parent / (
+            f".{destination.name}.{secrets.token_hex(16)}.cas-old"
+        )
+        try:
+            _rename_cas_owner_no_replace(
+                owned,
+                recovery,
+                "accepted-lock retirement",
+            )
+        except FileExistsError:
+            continue
+        except OSError as exc:
+            raise LockDiscoveryError("failed to retire accepted lock for CAS") from exc
+        try:
+            SERIS.PUBLISH_TOOLS._require_file_identity(
+                owned.path, owned.identity, "retired accepted lock"
+            )
+        except SERIS.PUBLISH_TOOLS.BuildError as exc:
+            raise LockDiscoveryError("retired accepted lock identity changed") from exc
+        return owned
+    raise LockDiscoveryError("cannot allocate a unique accepted-lock recovery path")
+
+
+def _restore_retired_no_replace(retired, destination: Path):
+    try:
+        _rename_cas_owner_no_replace(
+            retired,
+            destination,
+            "accepted-lock restoration",
+        )
+    except OSError as exc:
+        raise LockDiscoveryError("failed to restore retired accepted lock") from exc
+    try:
+        SERIS.PUBLISH_TOOLS._require_file_identity(
+            retired.path, retired.identity, "restored accepted lock"
+        )
+    except SERIS.PUBLISH_TOOLS.BuildError as exc:
+        raise LockDiscoveryError(
+            "restored accepted lock identity changed at accepted path"
+        ) from exc
+    return retired
+
+
+def _close_owned_existing(owned) -> None:
+    try:
+        owned.handle.close()
+    except OSError as exc:
+        raise LockDiscoveryError("failed to close accepted lock handle") from exc
+
+
+def _delete_retired_existing(retired) -> None:
+    try:
+        SERIS.PUBLISH_TOOLS._cleanup_owned_staging(retired)
+    except SERIS.PUBLISH_TOOLS.BuildError as exc:
+        raise LockDiscoveryError("failed to delete retired accepted lock") from exc
+
+
 EvidenceProvider = Callable[..., Mapping[str, Any]]
+ExtensionStage = Callable[..., tuple[Path, Mapping[str, Any]]]
+ExtensionVerifier = Callable[..., None]
 
 
 def _require_suffix_ref(index, suffix: str):
@@ -847,6 +1285,686 @@ def build_reviewed_evidence_provider(
     return provider
 
 
+def _load_extension_module(name: str, path: Path):
+    existing = sys.modules.get(name)
+    if existing is not None:
+        return existing
+    spec = importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None:
+        raise LockDiscoveryError(f"cannot load Task 10 stage module: {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        sys.modules.pop(name, None)
+        raise
+    return module
+
+
+def _load_extension_modules():
+    return (
+        _load_extension_module(
+            "offline_lock_discovery_render_scale", RENDER_SCALE_PATH
+        ),
+        _load_extension_module(
+            "offline_lock_discovery_resource_version", RESOURCE_VERSION_PATH
+        ),
+    )
+
+
+def _apply_locked_abyss_stage(
+    *,
+    source_swf: Path,
+    accepted_lock: Mapping[str, Any],
+    transaction_dir: Path,
+    ffdec: Path,
+    java: Path,
+    profile_dir: Path,
+    runner,
+    timeout: int,
+) -> tuple[Path, Mapping[str, Any]]:
+    source = Path(source_swf).resolve()
+    transaction = Path(transaction_dir).resolve()
+    source_sha256 = _sha256_file(source)
+    if source_sha256 != accepted_lock["source_swf_sha256"]:
+        raise LockDiscoveryError("abyss extension input disagrees with the base lock")
+    output = transaction / "post-abyss-extension.swf"
+
+    def abyss_runner(command, *, check, cwd, env):
+        del check
+        return runner(
+            command,
+            cwd=Path(cwd),
+            env=dict(env),
+            timeout=timeout,
+        )
+
+    try:
+        report = SERIS.PUBLISH_TOOLS.apply_gate_to_swf(
+            source,
+            output,
+            ffdec=Path(ffdec),
+            java=Path(java),
+            profile_dir=Path(profile_dir),
+            work_dir=transaction / "extension-abyss-work",
+            runner=abyss_runner,
+        )
+    except SERIS.PUBLISH_TOOLS.BuildError as exc:
+        raise LockDiscoveryError(f"locked abyss extension stage failed: {exc}") from exc
+    _assert_unchanged(source, source_sha256, "abyss extension input")
+    expected = accepted_lock["abyss_stage"]
+    observed = {
+        "stage": report.stage,
+        "input_sha256": report.input_sha256,
+        "output_sha256": report.output_sha256,
+        "target_class": report.target_class,
+        "before_method_sha256": report.before_method_sha256,
+        "after_method_sha256": report.after_method_sha256,
+        "match_count": report.match_count,
+    }
+    if observed != expected:
+        raise LockDiscoveryError("locked abyss extension evidence drifted")
+    if (
+        not output.is_file()
+        or Path(report.output_path).resolve() != output.resolve()
+        or _sha256_file(output) != accepted_lock["post_abyss_swf_sha256"]
+    ):
+        raise LockDiscoveryError("locked abyss extension output drifted")
+    return output, {}
+
+
+def _apply_locked_seris_stage(
+    *,
+    source_swf: Path,
+    accepted_lock: Mapping[str, Any],
+    transaction_dir: Path,
+    ffdec: Path,
+    java: Path,
+    profile_dir: Path,
+    runner,
+    timeout: int,
+) -> tuple[Path, Mapping[str, Any]]:
+    source = Path(source_swf).resolve()
+    transaction = Path(transaction_dir).resolve()
+    source_sha256 = _sha256_file(source)
+    if source_sha256 != accepted_lock["post_abyss_swf_sha256"]:
+        raise LockDiscoveryError("Seris extension input disagrees with the base lock")
+    output = transaction / "post-seris-extension.swf"
+    try:
+        report = SERIS.apply_seris_phase4(
+            source,
+            output,
+            accepted_lock,
+            ffdec=Path(ffdec),
+            java=Path(java),
+            profile_dir=Path(profile_dir),
+            work_dir=transaction / "extension-seris-work",
+            runner=runner,
+            timeout=timeout,
+        )
+    except SERIS.SerisPatchError as exc:
+        raise LockDiscoveryError(f"locked Seris extension stage failed: {exc}") from exc
+    _assert_unchanged(source, source_sha256, "Seris extension input")
+    if (
+        not report.verified
+        or Path(report.output_path).resolve() != output.resolve()
+        or report.input_sha256 != source_sha256
+        or tuple(report.site_ids) != tuple(accepted_lock["site_ids"])
+    ):
+        raise LockDiscoveryError("locked Seris extension report drifted")
+    for site_id in accepted_lock["site_ids"]:
+        entry = accepted_lock["sites"][site_id]
+        if (
+            report.before_hashes.get(site_id) != entry["before_pcode_sha256"]
+            or report.after_hashes.get(site_id) != entry["after_pcode_sha256"]
+        ):
+            raise LockDiscoveryError(
+                f"locked Seris extension evidence drifted at {site_id}"
+            )
+    if not output.is_file() or _sha256_file(output) != report.output_sha256:
+        raise LockDiscoveryError("locked Seris extension output drifted")
+    return output, {}
+
+
+def _discover_render_extension_stage(
+    *,
+    source_swf: Path,
+    accepted_lock: Mapping[str, Any],
+    transaction_dir: Path,
+    render_module,
+    ffdec: Path,
+    java: Path,
+    profile_dir: Path,
+    runner,
+    timeout: int,
+) -> tuple[Path, Mapping[str, Any]]:
+    source = Path(source_swf).resolve()
+    transaction = Path(transaction_dir).resolve()
+    source_sha256 = _sha256_file(source)
+    sites = tuple(render_module.RENDER_SITES)
+    if tuple(site.site_id for site in sites) != RENDER_SITE_IDS:
+        raise LockDiscoveryError("render discovery module site order mismatch")
+    locks: dict[str, dict[str, str]] = {}
+    current = source
+    try:
+        for sequence, site in enumerate(sites, start=1):
+            expected_class, expected_method, expected_before_abc = (
+                RENDER_SITE_IDENTITIES[site.site_id]
+            )
+            if (
+                site.class_name != expected_class
+                or site.method_name != expected_method
+            ):
+                raise LockDiscoveryError(
+                    f"render discovery identity mismatch for {site.site_id}"
+                )
+            index = render_module.ABC_METHODS.index_swf_methods(current)
+            ref = index.require_ref(site.method_name)
+            before_abc = render_module._sha256_abc(ref.code)
+            if before_abc != expected_before_abc:
+                raise LockDiscoveryError(
+                    f"render discovery before ABC mismatch for {site.site_id}"
+                )
+            export_root = transaction / f"render-{sequence:02d}-before-export"
+            render_module._export_classes(
+                current,
+                export_root,
+                (site.class_name,),
+                ffdec=Path(ffdec),
+                java=Path(java),
+                profile_dir=Path(profile_dir),
+                cwd=transaction,
+                runner=runner,
+                timeout=timeout,
+            )
+            _assert_unchanged(source, source_sha256, "render discovery input")
+            before = render_module._read_exported_method(export_root, site)
+            before_pcode = render_module._sha256_pcode(before)
+            after = site.patch(before)
+            site.verify(after)
+            after_pcode = render_module._sha256_pcode(after)
+            replacement = transaction / f"render-{sequence:02d}-{site.site_id}.pcode"
+            with replacement.open("x", encoding="utf-8", newline="\n") as handle:
+                handle.write(after)
+            staged = transaction / f"render-{sequence:02d}-{site.site_id}.swf"
+            render_module._replace_one(
+                current,
+                staged,
+                site,
+                replacement,
+                ref.body_index,
+                ffdec=Path(ffdec),
+                java=Path(java),
+                profile_dir=Path(profile_dir),
+                cwd=transaction,
+                runner=runner,
+                timeout=timeout,
+            )
+            _assert_unchanged(source, source_sha256, "render discovery input")
+            reopened_ref = (
+                render_module.ABC_METHODS.index_swf_methods(staged).require_ref(
+                    site.method_name
+                )
+            )
+            after_abc = render_module._sha256_abc(reopened_ref.code)
+            locks[site.site_id] = {
+                "class_name": site.class_name,
+                "method_name": site.method_name,
+                "before_pcode_sha256": before_pcode,
+                "after_pcode_sha256": after_pcode,
+                "before_abc_sha256": before_abc,
+                "after_abc_sha256": after_abc,
+            }
+            reopened = render_module._verify_methods(
+                staged,
+                sites[:sequence],
+                locks,
+                export_root=transaction / f"render-{sequence:02d}-reopen-export",
+                ffdec=Path(ffdec),
+                java=Path(java),
+                profile_dir=Path(profile_dir),
+                cwd=transaction,
+                runner=runner,
+                timeout=timeout,
+            )
+            expected_reopened = {
+                prior.site_id: locks[prior.site_id]["after_pcode_sha256"]
+                for prior in sites[:sequence]
+            }
+            if dict(reopened) != expected_reopened:
+                raise LockDiscoveryError(
+                    f"render cumulative reopen drifted after {site.site_id}"
+                )
+            current = staged
+    except LockDiscoveryError:
+        raise
+    except (OSError, render_module.RenderScaleError) as exc:
+        raise LockDiscoveryError(f"render extension discovery failed: {exc}") from exc
+    return current, {
+        "render_site_ids": list(RENDER_SITE_IDS),
+        "render_sites": locks,
+    }
+
+
+def _discover_resource_extension_stage(
+    *,
+    source_swf: Path,
+    accepted_lock: Mapping[str, Any],
+    transaction_dir: Path,
+    resource_module,
+    ffdec: Path,
+    java: Path,
+    profile_dir: Path,
+    runner,
+    timeout: int,
+) -> tuple[Path, Mapping[str, Any]]:
+    source = Path(source_swf).resolve()
+    transaction = Path(transaction_dir).resolve()
+    source_sha256 = _sha256_file(source)
+    identity = {
+        "site_id": resource_module.RESOURCE_SITE_ID,
+        "class_name": resource_module.RESOURCE_CLASS,
+        "method_name": resource_module.RESOURCE_METHOD,
+        "source_version": resource_module.SOURCE_VERSION,
+        "target_version": resource_module.TARGET_VERSION,
+    }
+    if identity != RESOURCE_VERSION_IDENTITY:
+        raise LockDiscoveryError("resource-version discovery module identity mismatch")
+    try:
+        resource_ref, dummy_ref = resource_module._method_refs(source)
+        before_abc = resource_module._sha256_abc(resource_ref.code)
+        dummy_abc = resource_module._sha256_abc(dummy_ref.code)
+        if before_abc != accepted_lock["offline_method_sha256"][
+            identity["method_name"]
+        ]:
+            raise LockDiscoveryError("resource-version before ABC baseline drifted")
+        if dummy_abc != accepted_lock["offline_method_sha256"][
+            "DummyRemote/debugUnlinkTwitter"
+        ]:
+            raise LockDiscoveryError("resource-version DummyRemote baseline drifted")
+        export_root = transaction / "resource-before-export"
+        resource_module._export_resource_class(
+            source,
+            export_root,
+            ffdec=Path(ffdec),
+            java=Path(java),
+            profile_dir=Path(profile_dir),
+            cwd=transaction,
+            runner=runner,
+            timeout=timeout,
+        )
+        _assert_unchanged(source, source_sha256, "resource-version discovery input")
+        before = resource_module._read_exported_resource(export_root)
+        before_pcode = resource_module._sha256_pcode(before)
+        after = resource_module.patch_resource_version(before)
+        after_pcode = resource_module._sha256_pcode(after)
+        replacement = transaction / "resource-version.pcode"
+        with replacement.open("x", encoding="utf-8", newline="\n") as handle:
+            handle.write(after)
+        output = transaction / "post-resource-version.swf"
+        resource_module._replace_one(
+            source,
+            output,
+            replacement,
+            resource_ref.body_index,
+            ffdec=Path(ffdec),
+            java=Path(java),
+            profile_dir=Path(profile_dir),
+            cwd=transaction,
+            runner=runner,
+            timeout=timeout,
+        )
+        _assert_unchanged(source, source_sha256, "resource-version discovery input")
+        reopened_resource, reopened_dummy = resource_module._method_refs(output)
+        after_abc = resource_module._sha256_abc(reopened_resource.code)
+        if resource_module._sha256_abc(reopened_dummy.code) != dummy_abc:
+            raise LockDiscoveryError("resource-version changed DummyRemote raw ABC")
+        entry = {
+            **identity,
+            "before_pcode_sha256": before_pcode,
+            "after_pcode_sha256": after_pcode,
+            "before_abc_sha256": before_abc,
+            "after_abc_sha256": after_abc,
+        }
+        resource_module._verify_reopened_swf(
+            output,
+            entry,
+            dummy_abc,
+            export_root=transaction / "resource-reopen-export",
+            ffdec=Path(ffdec),
+            java=Path(java),
+            profile_dir=Path(profile_dir),
+            cwd=transaction,
+            runner=runner,
+            timeout=timeout,
+        )
+        _assert_unchanged(source, source_sha256, "resource-version discovery input")
+    except LockDiscoveryError:
+        raise
+    except (OSError, resource_module.ResourceVersionError) as exc:
+        raise LockDiscoveryError(
+            f"resource-version extension discovery failed: {exc}"
+        ) from exc
+    return output, {"resource_version": entry}
+
+
+def _verify_extension_cumulative(
+    *,
+    source_swf: Path,
+    extended_lock: Mapping[str, Any],
+    transaction_dir: Path,
+    render_module,
+    resource_module,
+    ffdec: Path,
+    java: Path,
+    profile_dir: Path,
+    runner,
+    timeout: int,
+) -> None:
+    validate_lock_document(
+        extended_lock,
+        expected_status="accepted",
+        require_extensions=True,
+    )
+    source = Path(source_swf).resolve()
+    transaction = Path(transaction_dir).resolve()
+    source_sha256 = _sha256_file(source)
+
+    def abyss_runner(command, *, check, cwd, env):
+        del check
+        return runner(
+            command,
+            cwd=Path(cwd),
+            env=dict(env),
+            timeout=timeout,
+        )
+
+    try:
+        SERIS.PUBLISH_TOOLS._export_target_class(
+            source,
+            transaction / "extension-final-abyss-reopen",
+            Path(ffdec),
+            Path(java),
+            verify_gate=True,
+            runner=abyss_runner,
+            cwd=transaction,
+            environment={**os.environ, "APPDATA": str(Path(profile_dir))},
+        )
+        _assert_unchanged(source, source_sha256, "final extension SWF")
+        seris_report = SERIS.verify_seris_phase4(
+            source,
+            extended_lock,
+            ffdec=Path(ffdec),
+            java=Path(java),
+            profile_dir=Path(profile_dir),
+            work_dir=transaction / "extension-final-seris-work",
+            runner=runner,
+            timeout=timeout,
+        )
+        if not seris_report.verified or tuple(seris_report.site_ids) != tuple(
+            extended_lock["site_ids"]
+        ):
+            raise LockDiscoveryError("final cumulative Seris verification drifted")
+        _assert_unchanged(source, source_sha256, "final extension SWF")
+        render_report = render_module.verify_render_scale(
+            source,
+            extended_lock,
+            ffdec=Path(ffdec),
+            java=Path(java),
+            profile_dir=Path(profile_dir),
+            work_dir=transaction / "extension-final-render-work",
+            runner=runner,
+            timeout=timeout,
+        )
+        if not render_report.verified or tuple(render_report.site_ids) != RENDER_SITE_IDS:
+            raise LockDiscoveryError("final cumulative render verification drifted")
+        _assert_unchanged(source, source_sha256, "final extension SWF")
+        resource_report = resource_module.verify_resource_version(
+            source,
+            extended_lock,
+            ffdec=Path(ffdec),
+            java=Path(java),
+            profile_dir=Path(profile_dir),
+            work_dir=transaction / "extension-final-resource-work",
+            runner=runner,
+            timeout=timeout,
+        )
+        if (
+            not resource_report.verified
+            or resource_report.output_version
+            != RESOURCE_VERSION_IDENTITY["target_version"]
+            or not resource_report.is_full_package
+        ):
+            raise LockDiscoveryError(
+                "final cumulative resource-version verification drifted"
+            )
+        _assert_unchanged(source, source_sha256, "final extension SWF")
+    except LockDiscoveryError:
+        raise
+    except (
+        SERIS.PUBLISH_TOOLS.BuildError,
+        SERIS.SerisPatchError,
+        render_module.RenderScaleError,
+        resource_module.ResourceVersionError,
+    ) as exc:
+        raise LockDiscoveryError(f"final cumulative extension verification failed: {exc}") from exc
+
+    final_index = SERIS.ABC_METHODS.index_swf_methods(source)
+    resource_method = RESOURCE_VERSION_IDENTITY["method_name"]
+    for suffix, before_hash in extended_lock["offline_method_sha256"].items():
+        expected = (
+            extended_lock["resource_version"]["after_abc_sha256"]
+            if suffix == resource_method
+            else before_hash
+        )
+        if _sha256_bytes(_require_suffix_ref(final_index, suffix).code) != expected:
+            raise LockDiscoveryError(
+                f"final cumulative offline method drifted for {suffix}"
+            )
+    render_after_by_method = {
+        entry["method_name"]: entry["after_abc_sha256"]
+        for entry in extended_lock["render_sites"].values()
+    }
+    for method in NATIVE_COMPATIBILITY_METHODS:
+        expected = render_after_by_method.get(
+            method,
+            extended_lock["native_compatibility"][method]["abc_sha256"],
+        )
+        if _sha256_bytes(final_index.require_ref(method).code) != expected:
+            raise LockDiscoveryError(
+                f"final cumulative native compatibility drifted for {method}"
+            )
+    _verify_save_haxe_pcode(
+        source,
+        export_root=transaction / "extension-final-save-haxe-export",
+        ffdec=Path(ffdec),
+        java=Path(java),
+        profile_dir=Path(profile_dir),
+        runner=runner,
+        timeout=timeout,
+    )
+    _assert_unchanged(source, source_sha256, "final extension SWF")
+
+
+def _run_extension_stage(
+    name: str,
+    stage: ExtensionStage,
+    *,
+    source_swf: Path,
+    accepted_lock: Mapping[str, Any],
+    transaction_dir: Path,
+) -> tuple[Path, dict[str, Any]]:
+    input_path = Path(source_swf).resolve()
+    input_sha256 = _sha256_file(input_path)
+    result = stage(
+        source_swf=input_path,
+        accepted_lock=accepted_lock,
+        transaction_dir=transaction_dir,
+    )
+    if not isinstance(result, tuple) or len(result) != 2:
+        raise LockDiscoveryError(
+            f"{name} extension stage must return (output_swf, evidence)"
+        )
+    output_value, evidence = result
+    if not isinstance(output_value, (str, os.PathLike)):
+        raise LockDiscoveryError(f"{name} extension stage output path is invalid")
+    output = Path(output_value).resolve()
+    try:
+        output.relative_to(transaction_dir)
+    except ValueError as exc:
+        raise LockDiscoveryError(
+            f"{name} extension stage output must stay inside the transaction"
+        ) from exc
+    if output == input_path or not output.is_file():
+        raise LockDiscoveryError(
+            f"{name} extension stage must create a distinct output SWF"
+        )
+    if _sha256_file(input_path) != input_sha256:
+        raise LockDiscoveryError(f"{name} extension stage mutated its input SWF")
+    if not isinstance(evidence, Mapping):
+        raise LockDiscoveryError(f"{name} extension stage evidence is invalid")
+    return output, dict(evidence)
+
+
+def compose_extension_evidence_provider(
+    *,
+    abyss_stage: ExtensionStage,
+    seris_stage: ExtensionStage,
+    render_stage: ExtensionStage,
+    resource_stage: ExtensionStage,
+    final_verifier: ExtensionVerifier,
+) -> EvidenceProvider:
+    """Compose the frozen Task 10 discovery order without inventing evidence."""
+
+    def provider(
+        *,
+        source_swf: Path,
+        accepted_lock: Mapping[str, Any],
+        transaction_dir: Path,
+    ) -> Mapping[str, Any]:
+        if set(accepted_lock) != BASE_TOP_LEVEL_KEYS:
+            raise LockDiscoveryError(
+                "extension provider requires the frozen Task 9 base lock"
+            )
+        validate_lock_document(accepted_lock, expected_status="accepted")
+        transaction = Path(transaction_dir).resolve()
+        if not transaction.is_dir():
+            raise LockDiscoveryError("extension transaction directory is missing")
+
+        current, abyss_evidence = _run_extension_stage(
+            "abyss",
+            abyss_stage,
+            source_swf=Path(source_swf),
+            accepted_lock=accepted_lock,
+            transaction_dir=transaction,
+        )
+        if abyss_evidence:
+            raise LockDiscoveryError("abyss extension stage returned unexpected evidence")
+        current, seris_evidence = _run_extension_stage(
+            "Seris",
+            seris_stage,
+            source_swf=current,
+            accepted_lock=accepted_lock,
+            transaction_dir=transaction,
+        )
+        if seris_evidence:
+            raise LockDiscoveryError("Seris extension stage returned unexpected evidence")
+        current, render_evidence = _run_extension_stage(
+            "render",
+            render_stage,
+            source_swf=current,
+            accepted_lock=accepted_lock,
+            transaction_dir=transaction,
+        )
+        if set(render_evidence) != {"render_site_ids", "render_sites"}:
+            raise LockDiscoveryError("render extension evidence schema mismatch")
+        current, resource_evidence = _run_extension_stage(
+            "resource-version",
+            resource_stage,
+            source_swf=current,
+            accepted_lock=accepted_lock,
+            transaction_dir=transaction,
+        )
+        if set(resource_evidence) != {"resource_version"}:
+            raise LockDiscoveryError("resource-version extension evidence schema mismatch")
+
+        evidence = {**render_evidence, **resource_evidence}
+        candidate = dict(accepted_lock)
+        candidate.update(evidence)
+        validate_extension_candidate(candidate, accepted_lock)
+        final_verifier(
+            source_swf=current,
+            extended_lock=candidate,
+            transaction_dir=transaction,
+        )
+        return evidence
+
+    return provider
+
+
+def build_extension_evidence_provider(
+    *,
+    ffdec: Path,
+    java: Path,
+    profile_dir: Path,
+    runner=SERIS._subprocess_runner,
+    timeout: int = 240,
+) -> EvidenceProvider:
+    """Build the real base -> Abyss -> Seris -> render -> resource discovery."""
+    ffdec_path = Path(ffdec).resolve()
+    java_path = Path(java).resolve()
+    profile = Path(profile_dir).resolve()
+    if not ffdec_path.is_file() or not java_path.is_file():
+        raise LockDiscoveryError("Task 10 discovery Java or FFDec tool is missing")
+    if profile.exists() and not profile.is_dir():
+        raise LockDiscoveryError("Task 10 discovery profile path is not a directory")
+    render_module, resource_module = _load_extension_modules()
+    common = {
+        "ffdec": ffdec_path,
+        "java": java_path,
+        "profile_dir": profile,
+        "runner": runner,
+        "timeout": timeout,
+    }
+
+    def abyss_stage(**stage):
+        return _apply_locked_abyss_stage(**stage, **common)
+
+    def seris_stage(**stage):
+        return _apply_locked_seris_stage(**stage, **common)
+
+    def render_stage(**stage):
+        return _discover_render_extension_stage(
+            **stage,
+            render_module=render_module,
+            **common,
+        )
+
+    def resource_stage(**stage):
+        return _discover_resource_extension_stage(
+            **stage,
+            resource_module=resource_module,
+            **common,
+        )
+
+    def final_verifier(**stage):
+        return _verify_extension_cumulative(
+            **stage,
+            render_module=render_module,
+            resource_module=resource_module,
+            **common,
+        )
+
+    return compose_extension_evidence_provider(
+        abyss_stage=abyss_stage,
+        seris_stage=seris_stage,
+        render_stage=render_stage,
+        resource_stage=resource_stage,
+        final_verifier=final_verifier,
+    )
+
+
 def discover_lock_candidate(
     source_apk: Path,
     output: Path,
@@ -932,6 +2050,127 @@ def discover_lock_candidate(
             shutil.rmtree(transaction)
 
 
+def _read_canonical_document_with_digest(
+    path: Path,
+    *,
+    expected_sha256: str,
+    label: str,
+) -> tuple[bytes, Mapping[str, Any]]:
+    expected = _require_hash(expected_sha256, f"expected_{label}_sha256")
+    raw = _read_regular_file_snapshot(path)
+    actual = _sha256_bytes(raw)
+    if not hmac.compare_digest(actual, expected):
+        raise LockDiscoveryError(f"{label} SHA-256 mismatch")
+    value = _parse_json_strict_bytes(raw)
+    if raw != _canonical_json_bytes(value):
+        raise LockDiscoveryError(f"{label} JSON is not canonical UTF-8/LF")
+    return raw, value
+
+
+def discover_extension_candidate(
+    source_apk: Path,
+    base_lock: Path,
+    output: Path,
+    *,
+    work_dir: Path,
+    evidence_provider: EvidenceProvider,
+    expected_old_lock_sha256: str,
+    expected_apk_sha256: str = EXPECTED_BASE_APK_SHA256,
+) -> Mapping[str, Any]:
+    """Create a new reviewed Task 10 candidate without editing the accepted lock."""
+    source = Path(source_apk).resolve()
+    lock_path = Path(base_lock).resolve()
+    destination = Path(output).resolve()
+    work = Path(work_dir).resolve()
+    if expected_apk_sha256 != EXPECTED_BASE_APK_SHA256:
+        raise LockDiscoveryError("expected APK hash must equal the reviewed offline base")
+    if not source.is_file() or os.path.lexists(destination):
+        raise LockDiscoveryError("extension source is missing or candidate output exists")
+    if os.path.normcase(str(lock_path)) == os.path.normcase(str(destination)):
+        raise LockDiscoveryError("extension candidate must not overwrite the accepted lock")
+    try:
+        work.relative_to(destination)
+    except ValueError:
+        pass
+    else:
+        raise LockDiscoveryError("candidate output cannot equal or contain work directory")
+
+    old_raw, old_value = _read_canonical_document_with_digest(
+        lock_path,
+        expected_sha256=expected_old_lock_sha256,
+        label="old_lock",
+    )
+    validate_lock_document(old_value, expected_status="accepted")
+    if set(old_value) != BASE_TOP_LEVEL_KEYS:
+        raise LockDiscoveryError("extension discovery requires an unextended accepted lock")
+
+    work.mkdir(parents=True, exist_ok=True)
+    transaction: Path | None = Path(
+        tempfile.mkdtemp(prefix=".offline-lock-extension-", dir=work)
+    ).resolve()
+    try:
+        source_snapshot = transaction / "source.apk"
+        _copy_regular_file_snapshot(source, source_snapshot)
+        if _sha256_file(source_snapshot) != EXPECTED_BASE_APK_SHA256:
+            raise LockDiscoveryError("source APK hash mismatch")
+        baseline = _inspect_base_apk(source_snapshot)
+        for field in (
+            "source_swf_sha256",
+            "manifest_sha256",
+            "dex_sha256",
+            "native_aggregate_sha256",
+            "native_members",
+        ):
+            if baseline.get(field) != old_value[field]:
+                raise LockDiscoveryError(f"accepted lock baseline mismatch at {field}")
+
+        swf = transaction / "source.swf"
+        try:
+            with zipfile.ZipFile(source_snapshot, "r") as archive:
+                infos = [
+                    info
+                    for info in archive.infolist()
+                    if info.filename == TARGET_SWF
+                ]
+                if len(infos) != 1:
+                    raise LockDiscoveryError("expected exactly one main SWF member")
+                with swf.open("xb") as handle:
+                    handle.write(archive.read(infos[0]))
+                    handle.flush()
+                    os.fsync(handle.fileno())
+        except (OSError, zipfile.BadZipFile, KeyError) as exc:
+            raise LockDiscoveryError(f"cannot extract extension source SWF: {exc}") from exc
+        extracted_hash = _sha256_file(swf)
+        if (
+            extracted_hash != EXPECTED_SWF_SHA256
+            or extracted_hash != old_value["source_swf_sha256"]
+        ):
+            raise LockDiscoveryError("extension source SWF baseline mismatch")
+
+        evidence = evidence_provider(
+            source_swf=swf,
+            accepted_lock=old_value,
+            transaction_dir=transaction,
+        )
+        if not isinstance(evidence, Mapping) or set(evidence) != EXTENSION_KEYS:
+            raise LockDiscoveryError("extension evidence schema mismatch")
+        candidate = dict(old_value)
+        candidate.update(dict(evidence))
+        validate_extension_candidate(candidate, old_value)
+
+        if _sha256_file(source) != EXPECTED_BASE_APK_SHA256:
+            raise LockDiscoveryError("source APK changed during extension discovery")
+        if _read_regular_file_snapshot(lock_path) != old_raw:
+            raise LockDiscoveryError("accepted lock changed during extension discovery")
+        shutil.rmtree(transaction)
+        transaction = None
+        _write_exclusive_canonical(candidate, destination)
+        return candidate
+    finally:
+        if transaction is not None:
+            shutil.rmtree(transaction)
+
+
 def accept_lock_candidate(
     candidate: Path,
     output: Path,
@@ -960,6 +2199,258 @@ def accept_lock_candidate(
     return accepted
 
 
+def accept_extension_candidate(
+    candidate: Path,
+    output: Path,
+    *,
+    confirmation: str,
+    expected_old_lock_sha256: str,
+    expected_candidate_sha256: str,
+) -> Mapping[str, Any]:
+    """CAS an accepted extension candidate into the existing lock path."""
+    if confirmation != CONFIRMATION:
+        raise LockDiscoveryError("lock acceptance confirmation mismatch")
+    expected_old = _require_hash(
+        expected_old_lock_sha256, "expected_old_lock_sha256"
+    )
+    expected_candidate = _require_hash(
+        expected_candidate_sha256, "expected_candidate_sha256"
+    )
+    candidate_path = Path(candidate).resolve()
+    destination = Path(output).resolve()
+    if os.path.normcase(str(candidate_path)) == os.path.normcase(str(destination)):
+        raise LockDiscoveryError("extension candidate and accepted lock must differ")
+    try:
+        if os.path.samefile(candidate_path, destination):
+            raise LockDiscoveryError(
+                "extension candidate and accepted lock are filesystem aliases"
+            )
+    except FileNotFoundError:
+        raise LockDiscoveryError("extension candidate or accepted lock is missing") from None
+    except OSError as exc:
+        raise LockDiscoveryError("cannot compare extension candidate paths") from exc
+
+    candidate_raw, candidate_value = _read_canonical_document_with_digest(
+        candidate_path,
+        expected_sha256=expected_candidate,
+        label="candidate",
+    )
+    old_owned = None
+    staged = None
+    candidate_owned = None
+    published_owned = None
+    committed = False
+    original_error: BaseException | None = None
+    try:
+        old_owned = _open_existing_for_cas(destination)
+        old_raw = _read_owned_existing(old_owned)
+        if not hmac.compare_digest(_sha256_bytes(old_raw), expected_old):
+            raise LockDiscoveryError("old lock SHA-256 mismatch")
+        old_value = _parse_json_strict_bytes(old_raw)
+        if old_raw != _canonical_json_bytes(old_value):
+            raise LockDiscoveryError("old lock JSON is not canonical UTF-8/LF")
+        validate_extension_candidate(candidate_value, old_value)
+
+        staged = _stage_output_sibling(
+            candidate_path,
+            destination,
+            expected_candidate,
+        )
+        candidate_owned = _CasOwnedFile(
+            staged.path,
+            staged.identity,
+            staged.handle,
+        )
+        staged = None
+        _retire_existing_no_replace(old_owned, destination)
+        _publish_candidate_owner_no_replace(candidate_owned, destination)
+        published_raw = _read_owned_existing(candidate_owned)
+        if not hmac.compare_digest(
+            _sha256_bytes(published_raw), expected_candidate
+        ):
+            raise LockDiscoveryError(
+                "published extension candidate handle SHA-256 mismatch"
+            )
+        _close_owned_existing(candidate_owned)
+        candidate_owned = None
+        published_owned = _open_existing_for_cas(destination)
+        frozen_raw = _read_owned_existing(published_owned)
+        if not hmac.compare_digest(_sha256_bytes(frozen_raw), expected_candidate):
+            raise LockDiscoveryError(
+                "frozen extension candidate SHA-256 mismatch"
+            )
+        committed = True
+        _delete_retired_existing(old_owned)
+        old_owned = None
+        final_raw = _read_owned_existing(published_owned)
+        if not hmac.compare_digest(_sha256_bytes(final_raw), expected_candidate):
+            raise LockDiscoveryError(
+                "frozen extension candidate changed during old-lock cleanup"
+            )
+        _close_owned_existing(published_owned)
+        published_owned = None
+        return candidate_value
+    except BaseException as error:
+        original_error = error
+        raise
+    finally:
+        if committed and original_error is not None:
+            original_error.add_note(
+                "candidate commit is retained; "
+                f"destination={destination}; sha256={expected_candidate}"
+            )
+        if candidate_owned is not None and candidate_owned.pending_paths is not None:
+            if not _settle_pending_cas_owner(
+                candidate_owned,
+                original_error,
+                context="failed candidate publication owner reconciliation",
+            ):
+                candidate_owned = None
+        if candidate_owned is not None:
+            candidate_path_now = Path(candidate_owned.path)
+            candidate_at_destination = os.path.normcase(
+                str(candidate_path_now)
+            ) == os.path.normcase(str(destination))
+            try:
+                if candidate_at_destination:
+                    _close_owned_existing(candidate_owned)
+                else:
+                    _cleanup_owned_staging(candidate_owned)
+            except BaseException as cleanup_error:
+                if original_error is None:
+                    raise
+                original_error.add_note(
+                    "failed to settle candidate publication owner: "
+                    f"{type(cleanup_error).__name__}: {cleanup_error}; "
+                    f"path={candidate_path_now}"
+                )
+            candidate_owned = None
+        if published_owned is not None:
+            try:
+                _close_owned_existing(published_owned)
+            except BaseException as close_error:
+                if original_error is None:
+                    raise
+                original_error.add_note(
+                    "failed to close frozen extension candidate: "
+                    f"{type(close_error).__name__}: {close_error}"
+                )
+            published_owned = None
+        if old_owned is not None and old_owned.pending_paths is not None:
+            if not _settle_pending_cas_owner(
+                old_owned,
+                original_error,
+                context="failed secondary accepted-lock owner reconciliation",
+            ):
+                old_owned = None
+        if old_owned is not None and not committed:
+            owner_at_destination = os.path.normcase(str(old_owned.path)) == os.path.normcase(
+                str(destination)
+            )
+            if not owner_at_destination and not os.path.lexists(destination):
+                try:
+                    _restore_retired_no_replace(old_owned, destination)
+                except BaseException as recovery_error:
+                    if old_owned.pending_paths is not None and not (
+                        _settle_pending_cas_owner(
+                            old_owned,
+                            original_error,
+                            context=(
+                                "failed to settle accepted-lock owner after restore "
+                                f"failure ({type(recovery_error).__name__}: "
+                                f"{recovery_error})"
+                            ),
+                        )
+                    ):
+                        old_owned = None
+                    if old_owned is not None:
+                        actual_path = Path(old_owned.path)
+                        try:
+                            _close_owned_existing(old_owned)
+                        except BaseException as close_error:
+                            recovery_error.add_note(
+                                "failed to close old accepted-lock handle after restore "
+                                f"failure: {type(close_error).__name__}: {close_error}"
+                            )
+                        old_owned = None
+                        if original_error is None:
+                            raise recovery_error
+                        if os.path.normcase(str(actual_path)) == os.path.normcase(
+                            str(destination)
+                        ):
+                            original_error.add_note(
+                                "old accepted lock moved back to accepted path but "
+                                "post-restore verification failed; handle closed; "
+                                f"path={actual_path}; error={type(recovery_error).__name__}: "
+                                f"{recovery_error}"
+                            )
+                        elif os.path.lexists(actual_path):
+                            original_error.add_note(
+                                "failed to restore retired accepted lock; handle closed; "
+                                f"recovery preserved at {actual_path}; "
+                                f"error={type(recovery_error).__name__}: {recovery_error}"
+                            )
+                        else:
+                            original_error.add_note(
+                                "failed to restore retired accepted lock; handle closed; "
+                                f"last known path={actual_path}; "
+                                f"error={type(recovery_error).__name__}: {recovery_error}"
+                            )
+                else:
+                    try:
+                        _close_owned_existing(old_owned)
+                    except BaseException as close_error:
+                        if original_error is None:
+                            raise
+                        original_error.add_note(
+                            "failed to close restored accepted lock: "
+                            f"{type(close_error).__name__}: {close_error}"
+                        )
+                    old_owned = None
+            else:
+                owned_path = Path(old_owned.path)
+                try:
+                    _close_owned_existing(old_owned)
+                except BaseException as close_error:
+                    if original_error is None:
+                        raise
+                    original_error.add_note(
+                        "failed to close old accepted lock: "
+                        f"{type(close_error).__name__}: {close_error}"
+                    )
+                old_owned = None
+                if original_error is not None and not owner_at_destination:
+                    original_error.add_note(
+                        f"accepted lock recovery preserved at {owned_path}"
+                    )
+        if old_owned is not None and committed:
+            recovery_path = Path(old_owned.path)
+            try:
+                _close_owned_existing(old_owned)
+            except BaseException as close_error:
+                if original_error is None:
+                    raise
+                original_error.add_note(
+                    "failed to close committed recovery handle: "
+                    f"{type(close_error).__name__}: {close_error}"
+                )
+            old_owned = None
+            if original_error is not None and os.path.lexists(recovery_path):
+                original_error.add_note(
+                    f"old accepted lock recovery preserved at {recovery_path}"
+                )
+        if staged is not None:
+            try:
+                _cleanup_owned_staging(staged)
+            except BaseException as cleanup_error:
+                if original_error is None:
+                    raise
+                original_error.add_note(
+                    "failed to clean staged extension candidate: "
+                    f"{type(cleanup_error).__name__}: {cleanup_error}"
+                )
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="action", required=True)
@@ -972,11 +2463,27 @@ def main(argv: list[str] | None = None) -> int:
     discover.add_argument("--ffdec", type=Path)
     discover.add_argument("--work-dir", type=Path)
     discover.add_argument("--profile-dir", type=Path)
+    discover_extension = subparsers.add_parser("discover-extension")
+    discover_extension.add_argument("--source-apk", type=Path, required=True)
+    discover_extension.add_argument("--base-lock", type=Path, required=True)
+    discover_extension.add_argument("--expected-apk-sha256", required=True)
+    discover_extension.add_argument("--expected-old-lock-sha256", required=True)
+    discover_extension.add_argument("--output", type=Path, required=True)
+    discover_extension.add_argument("--java", type=Path)
+    discover_extension.add_argument("--ffdec", type=Path)
+    discover_extension.add_argument("--work-dir", type=Path)
+    discover_extension.add_argument("--profile-dir", type=Path)
     accept = subparsers.add_parser("accept")
     accept.add_argument("--candidate", type=Path, required=True)
     accept.add_argument("--output", type=Path, required=True)
     accept.add_argument("--confirm", required=True)
     accept.add_argument("--expected-candidate-sha256", required=True)
+    accept_extension = subparsers.add_parser("accept-extension")
+    accept_extension.add_argument("--candidate", type=Path, required=True)
+    accept_extension.add_argument("--output", type=Path, required=True)
+    accept_extension.add_argument("--confirm", required=True)
+    accept_extension.add_argument("--expected-old-lock-sha256", required=True)
+    accept_extension.add_argument("--expected-candidate-sha256", required=True)
     args = parser.parse_args(argv)
     try:
         if args.action == "accept":
@@ -987,6 +2494,28 @@ def main(argv: list[str] | None = None) -> int:
                 expected_candidate_sha256=args.expected_candidate_sha256,
             )
             print(json.dumps({"status": accepted["status"], "site_count": accepted["site_count"]}, sort_keys=True))
+            return 0
+        if args.action == "accept-extension":
+            accepted = accept_extension_candidate(
+                args.candidate,
+                args.output,
+                confirmation=args.confirm,
+                expected_old_lock_sha256=args.expected_old_lock_sha256,
+                expected_candidate_sha256=args.expected_candidate_sha256,
+            )
+            print(
+                json.dumps(
+                    {
+                        "status": accepted["status"],
+                        "final_sha256": args.expected_candidate_sha256,
+                        "render_site_count": len(accepted["render_site_ids"]),
+                        "resource_version": accepted["resource_version"][
+                            "target_version"
+                        ],
+                    },
+                    sort_keys=True,
+                )
+            )
             return 0
         repo_root = HERE.parents[1]
         java_value = args.java or shutil.which("java")
@@ -999,11 +2528,43 @@ def main(argv: list[str] | None = None) -> int:
         ffdec_path = Path(ffdec_value).resolve()
         if not java_path.is_file() or not ffdec_path.is_file():
             raise LockDiscoveryError("Java or FFDec is missing; pass explicit tool paths")
-        provider = build_reviewed_evidence_provider(
+        provider_builder = (
+            build_extension_evidence_provider
+            if args.action == "discover-extension"
+            else build_reviewed_evidence_provider
+        )
+        provider = provider_builder(
             ffdec=ffdec_path,
             java=java_path,
             profile_dir=Path(profile_value),
         )
+        if args.action == "discover-extension":
+            candidate = discover_extension_candidate(
+                args.source_apk,
+                args.base_lock,
+                args.output,
+                work_dir=Path(work_value),
+                evidence_provider=provider,
+                expected_old_lock_sha256=args.expected_old_lock_sha256,
+                expected_apk_sha256=args.expected_apk_sha256,
+            )
+            print(
+                json.dumps(
+                    {
+                        "status": "extension-candidate",
+                        "base_lock_sha256": args.expected_old_lock_sha256,
+                        "candidate_sha256": _sha256_bytes(
+                            _canonical_json_bytes(candidate)
+                        ),
+                        "render_site_count": len(candidate["render_site_ids"]),
+                        "resource_version": candidate["resource_version"][
+                            "target_version"
+                        ],
+                    },
+                    sort_keys=True,
+                )
+            )
+            return 0
         candidate = discover_lock_candidate(
             args.source_apk,
             args.output,

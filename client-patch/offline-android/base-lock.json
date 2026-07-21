@@ -95,6 +95,48 @@
     "boot_ffc6#$script364/$init": "afcb8c8602158db0a64ba1560f36875166004283bfe6a04ad9eeaf49ee3714b2"
   },
   "post_abyss_swf_sha256": "082403fdfac92b47178ee2bd6e9139c7428346f173082eca2eda76e061c4efad",
+  "render_site_ids": [
+    "pixel-art",
+    "member-view",
+    "character-cell"
+  ],
+  "render_sites": {
+    "character-cell": {
+      "after_abc_sha256": "0266a4cb63cbdbf9deccdfdcc8e30c7d58bdcc6463ddb2a14e815b1ec8ec4631",
+      "after_pcode_sha256": "3678ae2308894eb95b7a24b8b1503527e79ec1a47bd3adf7a6f492acbbf7bed0",
+      "before_abc_sha256": "cc64eafcb0bbaeb4f1ae705944da569cc1d59bf9dc7636b1bbfe64342175e3a7",
+      "before_pcode_sha256": "11a9721096733a862ba007350f927e2c5b7ba8437356488b946cf2c2579d7d22",
+      "class_name": "pinball.scene.character.cell.CharacterCellView",
+      "method_name": "pinball.scene.character.cell:CharacterCellView/drawWithAdvanceFlag"
+    },
+    "member-view": {
+      "after_abc_sha256": "bad0f9ea0fb66f638029fb96c26b2c67b9df352f43265aed6603610eaafc1b35",
+      "after_pcode_sha256": "f2164d2e9381aac9f1fb72ae71b22f2dc4785582378cb6eeb83c191862d392c7",
+      "before_abc_sha256": "0ca2af059a85e432c9c6dc991126d0eeba57acaa5ecc152aee83e36ed19a9d77",
+      "before_pcode_sha256": "c5fb46453a823d034a97ea6050aca3d08203e65c92e5b2a97944309f0c0354b0",
+      "class_name": "pinball.scene.battle.battle.squad.member.MemberView",
+      "method_name": "pinball.scene.battle.battle.squad.member:MemberView/MemberView"
+    },
+    "pixel-art": {
+      "after_abc_sha256": "cd153f2d7cb178ce68a5a1a39bc17fb5ccf0a9ea8babdf81591fdb2ac9180986",
+      "after_pcode_sha256": "6d900b4e13b28bdcc2f9340506bf6bce79189fdb436b84e5d7c84132e0472607",
+      "before_abc_sha256": "9475368c4dd326f0d8230ba724d96a60af5d30dba37ac5d43d5bdd04a85b038b",
+      "before_pcode_sha256": "3bc2319f8b64ccab190faf57698733a40ea109f0c0814030a7b7c05de9d78074",
+      "class_name": "pinball.ui.component.pixelArtCharacter.PixelArtCharacterView",
+      "method_name": "pinball.ui.component.pixelArtCharacter:PixelArtCharacterView/spriteSheetLoadCompleted"
+    }
+  },
+  "resource_version": {
+    "after_abc_sha256": "05143c3576fbd3adb7e9f630a17febe96a0c108abbe72a86721cf4f7ee613c7c",
+    "after_pcode_sha256": "b6c8087ff56491190b19448dfc32a3b4b2d6b4392153b59199b8018e563c25cf",
+    "before_abc_sha256": "afcb8c8602158db0a64ba1560f36875166004283bfe6a04ad9eeaf49ee3714b2",
+    "before_pcode_sha256": "110aa51762d04231128bbf61b4c137eb90a17ac7743df455e27345bafe96d5ec",
+    "class_name": "pinball.config.core.DevConfig",
+    "method_name": "boot_ffc6#$script364/$init",
+    "site_id": "full-resource-version",
+    "source_version": "1.4.54",
+    "target_version": "1.4.196"
+  },
   "save_method_sha256": {
     "DummyRemote/debugUnlinkTwitter": "45bc87da473d018f700f349fda2c743a6d11509cc236390584dccf2ac7d75a38",
     "InitializeDummyRemote/logicAssetLoadedHandler": "d17591dc3c793faaa02c1080968b0bb30384b968f70dbe9363d8860fa30fcd3c"
