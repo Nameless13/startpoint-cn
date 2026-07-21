@@ -2208,6 +2208,64 @@ class OfflineReleaseTestCase(unittest.TestCase):
         (artifact_dir / "guide.txt").write_bytes(b"after-close")
         self.assertEqual((artifact_dir / "guide.txt").read_bytes(), b"after-close")
 
+    @unittest.skipUnless(os.name == "nt", "Windows owned snapshot lease regression")
+    def test_owned_staging_snapshot_lock_reuses_bound_root_chain(self) -> None:
+        source = self.root / "snapshot-source.apk"
+        payload = b"independent-apk-snapshot"
+        source.write_bytes(payload)
+        owned = module._create_owned_staging(self.root / "snapshot-output" / "1.4.196")
+        snapshot = owned.path / "independent.apk"
+        source_lock = None
+        snapshot_lock = None
+        try:
+            source_lock = module.RealReleaseServices._copy_locked_artifact(
+                source,
+                snapshot,
+                sha256(payload),
+            )
+            snapshot_lock = module._open_locked_regular(snapshot, bound_root=owned)
+            self.assertEqual(module._read_locked_regular(snapshot_lock), payload)
+            with self.assertRaises(OSError):
+                snapshot.write_bytes(b"tampered")
+            with self.assertRaises(OSError):
+                snapshot.unlink()
+
+            nested = owned.path / "apk-independent"
+            nested.mkdir()
+            nested_file = nested / "base.apk"
+            nested_file.write_bytes(payload)
+            with module._locked_regular_guard(
+                nested_file,
+                bound_root=owned,
+            ):
+                with self.assertRaises(OSError):
+                    nested_file.write_bytes(b"tampered")
+                with self.assertRaises(OSError):
+                    nested_file.unlink()
+                with self.assertRaises(OSError):
+                    nested_file.rename(nested_file.with_name("rebound.apk"))
+
+            extracted = owned.path / "extracted" / "WorldFlipper" / "dummy"
+            lease = module._acquire_directory_lease(
+                extracted,
+                bound_root=owned,
+            )
+            try:
+                self.assertTrue(extracted.is_dir())
+                with self.assertRaises(OSError):
+                    extracted.rename(extracted.with_name("rebound"))
+            finally:
+                module._release_directory_lease(lease)
+
+            with self.assertRaisesRegex(module.ReleaseError, "outside"):
+                module._open_windows_directory_chain(self.root, bound_root=owned)
+        finally:
+            if snapshot_lock is not None:
+                module._close_locked_regular(snapshot_lock)
+            if source_lock is not None:
+                module._close_locked_regular(source_lock)
+            module._cleanup_owned_staging(owned)
+
     @unittest.skipUnless(os.name == "nt", "Windows fixed-drive regression")
     def test_release_directory_chain_rejects_mapped_network_drive(self) -> None:
         with (

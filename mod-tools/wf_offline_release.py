@@ -682,14 +682,18 @@ def _windows_regular_delete_handle(path: Path) -> tuple[int, _WindowsFileInfo]:
         raise
 
 
-def _open_locked_regular(path: Path) -> _LockedRegular:
+def _open_locked_regular(
+    path: Path,
+    *,
+    bound_root: _OwnedStaging | None = None,
+) -> _LockedRegular:
     if os.name != "nt":
         raise ReleaseError("stable sidecar reads require Windows handles")
     import msvcrt
     from ctypes import wintypes
 
     target = Path(os.path.abspath(path))
-    chain = _open_windows_directory_chain(target.parent)
+    chain = _open_windows_directory_chain(target.parent, bound_root=bound_root)
     raw = 0
     descriptor = -1
     try:
@@ -791,8 +795,12 @@ def _close_locked_regular(locked: _LockedRegular) -> None:
 
 
 @contextlib.contextmanager
-def _locked_regular_guard(path: Path):
-    locked = _open_locked_regular(Path(path))
+def _locked_regular_guard(
+    path: Path,
+    *,
+    bound_root: _OwnedStaging | None = None,
+):
+    locked = _open_locked_regular(Path(path), bound_root=bound_root)
     try:
         yield locked
     finally:
@@ -1256,14 +1264,72 @@ def _windows_chain_paths(path: Path) -> tuple[Path, ...]:
     return tuple(paths)
 
 
+def _windows_directory_chain_plan(
+    path: Path,
+    *,
+    bound_root: _OwnedStaging | None,
+) -> tuple[
+    list[tuple[Path, int, tuple[int, int]]],
+    tuple[Path, ...],
+]:
+    """Duplicate an owned-root prefix and return descendants still to open."""
+
+    members = _windows_chain_paths(path)
+    if bound_root is None:
+        return [], members
+    if (
+        bound_root.handle is None
+        or bound_root.handle <= 0
+        or bound_root.identity is None
+        or not bound_root.ancestor_chain
+    ):
+        raise ReleaseError("owned staging has no complete Windows handle chain")
+    owned_path = Path(os.path.abspath(bound_root.path))
+    source_prefix = (
+        *(
+            (Path(os.path.abspath(member)), raw_handle, identity)
+            for member, raw_handle, identity in bound_root.ancestor_chain
+        ),
+        (owned_path, bound_root.handle, bound_root.identity),
+    )
+    source_paths = tuple(member for member, _raw_handle, _identity in source_prefix)
+    if len(members) < len(source_paths) or members[: len(source_paths)] != source_paths:
+        raise ReleaseError("release directory is outside the bound owned staging root")
+
+    duplicated: list[tuple[Path, int, tuple[int, int]]] = []
+    try:
+        for index, (member, raw_handle, identity) in enumerate(source_prefix):
+            _require_windows_bound_path(
+                member,
+                identity,
+                label=f"bound release ancestor {index}",
+            )
+            if _windows_directory_identity(raw_handle) != identity:
+                raise ReleaseError("bound release ancestor handle identity changed")
+            duplicate = _duplicate_windows_handle(raw_handle)
+            try:
+                if _windows_directory_identity(duplicate) != identity:
+                    raise ReleaseError("duplicated release ancestor identity changed")
+            except BaseException:
+                _close_windows_handle(duplicate)
+                raise
+            duplicated.append((member, duplicate, identity))
+    except BaseException:
+        _close_windows_directory_chain(tuple(duplicated))
+        raise
+    return duplicated, members[len(source_paths) :]
+
+
 def _open_or_create_windows_directory_chain(
     path: Path,
+    *,
+    bound_root: _OwnedStaging | None = None,
 ) -> tuple[tuple[Path, int, tuple[int, int]], ...]:
     """Create missing plain directories while holding every existing ancestor."""
 
-    opened: list[tuple[Path, int, tuple[int, int]]] = []
+    opened, remaining = _windows_directory_chain_plan(path, bound_root=bound_root)
     try:
-        for index, member in enumerate(_windows_chain_paths(path)):
+        for index, member in enumerate(remaining, start=len(opened)):
             try:
                 handle, identity = _windows_directory_handle(
                     member,
@@ -1271,9 +1337,7 @@ def _open_or_create_windows_directory_chain(
                     deny_delete=True,
                     list_directory=False,
                 )
-            except OSError:
-                if index == 0:
-                    raise
+            except FileNotFoundError:
                 # Every ancestor is already held without FILE_SHARE_DELETE, so
                 # this single-component create cannot be redirected.  A racing
                 # pre-created object makes mkdir fail closed; it is never
@@ -1299,10 +1363,12 @@ def _open_or_create_windows_directory_chain(
 
 def _open_windows_directory_chain(
     path: Path,
+    *,
+    bound_root: _OwnedStaging | None = None,
 ) -> tuple[tuple[Path, int, tuple[int, int]], ...]:
-    opened: list[tuple[Path, int, tuple[int, int]]] = []
+    opened, remaining = _windows_directory_chain_plan(path, bound_root=bound_root)
     try:
-        for member in _windows_chain_paths(path):
+        for member in remaining:
             handle, identity = _windows_directory_handle(
                 member,
                 request_delete=False,
@@ -1333,16 +1399,27 @@ def _ensure_posix_plain_directory(path: Path) -> None:
             raise ReleaseError("release output contains a reparse or non-directory component")
 
 
-def _acquire_directory_lease(path: Path, *, create: bool = True) -> _DirectoryLease:
+def _acquire_directory_lease(
+    path: Path,
+    *,
+    create: bool = True,
+    bound_root: _OwnedStaging | None = None,
+) -> _DirectoryLease:
     target = Path(os.path.abspath(path))
     try:
         if os.name == "nt":
             return _DirectoryLease(
                 target,
                 (
-                    _open_or_create_windows_directory_chain(target)
+                    _open_or_create_windows_directory_chain(
+                        target,
+                        bound_root=bound_root,
+                    )
                     if create
-                    else _open_windows_directory_chain(target)
+                    else _open_windows_directory_chain(
+                        target,
+                        bound_root=bound_root,
+                    )
                 ),
             )
         if create:
@@ -2446,7 +2523,7 @@ class RealReleaseServices:
     def _independently_verify_apk(
         self,
         apk_snapshot: Path,
-        staging_dir: Path,
+        owned: _OwnedStaging,
         evidence: Mapping[str, Any],
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         builder = self._apk_builder()
@@ -2461,22 +2538,26 @@ class RealReleaseServices:
             runner=self._verification_runner,
         )
         builder.assert_locked_baseline(baseline, lock)
-        transaction = Path(staging_dir) / "apk-independent"
+        transaction = owned.path / "apk-independent"
         transaction.mkdir(exist_ok=False)
         base_snapshot = transaction / "base.apk"
         source_identity = builder._copy_source_snapshot(
             Path(self.config.source_apk), base_snapshot, str(baseline.apk_sha256)
         )
+
+        def bound_file_guard(path: Path):
+            return _locked_regular_guard(path, bound_root=owned)
+
         with contextlib.ExitStack() as guards:
-            guards.enter_context(_locked_regular_guard(base_snapshot))
+            guards.enter_context(bound_file_guard(base_snapshot))
             source_swf = builder._extract_exactly_one_swf(
                 base_snapshot, transaction / "source.swf"
             )
             candidate_swf = builder._extract_exactly_one_swf(
                 Path(apk_snapshot), transaction / "candidate.swf"
             )
-            guards.enter_context(_locked_regular_guard(source_swf))
-            guards.enter_context(_locked_regular_guard(candidate_swf))
+            guards.enter_context(bound_file_guard(source_swf))
+            guards.enter_context(bound_file_guard(candidate_swf))
             before_swf = builder._sha256_file(source_swf)
             after_swf = builder._sha256_file(candidate_swf)
             verifier_config = SimpleNamespace(toolchain=toolchain, signing=signing)
@@ -2488,7 +2569,7 @@ class RealReleaseServices:
                 transaction,
                 candidate_swf,
                 runner=self._verification_runner,
-                file_guard=_locked_regular_guard,
+                file_guard=bound_file_guard,
             )
         builder._assert_source_unchanged(
             Path(self.config.source_apk), source_identity, str(baseline.apk_sha256)
@@ -2711,6 +2792,7 @@ class RealReleaseServices:
         bundle_module: Any,
         *,
         guard_paths: Collection[str],
+        bound_root: _OwnedStaging | None = None,
     ) -> tuple[Any, tuple[_DirectoryLease, ...], tuple[int, ...]]:
         roots = {
             "common": extraction_root / "WorldFlipper" / "dummy" / "download" / "production" / "upload",
@@ -2730,7 +2812,10 @@ class RealReleaseServices:
         def bind_parent(path: Path) -> _DirectoryLease:
             key = os.path.normcase(os.path.abspath(path))
             if key not in leases:
-                leases[key] = _acquire_directory_lease(path)
+                leases[key] = _acquire_directory_lease(
+                    path,
+                    bound_root=bound_root,
+                )
             return leases[key]
 
         try:
@@ -2903,7 +2988,10 @@ class RealReleaseServices:
                 apk_snapshot,
                 identity.apk_sha256,
             )
-            apk_snapshot_lock = _open_locked_regular(apk_snapshot)
+            apk_snapshot_lock = _open_locked_regular(
+                apk_snapshot,
+                bound_root=owned,
+            )
             if os.name == "nt":
                 zip_lock = _open_locked_regular(target / bundle_module.DATA_ZIP_NAME)
                 if not hmac.compare_digest(
@@ -2913,7 +3001,7 @@ class RealReleaseServices:
                     raise ReleaseError("data ZIP changed before independent verification")
             client_report, apk_result = self._independently_verify_apk(
                 apk_snapshot,
-                owned.path,
+                owned,
                 evidence,
             )
             source_size, source_hash = self._stable_file_hash(Path(self.config.source_apk))
@@ -2993,13 +3081,14 @@ class RealReleaseServices:
                 entries,
                 bundle_module,
                 guard_paths=guarded_members,
+                bound_root=owned,
             )
             client_report_path = owned.path / "independent-client-report.json"
             _write_exclusive(
                 client_report_path,
                 self._apk_builder().canonical_json_bytes(client_report),
             )
-            with _locked_regular_guard(client_report_path):
+            with _locked_regular_guard(client_report_path, bound_root=owned):
                 def require_guarded_logical(root_name: str, logical: str) -> None:
                     if (root_name, logical) not in guarded_logicals:
                         raise ReleaseError(
