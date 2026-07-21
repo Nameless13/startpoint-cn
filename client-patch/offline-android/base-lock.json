@@ -1,0 +1,215 @@
+{
+  "abyss_stage": {
+    "after_method_sha256": "e90ca17387a074617b8620644abf99526555d95d4a7069ef0abfc11af35434e4",
+    "before_method_sha256": "41812df4d2d36e0187da3b217bca7a849e33cde4ec06ca521c8f75173b87ad2f",
+    "input_sha256": "08187f538703aecadce264b7bd5e085411f8e3aedb5f48adf2cf035a100f550d",
+    "match_count": 1,
+    "output_sha256": "082403fdfac92b47178ee2bd6e9139c7428346f173082eca2eda76e061c4efad",
+    "stage": "abyss-mode-equipment",
+    "target_class": "pinball.common.data.character.BattleCharacterLogic"
+  },
+  "asset_logicals": [
+    "character/seris_dragon_king/pixelart/special",
+    "character/seris_dragon_king/ui/skill_cutin_dragon",
+    "character/seris_dragon_king/ui/battle_control_board_dragon",
+    "character/seris_dragon_king/ui/battle_member_status_dragon"
+  ],
+  "dex_sha256": {
+    "classes.dex": "c12d119d425f0e8f35623dbac07296e00a8b9e60620c4f371b307121b389c043",
+    "classes2.dex": "b310c77febb7da0d2908b32274391ae39226a9df334e0d7d7f51b5a081bc539b"
+  },
+  "manifest_sha256": "2823fbfad46bfcdc34c8df77b3f2ed2acf9f5812b8b61644304cc6d11109d6f9",
+  "native_aggregate_sha256": "a42f92e417199a9ac99ca4f63efa0db487019bdf1220a86301fcfa0a4118f995",
+  "native_compatibility": {
+    "pinball.scene.battle.battle.squad.member:MemberImpl/resolveConditionalKind": {
+      "abc_sha256": "eb0b16be3b9503e5604c97b5f8866cdc7754b6cf43a88d376b92ed0ef3ce00b0",
+      "semantic_verified": true
+    },
+    "pinball.scene.battle.battle.squad.member:MemberImpl/startPowerFlip": {
+      "abc_sha256": "675b4a9e5874e5bba8502ea998963a20ab198d3553e0159a5f8422b7c9987f51",
+      "semantic_verified": true
+    },
+    "pinball.scene.battle.battle.squad.member:MemberView/MemberView": {
+      "abc_sha256": "0ca2af059a85e432c9c6dc991126d0eeba57acaa5ecc152aee83e36ed19a9d77",
+      "semantic_verified": true
+    },
+    "pinball.ui.component.pixelArtCharacter:PixelArtCharacterView/spriteSheetLoadCompleted": {
+      "abc_sha256": "9475368c4dd326f0d8230ba724d96a60af5d30dba37ac5d43d5bdd04a85b038b",
+      "semantic_verified": true
+    }
+  },
+  "native_members": {
+    "lib/arm64-v8a/libCore.so": {
+      "sha256": "41b50823cbada646ced0999a724a5886fe2f48fc2f71a8ef26266064db3b0dfe",
+      "size": 20348224
+    },
+    "lib/arm64-v8a/libSocketHelper.so": {
+      "sha256": "92bdc44a7316917e42c030003948da635ae71735d62654fb70f6ca60a7f1441d",
+      "size": 317784
+    },
+    "lib/arm64-v8a/libc++_shared.so": {
+      "sha256": "218ecc677aa79e1974f3968d2e0ecd0172c4f517188d04ebd7d45cbb285b5d03",
+      "size": 1058904
+    },
+    "lib/arm64-v8a/libentryexpro.so": {
+      "sha256": "368e1420d00d53be8901eb7c7bafad8f6c8d584cc4ca48eab17a26a5253f3074",
+      "size": 177624
+    },
+    "lib/arm64-v8a/libgetuiext3.so": {
+      "sha256": "bb3a923d724ba6e6346d8825d5cc1571665645b4afff04d6a63fd975331aba5c",
+      "size": 55152
+    },
+    "lib/arm64-v8a/libsecsdk.so": {
+      "sha256": "16a59fe3f40137ac3aa2cbb532e9fa1caa2ad153f9f4c016c6dbbbfb201eb200",
+      "size": 349040
+    },
+    "lib/arm64-v8a/libsobot.so": {
+      "sha256": "2be4c71c78a5c45f759c127815aa2fd52b55adaf4163efec0da8f165d5a560ee",
+      "size": 14080
+    },
+    "lib/arm64-v8a/libtracepath.so": {
+      "sha256": "8efcf10665b7d2305ef58e5fa028e8c40e73b7e6490afe71372414907a0b4208",
+      "size": 94560
+    },
+    "lib/arm64-v8a/libuptsmaddon.so": {
+      "sha256": "e1417fb3446cc42c017ff66354e8655d5d7072b7f682f915a5f08bfabf089557",
+      "size": 776992
+    },
+    "lib/arm64-v8a/libuptsmaddonmi.so": {
+      "sha256": "78ee11a083ccd6dee10ef7ab4f7d14cc35add70d4442fe9e6accea20245f41fa",
+      "size": 776992
+    },
+    "lib/arm64-v8a/libwordfilter.so": {
+      "sha256": "199ffdc9c2fb6fee78ef4404cd4e4fee02a192716ede1408abeac333ab644384",
+      "size": 1038544
+    },
+    "lib/arm64-v8a/libysshared.so": {
+      "sha256": "abf21718bfcd5cbba28a7f129378865a5cd39d2cb835e42eac30a7c47c411a20",
+      "size": 333656
+    }
+  },
+  "offline_method_sha256": {
+    "DevConfig_individual/DevConfig_individual": "ac87a4744507d4fa47fa46af99290a1aec0c230a5338e317cbeeb7c80badc139",
+    "DummyRemote/debugUnlinkTwitter": "45bc87da473d018f700f349fda2c743a6d11509cc236390584dccf2ac7d75a38",
+    "InitializeDummyRemote/logicAssetLoadedHandler": "d17591dc3c793faaa02c1080968b0bb30384b968f70dbe9363d8860fa30fcd3c",
+    "boot_ffc6#$script364/$init": "afcb8c8602158db0a64ba1560f36875166004283bfe6a04ad9eeaf49ee3714b2"
+  },
+  "post_abyss_swf_sha256": "082403fdfac92b47178ee2bd6e9139c7428346f173082eca2eda76e061c4efad",
+  "save_method_sha256": {
+    "DummyRemote/debugUnlinkTwitter": "45bc87da473d018f700f349fda2c743a6d11509cc236390584dccf2ac7d75a38",
+    "InitializeDummyRemote/logicAssetLoadedHandler": "d17591dc3c793faaa02c1080968b0bb30384b968f70dbe9363d8860fa30fcd3c"
+  },
+  "schema_version": 4,
+  "site_count": 9,
+  "site_ids": [
+    "preload_seris_dual_form_assets",
+    "switch_special_pixel_slot_preserve_frame_scale",
+    "default_seris_human_power_flip",
+    "dynamic_seris_skill_cutin",
+    "dynamic_seris_member_status_path",
+    "refresh_seris_member_status_texture",
+    "dynamic_seris_control_board_path",
+    "refresh_seris_control_board_texture",
+    "route_seris_skill_voice_by_form"
+  ],
+  "sites": {
+    "default_seris_human_power_flip": {
+      "after_abc_sha256": "8d4e9a4b9f748fe2df97209aa0c2d5f59afb234e28dda5c4b90d199cc66aff12",
+      "after_pcode_sha256": "aa7cb6788252152d06b64563b653dfa130393236537a10f23714f99584af3442",
+      "before_abc_sha256": "f8814f50deefedfcf218b143455cb37d49ed73261ed233a15b0b0c1edbf64fdb",
+      "before_pcode_sha256": "8d244e6de2ea5771727dfc38f06a8b49f90e818901c8050312ba2a4304d42576",
+      "class_name": "pinball.common.data.character.BattleCharacterLogic",
+      "method_name": "pinball.common.data.character:BattleCharacterLogic/getPowerFlipAction"
+    },
+    "dynamic_seris_control_board_path": {
+      "after_abc_sha256": "a1e1c7f0b55f38b0ed34e6fbe79743944d9d53d869a09867217753d9ac747d1c",
+      "after_pcode_sha256": "70e04c836b373d8c1c2eb506d4a01e8a50fd54a639d7673967f26798c4e141ae",
+      "before_abc_sha256": "938d3093f58996daf21a3af3596c02229fcf0e7dd319f73f4400b6bd97faf51d",
+      "before_pcode_sha256": "766e76ba4c72bcde7ac760543b36a730fd134e27b6e4802774995064ff474cef",
+      "class_name": "pinball.scene.battle.viewInput.processor.flipButton.CharacterSprite",
+      "method_name": "pinball.scene.battle.viewInput.processor.flipButton:CharacterSprite/getCharacterImagePath"
+    },
+    "dynamic_seris_member_status_path": {
+      "after_abc_sha256": "cf9229db60bf7dce0b5ed5774580457c11dea895f9de5f1e78ddfe3bbd19a574",
+      "after_pcode_sha256": "579d63f5d67d3f39009c2055542a7cdb36d38c9540298ebd6bae73245ebfe6ed",
+      "before_abc_sha256": "6fae7906c03644eb5f452e27dcc6d993631a3b359dc818b5955f92d78df4410b",
+      "before_pcode_sha256": "754a72c5a743d57bc83a5747dd5a9be1a8433a6fd4f7867ce05a10992d40d332",
+      "class_name": "pinball.scene.battle.battle.hud.HudMemberStatus",
+      "method_name": "pinball.scene.battle.battle.hud:HudMemberStatus/getCharacterImageAssetPath"
+    },
+    "dynamic_seris_skill_cutin": {
+      "after_abc_sha256": "3d66223d7b641c3fd4f44710f3f1687d7f9eb9c0ef0d4758ce3f90ba8b52fe2a",
+      "after_pcode_sha256": "74b18981aa99b652b124fa44073be2d1f9131b314defea5a67e635e06b9cfb68",
+      "before_abc_sha256": "872558b0ca7c0ba9f1e2ac79aa0e3774b9286dfb0d3b7b99628f025a260b1675",
+      "before_pcode_sha256": "732201e34f76660803f31143f45f575df03b312bce901a41eb88934ddd392dca",
+      "class_name": "pinball.scene.battle.battle.squad.member.MemberImpl",
+      "method_name": "pinball.scene.battle.battle.squad.member:MemberImpl/invokeActionSkillIfPossible"
+    },
+    "preload_seris_dual_form_assets": {
+      "after_abc_sha256": "7c8c0af36ec7c6b5c92a17f06f58c21742f6158c6253eb4ba4457ea2d3a7a30d",
+      "after_pcode_sha256": "0e863afe953e36ad25389fff60ab05f4c7d35b1c96cd9a11ec17f40e05e7dd56",
+      "before_abc_sha256": "23f0322067fa8449ffe6c1483977e9034f98f3dddccc6877e17b7ef5a3d4f2dd",
+      "before_pcode_sha256": "f9ba7ebc5fa65e5a5a01f2048b9e82d3cc8627193f21360002f7d8059f9fa7a4",
+      "class_name": "pinball.common.data.character.BattleCharacterLogic",
+      "method_name": "pinball.common.data.character:BattleCharacterLogic/resolvePathCollection"
+    },
+    "refresh_seris_control_board_texture": {
+      "after_abc_sha256": "7d2bcbf7fd772678f95b993a23d027e71e35b4561a70b701d679c4016d357e22",
+      "after_pcode_sha256": "222da68155e84019344ab65647e9c84c0fd3e207d4354e9fb406e3c191c93f20",
+      "before_abc_sha256": "731e8d9acd2bfe6e8ee66de599f78c13c35906411e1e4633c885910601ba006e",
+      "before_pcode_sha256": "37a635e33a12a3846f503f8a03ea3cbce343bad57c2ba3f9735cc442a9970ce5",
+      "class_name": "pinball.scene.battle.viewInput.processor.flipButton.CharacterSpriteView",
+      "method_name": "pinball.scene.battle.viewInput.processor.flipButton:CharacterSpriteView/draw"
+    },
+    "refresh_seris_member_status_texture": {
+      "after_abc_sha256": "2887d07861a41a9c59d0c6f15e64cc85da8ab84de36ddf3e9c7262931d4b50bb",
+      "after_pcode_sha256": "4d7fbc223418d125ac4249db70468d640970191c26c67e3d08901a6e2b9e5bbd",
+      "before_abc_sha256": "64d32a373172bb0add8a407aeda87757071230ae0e10f24fb0549ad11f76f1e9",
+      "before_pcode_sha256": "72c1db076abe2311c81a03650777fd3342f37c39ca5554decb42005c71ce3c6d",
+      "class_name": "pinball.scene.battle.battle.hud.HudMemberStatusView",
+      "method_name": "pinball.scene.battle.battle.hud:HudMemberStatusView/draw"
+    },
+    "route_seris_skill_voice_by_form": {
+      "after_abc_sha256": "6ebbbacfbfb614f53d34b9a5c2cdc2959086670cbcc6d267e11243fc55e8b618",
+      "after_pcode_sha256": "8879408811d6452a790bd0e0dc8c2d5be3acd1ec4fb040a2b67efea8dc3acea0",
+      "before_abc_sha256": "564e663b05d20bc085f3cb4684ca213bc9ec519ec660993ad83c9f612ab58740",
+      "before_pcode_sha256": "9bd59139eca0b9c298fb2a3106994e7c49830c68150e5fe34d5c587abb5519b8",
+      "class_name": "pinball.scene.battle.battle.squad.SquadManagerImpl",
+      "method_name": "pinball.scene.battle.battle.squad:SquadManagerImpl/invokeActionSkill"
+    },
+    "switch_special_pixel_slot_preserve_frame_scale": {
+      "after_abc_sha256": "706ccc26b0aa333958bae235207052ecb4916a0fd7b80a19f7af306ee787f6e7",
+      "after_pcode_sha256": "eabdfe0a19bcd77b05e88719f7f566f13df09c823ba766f567da225fd70fa8cf",
+      "before_abc_sha256": "2749c95ba3f18e3693c47795f7e3f556e1a129442b734485a5363bc922866190",
+      "before_pcode_sha256": "426a555abdbdce432d503fa21fbc69d11166b2eb1ef2b5f829b46957fa1a2294",
+      "class_name": "pinball.scene.battle.battle.squad.member.MemberView",
+      "method_name": "pinball.scene.battle.battle.squad.member:MemberView/draw"
+    }
+  },
+  "source_apk_sha256": "4f6884f33641788108c0522c7c70036c63ba530e1fdb183105b3cd395bdd66f6",
+  "source_swf_sha256": "08187f538703aecadce264b7bd5e085411f8e3aedb5f48adf2cf035a100f550d",
+  "stage": "post-abyss",
+  "status": "accepted",
+  "three_way_merges": {
+    "default_seris_human_power_flip": {
+      "base_method_abc_sha256": "fe609f8079a69de8b6276a10f166676e232a917aedf03c1702314dbcd96ac4c9",
+      "post_abyss_before_abc_sha256": "f8814f50deefedfcf218b143455cb37d49ed73261ed233a15b0b0c1edbf64fdb",
+      "preserved_semantics": [
+        "offline_base_power_flip",
+        "seris_human_dragon_selection"
+      ],
+      "verified": true
+    },
+    "preload_seris_dual_form_assets": {
+      "base_method_abc_sha256": "4c17b898e702b11092ee4d8ec148b18b3550900475f3b0e14a1ef725062f84fd",
+      "post_abyss_before_abc_sha256": "23f0322067fa8449ffe6c1483977e9034f98f3dddccc6877e17b7ef5a3d4f2dd",
+      "preserved_semantics": [
+        "offline_base_path",
+        "abyss_equipment_gate",
+        "seris_dual_form_preload"
+      ],
+      "verified": true
+    }
+  },
+  "verified": true
+}
