@@ -382,6 +382,50 @@ class OfflineBundleTests(unittest.TestCase):
                 release_evidence=self.evidence(),
             )
 
+    @unittest.skipUnless(os.name == "nt", "Windows directory sharing contract")
+    def test_freeze_candidate_accepts_an_existing_parent_deny_delete_guard(self) -> None:
+        parent_guard = module._open_raw_directory(
+            self.root,
+            deny_delete=True,
+            request_delete=False,
+        )
+        try:
+            identity = self.freeze_fixture()
+        finally:
+            module._close_owned_directory(parent_guard)
+
+        self.assertEqual(identity.build_id, self.build_id)
+        self.assertTrue(self.candidate.is_dir())
+
+    @unittest.skipUnless(os.name == "nt", "Windows directory sharing contract")
+    def test_finalize_candidate_accepts_an_existing_parent_deny_delete_guard(self) -> None:
+        identity = self.freeze_fixture()
+        receipt = self.write_receipt(identity)
+        parent_guard = module._open_raw_directory(
+            self.root,
+            deny_delete=True,
+            request_delete=False,
+        )
+        try:
+            with (
+                mock.patch.object(module, "PRODUCTION_ENTRY_COUNT", 5),
+                mock.patch.object(
+                    module,
+                    "PRODUCTION_ROOT_COUNTS",
+                    {"common": 1, "medium": 1, "android": 1},
+                ),
+            ):
+                output = module.finalize_candidate(
+                    self.candidate,
+                    receipt,
+                    self.final_dir,
+                )
+        finally:
+            module._close_owned_directory(parent_guard)
+
+        self.assertEqual(output, self.final_dir)
+        self.assertTrue(self.final_dir.is_dir())
+
     def test_verify_candidate_publicly_rehashes_identity_and_returns_detached_evidence(self) -> None:
         self.assertIn("verify_candidate", module.__all__)
         identity = self.freeze_fixture()

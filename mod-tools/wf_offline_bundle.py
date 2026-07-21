@@ -860,12 +860,17 @@ def _open_raw_directory(
         raise
 
 
-def _open_destination_directory(path: Path, *, deny_delete: bool) -> _OwnedDirectory:
+def _open_destination_directory(
+    path: Path,
+    *,
+    deny_delete: bool,
+    request_delete: bool = True,
+) -> _OwnedDirectory:
     try:
         return _open_raw_directory(
             Path(path),
             deny_delete=deny_delete,
-            request_delete=True,
+            request_delete=request_delete,
         )
     except BundleError:
         raise
@@ -1445,7 +1450,11 @@ def freeze_candidate(
         "release_evidence": evidence,
     }
     temp = parent / f".{candidate.name}.freezing-{uuid.uuid4().hex}"
-    parent_owned = _open_destination_directory(parent, deny_delete=True)
+    parent_owned = _open_destination_directory(
+        parent,
+        deny_delete=True,
+        request_delete=False,
+    )
     owned: _OwnedDirectory | None = None
     try:
         owned = _create_owned_directory(temp)
@@ -1935,7 +1944,11 @@ def finalize_candidate(
         raise BundleError("device receipt validation failed") from exc
     validated_receipt = _validated_receipt(receipt_value, identity)
     temp = parent / f".{final.name}.finalizing-{uuid.uuid4().hex}"
-    parent_owned = _open_destination_directory(parent, deny_delete=True)
+    parent_owned = _open_destination_directory(
+        parent,
+        deny_delete=True,
+        request_delete=False,
+    )
     owned: _OwnedDirectory | None = None
     try:
         owned = _create_owned_directory(temp)
