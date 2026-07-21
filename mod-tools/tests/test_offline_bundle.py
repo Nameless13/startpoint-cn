@@ -37,17 +37,36 @@ def sha256(payload: bytes) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
-def write_zip(path: Path, members: dict[str, bytes]) -> None:
+def write_zip(
+    path: Path,
+    members: dict[str, bytes],
+    *,
+    compression: int = zipfile.ZIP_STORED,
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with zipfile.ZipFile(path, "x", compression=zipfile.ZIP_STORED) as archive:
+    with zipfile.ZipFile(path, "x", compression=compression) as archive:
         for name, payload in members.items():
             archive.writestr(name, payload)
+
+
+PRODUCTION_PINNED_BASELINE_SECRET_FINDINGS = getattr(
+    module,
+    "_PINNED_BASELINE_SECRET_FINDINGS",
+    None,
+)
 
 
 class OfflineBundleTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name).resolve()
+        self.baseline_secret_patch = mock.patch.object(
+            module,
+            "_PINNED_BASELINE_SECRET_FINDINGS",
+            (),
+            create=True,
+        )
+        self.baseline_secret_patch.start()
         self.apk = self.root / "signed.apk"
         self.data_zip = self.root / "data.zip"
         self.candidate = self.root / "candidate"
@@ -71,6 +90,7 @@ class OfflineBundleTests(unittest.TestCase):
         self.build_id = "build-fixture-001"
 
     def tearDown(self) -> None:
+        self.baseline_secret_patch.stop()
         self.temp.cleanup()
 
     def evidence(self, *, entry_count: int = 5) -> dict[str, object]:
@@ -795,6 +815,210 @@ class OfflineBundleTests(unittest.TestCase):
         self.assertTrue(all(secret not in finding.summary for finding in findings))
         self.assertTrue(all(not Path(finding.relative_path).is_absolute() for finding in findings))
         self.assertTrue(any(finding.container_member for finding in findings))
+        self.assertTrue(all(finding.content_sha256 for finding in findings))
+        self.assertTrue(all(finding.content_size is not None for finding in findings))
+
+    def test_release_secret_policy_allows_only_exact_pinned_baseline(self) -> None:
+        member = "lib/arm64-v8a/libCore.so"
+        payload = b"prefix\n-----BEGIN ENCRYPTED PRIVATE KEY-----\nsuffix\n"
+        scan = self.root / "baseline-scan"
+        scan.mkdir()
+        write_zip(
+            scan / module.APK_NAME,
+            {member: payload},
+            compression=zipfile.ZIP_DEFLATED,
+        )
+        expected = (
+            (
+                module.APK_NAME,
+                member,
+                "private-key-marker",
+                sha256(payload),
+                len(payload),
+            ),
+        )
+        with mock.patch.object(module, "_PINNED_BASELINE_SECRET_FINDINGS", expected):
+            findings = module.scan_release_for_secrets(scan)
+            report = module.validate_release_secret_findings(findings)
+
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].content_sha256, sha256(payload))
+        self.assertEqual(findings[0].content_size, len(payload))
+        self.assertEqual(
+            report,
+            {
+                "secret_finding_count": 0,
+                "baseline_secret_finding_count": 1,
+                "baseline_secret_verified": True,
+                "raw_secret_finding_count": 1,
+            },
+        )
+
+    def test_exact_pinned_baseline_survives_freeze_finalize_and_verify(self) -> None:
+        member = "lib/arm64-v8a/libCore.so"
+        payload = b"prefix\n-----BEGIN ENCRYPTED PRIVATE KEY-----\nsuffix\n"
+        self.apk.unlink()
+        write_zip(
+            self.apk,
+            {
+                "AndroidManifest.xml": b"manifest",
+                "assets/worldflipper_android_release.swf": b"patched-swf",
+                member: payload,
+            },
+            compression=zipfile.ZIP_DEFLATED,
+        )
+        expected = (
+            (
+                module.APK_NAME,
+                member,
+                "private-key-marker",
+                sha256(payload),
+                len(payload),
+            ),
+        )
+        with (
+            mock.patch.object(module, "_PINNED_BASELINE_SECRET_FINDINGS", expected),
+            mock.patch.object(module, "PRODUCTION_ENTRY_COUNT", 5),
+            mock.patch.object(
+                module,
+                "PRODUCTION_ROOT_COUNTS",
+                {"common": 1, "medium": 1, "android": 1},
+            ),
+        ):
+            identity = module.freeze_candidate(
+                self.apk,
+                self.data_zip,
+                self.guide,
+                self.candidate,
+                build_id=self.build_id,
+                release_evidence=self.evidence(),
+            )
+            receipt = self.write_receipt(identity)
+            output = module.finalize_candidate(self.candidate, receipt, self.final_dir)
+            self.assertEqual(module.verify_final_bundle(output), identity)
+
+    def test_release_secret_policy_rejects_pin_drift_and_extra_findings(self) -> None:
+        member = "lib/arm64-v8a/libCore.so"
+        payload = b"prefix\n-----BEGIN RSA PRIVATE KEY-----\nsuffix\n"
+        scan = self.root / "baseline-drift"
+        scan.mkdir()
+        apk = scan / module.APK_NAME
+        write_zip(apk, {member: payload}, compression=zipfile.ZIP_DEFLATED)
+        findings = module.scan_release_for_secrets(scan)
+        exact = (
+            (
+                module.APK_NAME,
+                member,
+                "private-key-marker",
+                sha256(payload),
+                len(payload),
+            ),
+        )
+        drifted = (
+            (("renamed.apk", member, "private-key-marker", sha256(payload), len(payload)),),
+            ((module.APK_NAME, member, "private-key-marker", "0" * 64, len(payload)),),
+            ((module.APK_NAME, "lib/arm64-v8a/other.so", "private-key-marker", sha256(payload), len(payload)),),
+            ((module.APK_NAME, member, "configured-secret", sha256(payload), len(payload)),),
+            ((module.APK_NAME, member, "private-key-marker", sha256(payload), len(payload) + 1),),
+            exact + exact,
+        )
+        for expected in drifted:
+            with (
+                self.subTest(expected=expected),
+                mock.patch.object(module, "_PINNED_BASELINE_SECRET_FINDINGS", expected),
+                self.assertRaisesRegex(module.BundleError, "secret scan failed"),
+            ):
+                module.validate_release_secret_findings(findings)
+        with (
+            mock.patch.object(module, "_PINNED_BASELINE_SECRET_FINDINGS", exact),
+            self.assertRaisesRegex(module.BundleError, "finding_count=0"),
+        ):
+            module.validate_release_secret_findings(())
+
+        extra = scan / "extra.txt"
+        configured = "fixture-configured-secret-2468"
+        extra.write_text(configured, encoding="utf-8")
+        with (
+            mock.patch.object(module, "_PINNED_BASELINE_SECRET_FINDINGS", exact),
+            self.assertRaisesRegex(module.BundleError, "finding_count=2"),
+        ):
+            module.validate_release_secret_findings(
+                module.scan_release_for_secrets(scan, secret_values=(configured,))
+            )
+
+        for index, members in enumerate(
+            (
+                {
+                    member: payload,
+                    "lib/arm64-v8a/extra.so": b"-----BEGIN PRIVATE KEY-----",
+                },
+                {
+                    member: payload,
+                    "assets/keys/release.p12": b"placeholder",
+                },
+            )
+        ):
+            extra_scan = self.root / f"baseline-extra-{index}"
+            extra_scan.mkdir()
+            write_zip(
+                extra_scan / module.APK_NAME,
+                members,
+                compression=zipfile.ZIP_DEFLATED,
+            )
+            with (
+                self.subTest(extra=index),
+                mock.patch.object(module, "_PINNED_BASELINE_SECRET_FINDINGS", exact),
+                self.assertRaisesRegex(module.BundleError, "finding_count=2"),
+            ):
+                module.validate_release_secret_findings(
+                    module.scan_release_for_secrets(extra_scan)
+                )
+
+    def test_release_secret_policy_rejects_stored_raw_archive_finding(self) -> None:
+        member = "lib/arm64-v8a/libCore.so"
+        payload = b"prefix\n-----BEGIN EC PRIVATE KEY-----\nsuffix\n"
+        scan = self.root / "stored-baseline"
+        scan.mkdir()
+        write_zip(scan / module.APK_NAME, {member: payload})
+        expected = (
+            (
+                module.APK_NAME,
+                member,
+                "private-key-marker",
+                sha256(payload),
+                len(payload),
+            ),
+        )
+        findings = module.scan_release_for_secrets(scan)
+        self.assertEqual(len(findings), 2)
+        self.assertTrue(any(finding.container_member is None for finding in findings))
+        with (
+            mock.patch.object(module, "_PINNED_BASELINE_SECRET_FINDINGS", expected),
+            self.assertRaisesRegex(module.BundleError, "finding_count=2"),
+        ):
+            module.validate_release_secret_findings(findings)
+
+    def test_production_secret_pin_matches_accepted_base_lock(self) -> None:
+        self.assertIsNotNone(PRODUCTION_PINNED_BASELINE_SECRET_FINDINGS)
+        lock = json.loads(
+            (ROOT / "client-patch" / "offline-android" / "base-lock.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        member = "lib/arm64-v8a/libCore.so"
+        record = lock["native_members"][member]
+        self.assertEqual(
+            PRODUCTION_PINNED_BASELINE_SECRET_FINDINGS,
+            (
+                (
+                    module.APK_NAME,
+                    member,
+                    "private-key-marker",
+                    record["sha256"],
+                    record["size"],
+                ),
+            ),
+        )
 
     def test_secret_scan_rejects_key_names_pem_markers_and_malformed_archives(self) -> None:
         scan = self.root / "scan"

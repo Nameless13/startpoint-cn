@@ -21,6 +21,7 @@ import re
 import stat
 import uuid
 import zipfile
+from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, fields, is_dataclass
 from datetime import datetime, timedelta
@@ -113,6 +114,15 @@ _PRIVATE_KEY_MARKERS = (
     b"-----BEGIN EC PRIVATE KEY-----",
     b"-----BEGIN OPENSSH PRIVATE KEY-----",
 )
+_PINNED_BASELINE_SECRET_FINDINGS = (
+    (
+        APK_NAME,
+        "lib/arm64-v8a/libCore.so",
+        "private-key-marker",
+        "41b50823cbada646ced0999a724a5886fe2f48fc2f71a8ef26266064db3b0dfe",
+        20_348_224,
+    ),
+)
 _ARCHIVE_SUFFIXES = (".zip", ".apk")
 MAX_ARCHIVE_MEMBERS = 150_000
 MAX_ARCHIVE_TOTAL_UNCOMPRESSED_BYTES = 16 * 1024 * 1024 * 1024
@@ -152,6 +162,8 @@ class SecretFinding:
     container_member: str | None
     rule_id: str
     summary: str
+    content_sha256: str | None = None
+    content_size: int | None = None
 
 
 @dataclass(slots=True)
@@ -1130,16 +1142,17 @@ def _content_findings(
     expected_size: int | None = None,
     archive_budget: _ArchiveBudget | None = None,
 ) -> list[SecretFinding]:
-    findings: list[SecretFinding] = []
     found: set[str] = set()
     longest = max((len(payload) for _, payload in patterns), default=1)
     tail = b""
     total = 0
+    digest = hashlib.sha256()
     while True:
         chunk = stream.read(_CHUNK_SIZE)
         if not chunk:
             break
         total += len(chunk)
+        digest.update(chunk)
         if archive_budget is not None:
             archive_budget.actual_uncompressed_bytes += len(chunk)
             if archive_budget.actual_uncompressed_bytes > MAX_ARCHIVE_TOTAL_UNCOMPRESSED_BYTES:
@@ -1148,12 +1161,25 @@ def _content_findings(
         for rule, payload in patterns:
             if rule not in found and payload in window:
                 found.add(rule)
-                summary = "configured credential bytes detected" if rule == "configured-secret" else "private-key material detected"
-                findings.append(SecretFinding(relative, member, rule, summary))
         tail = window[-(longest - 1) :] if longest > 1 else b""
     if expected_size is not None and total != expected_size:
         raise BundleError("archive member declared size drift")
-    return findings
+    content_sha256 = digest.hexdigest()
+    return [
+        SecretFinding(
+            relative,
+            member,
+            rule,
+            (
+                "configured credential bytes detected"
+                if rule == "configured-secret"
+                else "private-key material detected"
+            ),
+            content_sha256,
+            total,
+        )
+        for rule in sorted(found)
+    ]
 
 
 def _validate_archive_member_name(name: str) -> None:
@@ -1378,6 +1404,46 @@ def _require_no_findings(findings: Sequence[SecretFinding]) -> None:
         )
 
 
+def _secret_finding_key(
+    finding: SecretFinding,
+) -> tuple[str, str | None, str, str | None, int | None]:
+    return (
+        finding.relative_path,
+        finding.container_member,
+        finding.rule_id,
+        finding.content_sha256,
+        finding.content_size,
+    )
+
+
+def validate_release_secret_findings(
+    findings: Sequence[SecretFinding],
+) -> dict[str, int | bool]:
+    """Require the one immutable encrypted-key marker already pinned in the base APK."""
+    try:
+        actual = Counter(_secret_finding_key(finding) for finding in findings)
+    except (AttributeError, TypeError) as exc:
+        raise BundleError(
+            f"release secret scan failed [invalid-finding]; finding_count={len(findings)}"
+        ) from exc
+    expected = Counter(_PINNED_BASELINE_SECRET_FINDINGS)
+    if actual != expected:
+        first_rule = (
+            findings[0].rule_id
+            if findings and isinstance(findings[0], SecretFinding)
+            else "baseline-mismatch"
+        )
+        raise BundleError(
+            f"release secret scan failed [{first_rule}]; finding_count={len(findings)}"
+        )
+    return {
+        "secret_finding_count": 0,
+        "baseline_secret_finding_count": sum(expected.values()),
+        "baseline_secret_verified": True,
+        "raw_secret_finding_count": len(findings),
+    }
+
+
 def _identity_document(identity: CandidateIdentity) -> dict[str, str]:
     return {
         "build_id": identity.build_id,
@@ -1462,7 +1528,9 @@ def freeze_candidate(
         _copy_exclusive(data_zip, temp / DATA_ZIP_NAME, expected_hash=data_hash)
         _write_exclusive(temp / GUIDE_NAME, guide_bytes)
         _write_exclusive(temp / CANDIDATE_EVIDENCE_NAME, canonical_json_bytes(document))
-        _require_no_findings(scan_release_for_secrets(temp, secret_values=_configured_secret_values()))
+        validate_release_secret_findings(
+            scan_release_for_secrets(temp, secret_values=_configured_secret_values())
+        )
         verified_identity, _verified_evidence = _rehash_frozen_candidate(temp)
         if verified_identity != identity:
             raise BundleError("frozen candidate identity changed before publication")
@@ -1911,7 +1979,9 @@ def verify_final_bundle(final_dir: Path) -> CandidateIdentity:
         expected_archive_sha256=identity.data_zip_sha256,
         label="final",
     )
-    _require_no_findings(scan_release_for_secrets(final, secret_values=_configured_secret_values()))
+    validate_release_secret_findings(
+        scan_release_for_secrets(final, secret_values=_configured_secret_values())
+    )
     return identity
 
 
@@ -1953,7 +2023,9 @@ def finalize_candidate(
     try:
         owned = _create_owned_directory(temp)
         _write_five_files(temp, candidate, validated_receipt, identity, evidence)
-        _require_no_findings(scan_release_for_secrets(temp, secret_values=_configured_secret_values()))
+        validate_release_secret_findings(
+            scan_release_for_secrets(temp, secret_values=_configured_secret_values())
+        )
         if verify_final_bundle(temp) != identity:
             raise BundleError("verified final identity changed before publication")
         _publish_owned_directory_no_replace(owned, parent_owned, final)
@@ -1998,6 +2070,7 @@ __all__ = [
     "freeze_candidate",
     "build_sha256sums",
     "scan_release_for_secrets",
+    "validate_release_secret_findings",
     "validate_release_layout",
     "verify_candidate",
     "finalize_candidate",

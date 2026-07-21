@@ -20,6 +20,7 @@ if str(MOD_TOOLS) not in sys.path:
     sys.path.insert(0, str(MOD_TOOLS))
 
 import wf_offline_release as module  # noqa: E402
+import wf_offline_bundle as bundle_contract  # noqa: E402
 
 
 EXPECTED_STAGES = (
@@ -98,8 +99,29 @@ INDEPENDENT_EVIDENCE = {
     "data": {"member_count": 138_291, "zip64": True},
     "legacy_tail": {"missing_count": 0, "tail_member_count": 12},
     "secret_finding_count": 0,
+    "baseline_secret_finding_count": 1,
+    "baseline_secret_verified": True,
+    "raw_secret_finding_count": 1,
     "source_fingerprint": {"unchanged": True},
 }
+
+PINNED_BASELINE_FINDINGS = tuple(
+    bundle_contract.SecretFinding(
+        relative_path,
+        container_member,
+        rule_id,
+        "accepted immutable baseline marker",
+        content_sha256,
+        content_size,
+    )
+    for (
+        relative_path,
+        container_member,
+        rule_id,
+        content_sha256,
+        content_size,
+    ) in bundle_contract._PINNED_BASELINE_SECRET_FINDINGS
+)
 
 
 def sha256(payload: bytes) -> str:
@@ -1226,7 +1248,7 @@ class OfflineReleaseTestCase(unittest.TestCase):
                 bundle_module,
                 "scan_release_for_secrets",
                 autospec=True,
-                return_value=(),
+                return_value=PINNED_BASELINE_FINDINGS,
             ),
             mock.patch.object(module, "SubprocessAdbRunner", return_value=runner),
             mock.patch.object(
@@ -1378,7 +1400,7 @@ class OfflineReleaseTestCase(unittest.TestCase):
                         bundle_module,
                         "scan_release_for_secrets",
                         autospec=True,
-                        return_value=(),
+                        return_value=PINNED_BASELINE_FINDINGS,
                     ),
                     mock.patch.object(
                         module, "SubprocessAdbRunner", return_value=object()
@@ -2505,7 +2527,7 @@ class OfflineReleaseCliTests(OfflineReleaseTestCase):
                 bundle_module,
                 "scan_release_for_secrets",
                 autospec=True,
-                return_value=(),
+                return_value=PINNED_BASELINE_FINDINGS,
             ),
             mock.patch.object(
                 module.RealReleaseServices,
@@ -2584,7 +2606,7 @@ class OfflineReleaseCliTests(OfflineReleaseTestCase):
                 bundle_module,
                 "scan_release_for_secrets",
                 autospec=True,
-                return_value=(),
+                return_value=PINNED_BASELINE_FINDINGS,
             ),
             mock.patch.object(
                 module.RealReleaseServices,

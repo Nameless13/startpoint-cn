@@ -229,6 +229,17 @@ def _configured_secrets() -> tuple[str, ...]:
     return (value,) if value else ()
 
 
+def _validate_release_secret_scan(bundle_module: Any, target: Path) -> dict[str, Any]:
+    findings = bundle_module.scan_release_for_secrets(
+        target,
+        secret_values=_configured_secrets(),
+    )
+    try:
+        return dict(bundle_module.validate_release_secret_findings(findings))
+    except bundle_module.BundleError as exc:
+        raise ReleaseError(_redact(exc)) from exc
+
+
 def _sanitized_child_environment() -> dict[str, str]:
     forbidden = PASSWORD_ENV.casefold()
     return {
@@ -3031,7 +3042,6 @@ class RealReleaseServices:
                     "missing_count": len(diff.missing),
                     "tail_member_count": tail.member_count,
                 },
-                "secret_finding_count": 0,
                 "source_fingerprint": {
                     "after": current_checkpoint,
                     "before": current_checkpoint,
@@ -3048,14 +3058,7 @@ class RealReleaseServices:
                     raise ReleaseError("candidate evidence changed during independent verification")
             if _public_identity(rebound_identity) != _public_identity(identity):
                 raise ReleaseError("release identity changed during independent verification")
-            findings = bundle_module.scan_release_for_secrets(
-                target,
-                secret_values=_configured_secrets(),
-            )
-            if findings:
-                raise ReleaseError(
-                    f"release secret scan changed; finding_count={len(findings)}"
-                )
+            result.update(_validate_release_secret_scan(bundle_module, target))
             _require_locked_release_files(target, locked_files, expected_files)
             return result
         finally:
@@ -3648,17 +3651,11 @@ class RealReleaseServices:
         *_head, bundle_module, _device, _toolchain = self._modules()
         if self._candidate_dir is None:
             raise ReleaseError("freeze-candidate must run before secret-scan")
-        findings = bundle_module.scan_release_for_secrets(
-            self._candidate_dir, secret_values=_configured_secrets()
-        )
-        if findings:
-            raise ReleaseError(
-                f"candidate secret scan failed; finding_count={len(findings)}"
-            )
+        report = _validate_release_secret_scan(bundle_module, self._candidate_dir)
         verified, _evidence = bundle_module.verify_candidate(self._candidate_dir)
         if verified != self._identity:
             raise ReleaseError("candidate identity changed after secret scan")
-        return self._stage("secret-scan", finding_count=0)
+        return self._stage("secret-scan", **report)
 
     def _load_candidate(self, candidate_id: str) -> tuple[Path, Any, dict[str, Any]]:
         *_head, bundle_module, _device, _toolchain = self._modules()
@@ -3668,15 +3665,10 @@ class RealReleaseServices:
         identity, evidence = bundle_module.verify_candidate(candidate)
         if identity.build_id != candidate_id:
             raise ReleaseError("candidate build_id does not match its directory")
-        findings = bundle_module.scan_release_for_secrets(
+        self._verification_evidence = _validate_release_secret_scan(
+            bundle_module,
             candidate,
-            secret_values=_configured_secrets(),
         )
-        if findings:
-            raise ReleaseError(
-                f"candidate secret scan failed; finding_count={len(findings)}"
-            )
-        self._verification_evidence = {"secret_finding_count": 0}
         return candidate, identity, evidence
 
     def load_candidate_identity(
@@ -3730,15 +3722,10 @@ class RealReleaseServices:
         *_head, bundle_module, _device, _toolchain = self._modules()
         target = Path(final_dir)
         identity = bundle_module.verify_final_bundle(target)
-        findings = bundle_module.scan_release_for_secrets(
+        self._verification_evidence = _validate_release_secret_scan(
+            bundle_module,
             target,
-            secret_values=_configured_secrets(),
         )
-        if findings:
-            raise ReleaseError(
-                f"final secret scan failed; finding_count={len(findings)}"
-            )
-        self._verification_evidence = {"secret_finding_count": 0}
         if independent:
             manifest_path = target / bundle_module.MANIFEST_NAME
             try:
