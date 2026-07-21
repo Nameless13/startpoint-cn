@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -142,6 +143,18 @@ class FakeAdbRunner:
 
 
 class OfflineDeviceTests(unittest.TestCase):
+    @unittest.skipUnless(os.name == "nt", "Windows fixed-drive regression")
+    def test_receipt_directory_chain_rejects_mapped_network_drive(self) -> None:
+        with (
+            mock.patch.object(module, "_windows_drive_type", return_value=4) as drive_type,
+            self.assertRaisesRegex(module.DeviceError, "fixed local Windows drive"),
+        ):
+            module._directory_chain_paths(
+                Path(r"Z:\\offline-receipts"),
+                label="receipt parent",
+            )
+        drive_type.assert_called_once_with("Z:\\")
+
     def setUp(self) -> None:
         # Stable directory-handle tests need a tree whose ancestors are readable
         # under the managed Windows sandbox; the workspace volume is writable.
@@ -158,6 +171,7 @@ class OfflineDeviceTests(unittest.TestCase):
             sha256(self.apk.read_bytes()),
             sha256(b"data-zip"),
             sha256(b"guide"),
+            sha256(b"canonical-release-evidence"),
         )
 
     def tearDown(self) -> None:
@@ -389,6 +403,7 @@ class OfflineDeviceTests(unittest.TestCase):
             self.identity.apk_sha256,
             self.identity.data_zip_sha256,
             self.identity.guide_sha256,
+            self.identity.evidence_sha256,
         )
         runner = self.runner()
         with self.assertRaisesRegex(module.DeviceError, "build ID"):
@@ -715,6 +730,7 @@ class OfflineDeviceTests(unittest.TestCase):
         self.assertEqual(document["build_id"], self.identity.build_id)
         self.assertEqual(document["apk_sha256"], self.identity.apk_sha256)
         self.assertEqual(document["data_zip_sha256"], self.identity.data_zip_sha256)
+        self.assertEqual(document["evidence_sha256"], self.identity.evidence_sha256)
         self.assertEqual(document["serial_digest"], receipt.serial_digest)
         self.assertTrue(document["accepted_at_utc"].endswith("Z"))
         self.assertNotIn(self.serial.encode(), raw)
@@ -1029,6 +1045,7 @@ class OfflineDeviceTests(unittest.TestCase):
             replace(self.identity, build_id="build-fixture-002"),
             replace(self.identity, apk_sha256="a" * 64),
             replace(self.identity, data_zip_sha256="b" * 64),
+            replace(self.identity, evidence_sha256="c" * 64),
         )
         for identity in changed:
             with self.subTest(identity=identity):

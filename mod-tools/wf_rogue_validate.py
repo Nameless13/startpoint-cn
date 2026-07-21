@@ -13,7 +13,7 @@ import zipfile
 import zlib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import wf_assets
 import wf_describe
@@ -139,7 +139,18 @@ def release_logicals() -> list[str]:
     ]
 
 
-def _validate_release_data(store: Path, assets_dir: Path) -> ValidationResult:
+def offline_release_logicals() -> tuple[str, ...]:
+    """Every client-store logical consumed by the offline-only rogue gate."""
+
+    return (*release_logicals(), rogue_build.Q_QUEST)
+
+
+def _validate_release_data(
+    store: Path,
+    assets_dir: Path,
+    *,
+    access_hook: Callable[[str], None] | None = None,
+) -> ValidationResult:
     """Validate every store/server roguelike invariant, without APK tooling."""
     store = Path(store)
     assets_dir = Path(assets_dir)
@@ -147,7 +158,17 @@ def _validate_release_data(store: Path, assets_dir: Path) -> ValidationResult:
     release_entries: list[ReleaseEntry] = []
 
     tables = {
-        logical: _load_table(store, logical, errors, release_entries)
+        logical: (
+            _load_table(store, logical, errors, release_entries)
+            if access_hook is None
+            else _load_table(
+                store,
+                logical,
+                errors,
+                release_entries,
+                access_hook=access_hook,
+            )
+        )
         for logical in release_logicals()[:6]
     }
     json_values: dict[str, Any] = {}
@@ -185,7 +206,16 @@ def _validate_release_data(store: Path, assets_dir: Path) -> ValidationResult:
         json_values.get("event_item_shop_id_map"),
         errors,
     )
-    _validate_pngs(store, assets_dir, errors, release_entries)
+    if access_hook is None:
+        _validate_pngs(store, assets_dir, errors, release_entries)
+    else:
+        _validate_pngs(
+            store,
+            assets_dir,
+            errors,
+            release_entries,
+            access_hook=access_hook,
+        )
 
     expected_logicals = release_logicals()
     actual_logicals = [entry.logical for entry in release_entries]
@@ -208,16 +238,34 @@ def _validate_release_data(store: Path, assets_dir: Path) -> ValidationResult:
     )
 
 
-def validate_release_data_only(store: Path, assets_dir: Path) -> RogueDataReport:
+def validate_release_data_only(
+    store: Path,
+    assets_dir: Path,
+    *,
+    access_hook: Callable[[str], None] | None = None,
+) -> RogueDataReport:
     """Run the strict offline-only data gate without APK tooling.
 
     The historical ``validate_release`` scope remains table/icon/shop plus its
     client report.  This offline API layers the exact 1..15/99 client/server
     round mapping on top of those unchanged predicates.
     """
-    result = _validate_release_data(store, assets_dir)
+    result = (
+        _validate_release_data(store, assets_dir)
+        if access_hook is None
+        else _validate_release_data(store, assets_dir, access_hook=access_hook)
+    )
     errors = list(result.errors)
-    round_count = _validate_offline_rounds(Path(store), Path(assets_dir), errors)
+    round_count = (
+        _validate_offline_rounds(Path(store), Path(assets_dir), errors)
+        if access_hook is None
+        else _validate_offline_rounds(
+            Path(store),
+            Path(assets_dir),
+            errors,
+            access_hook=access_hook,
+        )
+    )
     if errors:
         raise RogueValidationError(
             "rogue release data validation failed: " + "; ".join(errors)
@@ -251,11 +299,19 @@ def _parse_quest_node_strict(raw: bytes, label: str) -> object:
         raise ValueError(f"unreadable quest-map leaf in {label}") from exc
 
 
-def _validate_offline_rounds(store: Path, assets_dir: Path, errors: list[str]) -> int:
+def _validate_offline_rounds(
+    store: Path,
+    assets_dir: Path,
+    errors: list[str],
+    *,
+    access_hook: Callable[[str], None] | None = None,
+) -> int:
     """Validate the 15 normal rounds in both client and server representations."""
     path = store / q.hashed_rel(rogue_build.Q_QUEST)
     rounds: list[int] = []
     try:
+        if access_hook is not None:
+            access_hook(rogue_build.Q_QUEST)
         client = _parse_quest_node_strict(path.read_bytes(), rogue_build.Q_QUEST)
         event = client.get(rewards.EVENT_ID) if isinstance(client, dict) else None
         if not isinstance(event, dict):
@@ -427,8 +483,12 @@ def _load_table(
     logical: str,
     errors: list[str],
     release_entries: list[ReleaseEntry],
+    *,
+    access_hook: Callable[[str], None] | None = None,
 ) -> dict[str, object] | None:
     path = store / q.hashed_rel(logical)
+    if access_hook is not None:
+        access_hook(logical)
     if not path.is_file():
         errors.append(f"table.{logical}.missing: {path}")
         return None
@@ -962,6 +1022,8 @@ def _validate_pngs(
     assets_dir: Path,
     errors: list[str],
     release_entries: list[ReleaseEntry],
+    *,
+    access_hook: Callable[[str], None] | None = None,
 ) -> None:
     source_dir = assets_dir.parent / "mod-tools" / "assets" / "abyss-equipment"
     try:
@@ -975,6 +1037,8 @@ def _validate_pngs(
         logical = f"{rewards.IMAGE_PREFIX}/{spec.image_slug}.png"
         source = source_dir / f"{spec.image_slug}.png"
         destination = store / q.hashed_rel(logical)
+        if access_hook is not None:
+            access_hook(logical)
         if not destination.is_file():
             errors.append(f"png.store[{logical}].missing: {destination}")
             continue

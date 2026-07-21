@@ -114,7 +114,20 @@ class OfflineBundleTests(unittest.TestCase):
                     "source": "generated-marker",
                 },
             ]
+        source_checkpoint = {
+            "source_apk_sha256": "10" * 32,
+            "store_tree_sha256": "11" * 32,
+            "source_apk_size": 123456,
+            "store_total_bytes": sum(map(len, self.entry_payloads.values())),
+            "store_counts": {"common": 113822, "medium": 23458, "android": 1009},
+        }
         return {
+            "source_fingerprint": {
+                "before": dict(source_checkpoint),
+                "scan": dict(source_checkpoint),
+                "after": dict(source_checkpoint),
+                "unchanged": True,
+            },
             "source_apk": {
                 "basename": "base.apk.1",
                 "size": 123456,
@@ -217,12 +230,14 @@ class OfflineBundleTests(unittest.TestCase):
                 sha256(self.apk.read_bytes()),
                 sha256(self.data_zip.read_bytes()),
                 sha256(self.guide),
+                sha256(module.canonical_json_bytes(self.evidence())),
             )
         return {
             "schema_version": 1,
             "build_id": identity.build_id,
             "apk_sha256": identity.apk_sha256,
             "data_zip_sha256": identity.data_zip_sha256,
+            "evidence_sha256": identity.evidence_sha256,
             "serial_digest": "70" * 32,
             "probe": {
                 "serial_digest": "70" * 32,
@@ -297,7 +312,12 @@ class OfflineBundleTests(unittest.TestCase):
             "WorldFlipper-离线整合版.apk",
             "所有文件访问权限",
             "直接解压到 /storage/emulated/0/",
-            "/storage/emulated/0/WorldFlipper/dummy/download/production/",
+            "/storage/emulated/0/WorldFlipper/dummy/download/production/upload/",
+            "/storage/emulated/0/WorldFlipper/dummy/download/production/medium_upload/",
+            "/storage/emulated/0/WorldFlipper/dummy/download/production/android_upload/",
+            "/storage/emulated/0/WorldFlipper/dummy/info.json",
+            "/storage/emulated/0/WorldFlipper/dummy/download/.empty",
+            "禁止把 medium_upload 或 android_upload 扁平合并进 upload",
             "不能放在 Download 下",
             "不能多套一层 WorldFlipper",
             "飞行模式",
@@ -309,12 +329,36 @@ class OfflineBundleTests(unittest.TestCase):
         self.assertTrue(self.guide.endswith(b"\n"))
         self.assertNotIn(b"\r", self.guide)
 
+    def test_import_guide_rejects_each_missing_three_root_marker_or_no_flatten_instruction(self) -> None:
+        required = (
+            "/storage/emulated/0/WorldFlipper/dummy/download/production/upload/",
+            "/storage/emulated/0/WorldFlipper/dummy/download/production/medium_upload/",
+            "/storage/emulated/0/WorldFlipper/dummy/download/production/android_upload/",
+            "/storage/emulated/0/WorldFlipper/dummy/info.json",
+            "/storage/emulated/0/WorldFlipper/dummy/download/.empty",
+            "禁止把 medium_upload 或 android_upload 扁平合并进 upload",
+        )
+        original = module.TEMPLATE_PATH.read_text("utf-8")
+        for index, token in enumerate(required):
+            with self.subTest(token=token):
+                template = self.root / f"missing-guide-token-{index}.txt"
+                template.write_text(original.replace(token, "<missing>", 1), encoding="utf-8", newline="\n")
+                with (
+                    mock.patch.object(module, "TEMPLATE_PATH", template),
+                    self.assertRaisesRegex(module.BundleError, "required operator instruction"),
+                ):
+                    module.render_import_guide()
+
     def test_freeze_candidate_is_exclusive_and_records_hash_bound_identity(self) -> None:
         identity = self.freeze_fixture()
         self.assertEqual(identity.build_id, self.build_id)
         self.assertEqual(identity.apk_sha256, sha256(self.apk.read_bytes()))
         self.assertEqual(identity.data_zip_sha256, sha256(self.data_zip.read_bytes()))
         self.assertEqual(identity.guide_sha256, sha256(self.guide))
+        self.assertEqual(
+            identity.evidence_sha256,
+            sha256(module.canonical_json_bytes(self.evidence())),
+        )
         self.assertEqual(
             set(path.name for path in self.candidate.iterdir()),
             {
@@ -338,6 +382,173 @@ class OfflineBundleTests(unittest.TestCase):
                 release_evidence=self.evidence(),
             )
 
+    def test_verify_candidate_publicly_rehashes_identity_and_returns_detached_evidence(self) -> None:
+        self.assertIn("verify_candidate", module.__all__)
+        identity = self.freeze_fixture()
+        with (
+            mock.patch.object(module, "PRODUCTION_ENTRY_COUNT", 5),
+            mock.patch.object(
+                module,
+                "PRODUCTION_ROOT_COUNTS",
+                {"common": 1, "medium": 1, "android": 1},
+            ),
+        ):
+            verified, evidence = module.verify_candidate(self.candidate)
+
+        self.assertEqual(verified, identity)
+        self.assertEqual(evidence, self.evidence())
+        evidence["git"]["dirty"] = False
+        with (
+            mock.patch.object(module, "PRODUCTION_ENTRY_COUNT", 5),
+            mock.patch.object(
+                module,
+                "PRODUCTION_ROOT_COUNTS",
+                {"common": 1, "medium": 1, "android": 1},
+            ),
+        ):
+            _verified_again, evidence_again = module.verify_candidate(self.candidate)
+        self.assertTrue(evidence_again["git"]["dirty"])
+
+    def test_verify_candidate_rejects_tampered_artifact(self) -> None:
+        self.freeze_fixture()
+        (self.candidate / module.APK_NAME).write_bytes(b"tampered")
+        with (
+            mock.patch.object(module, "PRODUCTION_ENTRY_COUNT", 5),
+            mock.patch.object(
+                module,
+                "PRODUCTION_ROOT_COUNTS",
+                {"common": 1, "medium": 1, "android": 1},
+            ),
+            self.assertRaisesRegex(module.BundleError, "hash|identity|changed"),
+        ):
+            module.verify_candidate(self.candidate)
+
+    def test_verify_candidate_rejects_data_zip_member_corruption_even_when_outer_hash_is_rebound(self) -> None:
+        self.freeze_fixture()
+        corrupt_payloads = dict(self.entry_payloads)
+        common = next(name for name in corrupt_payloads if "/upload/" in name)
+        corrupt_payloads[common] = b"COMMON"
+        frozen_zip = self.candidate / module.DATA_ZIP_NAME
+        frozen_zip.unlink()
+        write_zip(frozen_zip, corrupt_payloads)
+        rebound_hash = sha256(frozen_zip.read_bytes())
+
+        evidence_path = self.candidate / module.CANDIDATE_EVIDENCE_NAME
+        document = json.loads(evidence_path.read_text("utf-8"))
+        document["identity"]["data_zip_sha256"] = rebound_hash
+        document["artifact_sizes"]["data_zip"] = frozen_zip.stat().st_size
+        document["release_evidence"]["data"]["archive_sha256"] = rebound_hash
+        document["identity"]["evidence_sha256"] = sha256(
+            module.canonical_json_bytes(document["release_evidence"])
+        )
+        evidence_path.write_bytes(module.canonical_json_bytes(document))
+
+        with (
+            mock.patch.object(module, "PRODUCTION_ENTRY_COUNT", 5),
+            mock.patch.object(
+                module,
+                "PRODUCTION_ROOT_COUNTS",
+                {"common": 1, "medium": 1, "android": 1},
+            ),
+            self.assertRaisesRegex(module.BundleError, "data ZIP payload mismatch"),
+        ):
+            module.verify_candidate(self.candidate)
+
+    def test_verify_candidate_binds_zip_member_check_to_the_same_outer_archive_hash(self) -> None:
+        identity = self.freeze_fixture()
+        frozen_zip = self.candidate / module.DATA_ZIP_NAME
+        original_size = frozen_zip.stat().st_size
+        replacement = self.root / "same-members-different-container.zip"
+        with zipfile.ZipFile(replacement, "x", compression=zipfile.ZIP_STORED) as archive:
+            for name, payload in self.entry_payloads.items():
+                archive.writestr(name, payload)
+            archive.comment = b"different-container-metadata"
+        os.replace(replacement, frozen_zip)
+        self.assertNotEqual(sha256(frozen_zip.read_bytes()), identity.data_zip_sha256)
+
+        original_hash_regular = module._hash_regular
+
+        def stale_outer_observation(path: Path, *, label: str):
+            if Path(path) == frozen_zip and label == "frozen data ZIP":
+                return original_size, identity.data_zip_sha256
+            return original_hash_regular(path, label=label)
+
+        with (
+            mock.patch.object(module, "PRODUCTION_ENTRY_COUNT", 5),
+            mock.patch.object(
+                module,
+                "PRODUCTION_ROOT_COUNTS",
+                {"common": 1, "medium": 1, "android": 1},
+            ),
+            mock.patch.object(module, "_hash_regular", side_effect=stale_outer_observation),
+            self.assertRaisesRegex(module.BundleError, "data ZIP.*hash|hash.*data ZIP"),
+        ):
+            module.verify_candidate(self.candidate)
+
+    def test_candidate_evidence_digest_rejects_valid_schema_claim_mutation_and_receipt_reuse(self) -> None:
+        identity = self.freeze_fixture()
+        receipt = self.write_receipt(identity)
+        evidence_path = self.candidate / module.CANDIDATE_EVIDENCE_NAME
+        document = json.loads(evidence_path.read_text("utf-8"))
+        document["release_evidence"]["git"]["dirty"] = False
+        evidence_path.write_bytes(module.canonical_json_bytes(document))
+
+        with (
+            mock.patch.object(module, "PRODUCTION_ENTRY_COUNT", 5),
+            mock.patch.object(
+                module,
+                "PRODUCTION_ROOT_COUNTS",
+                {"common": 1, "medium": 1, "android": 1},
+            ),
+            self.assertRaisesRegex(module.BundleError, "evidence.*hash|digest"),
+        ):
+            module.verify_candidate(self.candidate)
+
+        document["identity"]["evidence_sha256"] = sha256(
+            module.canonical_json_bytes(document["release_evidence"])
+        )
+        evidence_path.write_bytes(module.canonical_json_bytes(document))
+        with (
+            mock.patch.object(module, "PRODUCTION_ENTRY_COUNT", 5),
+            mock.patch.object(
+                module,
+                "PRODUCTION_ROOT_COUNTS",
+                {"common": 1, "medium": 1, "android": 1},
+            ),
+        ):
+            rebound_identity, _rebound_evidence = module.verify_candidate(self.candidate)
+        self.assertNotEqual(rebound_identity.evidence_sha256, identity.evidence_sha256)
+        with (
+            mock.patch.object(module, "PRODUCTION_ENTRY_COUNT", 5),
+            mock.patch.object(
+                module,
+                "PRODUCTION_ROOT_COUNTS",
+                {"common": 1, "medium": 1, "android": 1},
+            ),
+            self.assertRaisesRegex(module.BundleError, "receipt evidence_sha256 mismatch"),
+        ):
+            module.finalize_candidate(self.candidate, receipt, self.final_dir)
+        self.assertFalse(self.final_dir.exists())
+
+    def test_verify_candidate_rejects_extra_file(self) -> None:
+        self.freeze_fixture()
+        (self.candidate / "extra.txt").write_text("unexpected", encoding="utf-8")
+        with self.assertRaisesRegex(module.BundleError, "exact frozen candidate files"):
+            module.verify_candidate(self.candidate)
+
+    def test_verify_candidate_rejects_reparse_member(self) -> None:
+        self.freeze_fixture()
+        original = module._is_reparse
+
+        def simulated_reparse(metadata):
+            return metadata.st_size == len(self.guide) or original(metadata)
+
+        with (
+            mock.patch.object(module, "_is_reparse", side_effect=simulated_reparse),
+            self.assertRaisesRegex(module.BundleError, "reparse|non-regular"),
+        ):
+            module.verify_candidate(self.candidate)
+
     def test_finalize_creates_exactly_five_files_and_four_checksum_lines(self) -> None:
         identity, final = self.finalize_fixture()
         self.assertEqual(tuple(sorted(path.name for path in final.iterdir())), tuple(sorted(module.FINAL_FILES)))
@@ -354,7 +565,12 @@ class OfflineBundleTests(unittest.TestCase):
         self.assertTrue(manifest["content"]["ready"])
         self.assertEqual(manifest["player"]["added_character_ids"], ["129999", "139999", "149999"])
         self.assertTrue(manifest["apk"]["verified"])
+        self.assertEqual(manifest["evidence_sha256"], identity.evidence_sha256)
         self.assertTrue(manifest["device_acceptance"]["accepted"])
+        self.assertEqual(
+            manifest["device_acceptance"]["evidence_sha256"],
+            identity.evidence_sha256,
+        )
 
     def test_manifest_keeps_three_versions_roots_and_every_entry(self) -> None:
         evidence = self.evidence(entry_count=module.PRODUCTION_ENTRY_COUNT)
@@ -387,6 +603,57 @@ class OfflineBundleTests(unittest.TestCase):
             },
         )
         self.assertEqual(set(validated["data"]["roots"]), {"common", "medium", "android"})
+        self.assertEqual(
+            set(validated["source_fingerprint"]),
+            {"before", "scan", "after", "unchanged"},
+        )
+
+    def test_source_fingerprint_requires_exact_three_equal_checkpoints_and_production_counts(self) -> None:
+        patch_contract = (
+            mock.patch.object(module, "PRODUCTION_ENTRY_COUNT", 5),
+            mock.patch.object(
+                module,
+                "PRODUCTION_ROOT_COUNTS",
+                {"common": 1, "medium": 1, "android": 1},
+            ),
+        )
+        valid = self.evidence()
+        with patch_contract[0], patch_contract[1]:
+            validated = module.validate_release_evidence(valid)
+        self.assertTrue(validated["source_fingerprint"]["unchanged"])
+
+        cases: list[tuple[str, dict[str, object], str]] = []
+        missing_checkpoint = self.evidence()
+        missing_checkpoint["source_fingerprint"].pop("scan")
+        cases.append(("missing scan", missing_checkpoint, "source_fingerprint schema"))
+        extra_checkpoint_field = self.evidence()
+        extra_checkpoint_field["source_fingerprint"]["before"]["unexpected"] = True
+        cases.append(("checkpoint extra field", extra_checkpoint_field, "checkpoint schema"))
+        drifted_hash = self.evidence()
+        drifted_hash["source_fingerprint"]["after"]["store_tree_sha256"] = "ff" * 32
+        cases.append(("hash drift", drifted_hash, "fingerprint.*changed"))
+        drifted_size = self.evidence()
+        drifted_size["source_fingerprint"]["scan"]["store_total_bytes"] += 1
+        cases.append(("size drift", drifted_size, "fingerprint.*changed"))
+        bad_counts = self.evidence()
+        bad_counts["source_fingerprint"]["before"]["store_counts"]["common"] = 2
+        cases.append(("count mismatch", bad_counts, "store_counts"))
+        false_unchanged = self.evidence()
+        false_unchanged["source_fingerprint"]["unchanged"] = False
+        cases.append(("unchanged false", false_unchanged, "unchanged"))
+
+        for name, evidence, message in cases:
+            with self.subTest(name=name):
+                with (
+                    mock.patch.object(module, "PRODUCTION_ENTRY_COUNT", 5),
+                    mock.patch.object(
+                        module,
+                        "PRODUCTION_ROOT_COUNTS",
+                        {"common": 1, "medium": 1, "android": 1},
+                    ),
+                    self.assertRaisesRegex(module.BundleError, message),
+                ):
+                    module.validate_release_evidence(evidence)
 
     def test_release_evidence_accepts_the_real_task11_report_contract(self) -> None:
         task11 = load_task11_module()
@@ -438,6 +705,15 @@ class OfflineBundleTests(unittest.TestCase):
             self.assertRaisesRegex(module.BundleError, "self hash"),
         ):
             module.validate_release_evidence(unsafe)
+
+        unknown = self.evidence()
+        unknown["unexpected_evidence"] = True
+        with (
+            mock.patch.object(module, "PRODUCTION_ENTRY_COUNT", 5),
+            mock.patch.object(module, "PRODUCTION_ROOT_COUNTS", {"common": 1, "medium": 1, "android": 1}),
+            self.assertRaisesRegex(module.BundleError, "unknown.*fields|schema"),
+        ):
+            module.validate_release_evidence(unknown)
 
     def test_manifest_binds_root_and_total_entry_bytes(self) -> None:
         unsafe = self.evidence()
@@ -656,6 +932,7 @@ class OfflineBundleTests(unittest.TestCase):
             sha256(self.apk.read_bytes()),
             sha256(self.data_zip.read_bytes()),
             sha256(self.guide),
+            sha256(module.canonical_json_bytes(self.evidence())),
         )
         receipt = self.receipt(identity)
         receipt["accepted_at_utc"] = "2026-07-21T00:00:00+00:00"
@@ -914,11 +1191,29 @@ class OfflineBundleTests(unittest.TestCase):
         with self.assertRaisesRegex(module.BundleError, "canonical|checksum"):
             module.verify_final_bundle(final)
 
+    def test_verify_final_bundle_rejects_valid_schema_evidence_tamper_with_rebuilt_checksums(self) -> None:
+        _, final = self.finalize_fixture()
+        manifest_path = final / module.MANIFEST_NAME
+        manifest = json.loads(manifest_path.read_text("utf-8"))
+        manifest["git"]["dirty"] = False
+        manifest_path.write_bytes(module.canonical_json_bytes(manifest))
+        (final / module.SHA256SUMS_NAME).write_bytes(module.build_sha256sums(final))
+        with (
+            mock.patch.object(module, "PRODUCTION_ENTRY_COUNT", 5),
+            mock.patch.object(
+                module,
+                "PRODUCTION_ROOT_COUNTS",
+                {"common": 1, "medium": 1, "android": 1},
+            ),
+            self.assertRaisesRegex(module.BundleError, "release evidence hash mismatch"),
+        ):
+            module.verify_final_bundle(final)
+
     def test_verify_final_bundle_reports_missing_manifest_evidence_as_bundle_error(self) -> None:
         _, final = self.finalize_fixture()
         manifest_path = final / module.MANIFEST_NAME
         manifest = json.loads(manifest_path.read_text("utf-8"))
-        manifest.pop("source_apk")
+        manifest.pop("source_fingerprint")
         manifest_path.write_bytes(module.canonical_json_bytes(manifest))
         (final / module.SHA256SUMS_NAME).write_bytes(module.build_sha256sums(final))
         with (

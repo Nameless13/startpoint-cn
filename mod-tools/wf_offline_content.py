@@ -13,7 +13,7 @@ import os
 import stat
 import tempfile
 import zlib
-from collections.abc import Collection, Mapping
+from collections.abc import Callable, Collection, Mapping
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any, Literal
@@ -229,9 +229,22 @@ class ContentGateError(RuntimeError):
     pass
 
 
-def validate_rogue_data(store: Path, assets_dir: Path) -> RogueDataReport:
+def validate_rogue_data(
+    store: Path,
+    assets_dir: Path,
+    *,
+    access_hook: Callable[[str], None] | None = None,
+) -> RogueDataReport:
     """Local seam keeps the offline gate pure and easy to audit/test."""
-    report = validate_release_data_only(store, assets_dir)
+    report = (
+        validate_release_data_only(store, assets_dir)
+        if access_hook is None
+        else validate_release_data_only(
+            store,
+            assets_dir,
+            access_hook=access_hook,
+        )
+    )
     if report.event_id != 700099 or report.round_count != 15:
         raise RogueValidationError("rush event 700099 must have exactly 15 rounds")
     if report.token_id != 2370099 or report.weapon_ids != tuple(range(8000101, 8000116)):
@@ -461,6 +474,8 @@ class _SnapshotEvidence:
     """
 
     snapshot: StoreRoots
+    access_guard: Callable[[str, str], None] | None = None
+    root_inventory: Mapping[str, Collection[str]] | None = None
     captures: dict[tuple[str, str], tuple[ManifestEntry, bytes]] = field(default_factory=dict)
     capture_signatures: dict[tuple[str, str], tuple[int, ...]] = field(default_factory=dict)
     owners: dict[str, tuple[str, ...]] = field(default_factory=dict)
@@ -493,6 +508,14 @@ class _SnapshotEvidence:
         found: list[str] = []
         for root_name in _ROOTS:
             path = Path(getattr(self.snapshot, root_name)) / hashed_rel(logical)
+            if self.root_inventory is not None:
+                if set(self.root_inventory) != set(_ROOTS):
+                    raise ContentGateError("snapshot root inventory schema is invalid")
+                relative = str(hashed_rel(logical)).replace("\\", "/")
+                if relative not in self.root_inventory[root_name]:
+                    continue
+                if self.access_guard is not None:
+                    self.access_guard(root_name, logical)
             try:
                 metadata = path.lstat()
             except FileNotFoundError:
@@ -504,6 +527,8 @@ class _SnapshotEvidence:
                 raise ContentGateError(f"reparse/symlink logical is forbidden: {root_name}:{logical}")
             if not stat.S_ISREG(metadata.st_mode):
                 raise ContentGateError(f"logical is not a regular file: {root_name}:{logical}")
+            if self.access_guard is not None and self.root_inventory is None:
+                self.access_guard(root_name, logical)
             found.append(root_name)
         result = tuple(found)
         previous = self.owners.get(logical)
@@ -2646,9 +2671,14 @@ def assert_player_has_no_rogue_weapons(players: Mapping[str, Any]) -> None:
         raise ContentGateError(f"Player 1000 must not hold rogue weapons: {sorted(forbidden)}")
 
 
-def verify_player_1000_snapshot(snapshot: StoreRoots) -> None:
+def verify_player_1000_snapshot(
+    snapshot: StoreRoots,
+    *,
+    _evidence: _SnapshotEvidence | None = None,
+) -> None:
     """Check Task 4's byte-level overlay stayed character-only and level-one."""
-    entry, raw = _resolve_and_read_logical(snapshot, PLAYER_CHARACTER_LOGICAL)
+    evidence = _evidence or _SnapshotEvidence(snapshot)
+    entry, raw = evidence.resolve(PLAYER_CHARACTER_LOGICAL)
     if entry.source != "snapshot:common":
         raise ContentGateError("Player 1000 character record must be in common root")
     try:
@@ -2672,13 +2702,30 @@ def verify_player_1000_snapshot(snapshot: StoreRoots) -> None:
         raise ContentGateError(f"Player 1000 character possession mapping is not the exact release overlay: {values!r}")
 
 
-def verify_player_1000_equipment_snapshot(snapshot: StoreRoots) -> None:
+def verify_player_1000_equipment_snapshot(
+    snapshot: StoreRoots,
+    *,
+    _evidence: _SnapshotEvidence | None = None,
+) -> None:
     """The CN schema has no equipment table; item possession is the evidence table."""
+    evidence = _evidence or _SnapshotEvidence(snapshot)
     present_roots: list[str] = []
+    equipment_relative = str(hashed_rel(PLAYER_EQUIPMENT_LOGICAL)).replace("\\", "/")
     for root_name in _ROOTS:
         path = Path(getattr(snapshot, root_name)) / hashed_rel(PLAYER_EQUIPMENT_LOGICAL)
+        if evidence.root_inventory is not None:
+            if set(evidence.root_inventory) != set(_ROOTS):
+                raise ContentGateError("snapshot root inventory schema is invalid")
+            if equipment_relative not in evidence.root_inventory[root_name]:
+                continue
+            if evidence.access_guard is not None:
+                evidence.access_guard(root_name, PLAYER_EQUIPMENT_LOGICAL)
+            present_roots.append(root_name)
+            continue
         try:
             path.lstat()
+            if evidence.access_guard is not None:
+                evidence.access_guard(root_name, PLAYER_EQUIPMENT_LOGICAL)
             present_roots.append(root_name)
         except FileNotFoundError:
             continue
@@ -2686,7 +2733,7 @@ def verify_player_1000_equipment_snapshot(snapshot: StoreRoots) -> None:
             raise ContentGateError(f"cannot inspect player equipment schema: {exc}") from exc
     if present_roots:
         raise ContentGateError(f"unexpected Player equipment schema drift: {sorted(present_roots)}")
-    entry, raw = _resolve_and_read_logical(snapshot, PLAYER_ITEM_LOGICAL)
+    entry, raw = evidence.resolve(PLAYER_ITEM_LOGICAL)
     if entry.source != "snapshot:common":
         raise ContentGateError("Player 1000 item possession record must be in common root")
     try:
@@ -2891,6 +2938,8 @@ def validate_offline_content(
     phase4_asset_logicals: Collection[str],
     assets_dir: Path,
     client_report: Path | None = None,
+    snapshot_access_guard: Callable[[str, str], None] | None = None,
+    snapshot_root_inventory: Mapping[str, Collection[str]] | None = None,
 ) -> OfflineContentReport:
     """Validate all offline-only release content without consulting live state."""
     if workspace_sources is None:
@@ -2921,10 +2970,33 @@ def validate_offline_content(
                 raise ContentGateError(
                     f"workspace source path is invalid for {code_name}"
                 ) from exc
-    rogue = validate_rogue_data(staged_roots.common, assets_dir)
-    verify_player_1000_snapshot(staged_roots)
-    verify_player_1000_equipment_snapshot(staged_roots)
-    snapshot_evidence = _SnapshotEvidence(staged_roots)
+    if (snapshot_access_guard is None) != (snapshot_root_inventory is None):
+        raise ContentGateError(
+            "snapshot access guard and immutable root inventory must be supplied together"
+        )
+    snapshot_evidence = _SnapshotEvidence(
+        staged_roots,
+        access_guard=snapshot_access_guard,
+        root_inventory=snapshot_root_inventory,
+    )
+    rogue = (
+        validate_rogue_data(staged_roots.common, assets_dir)
+        if snapshot_access_guard is None
+        else validate_rogue_data(
+            staged_roots.common,
+            assets_dir,
+            access_hook=lambda logical: snapshot_access_guard("common", logical),
+        )
+    )
+    if snapshot_access_guard is None:
+        verify_player_1000_snapshot(staged_roots)
+        verify_player_1000_equipment_snapshot(staged_roots)
+    else:
+        verify_player_1000_snapshot(staged_roots, _evidence=snapshot_evidence)
+        verify_player_1000_equipment_snapshot(
+            staged_roots,
+            _evidence=snapshot_evidence,
+        )
     current_server = _load_current_server_assets(assets_dir)
     evidence: list[CharacterEvidenceReport] = []
     for spec in CHARACTERS:

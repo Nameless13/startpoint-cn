@@ -7,6 +7,7 @@ into their (possibly non-ASCII) destinations, without replacing existing data.
 """
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import hmac
 import importlib.util
@@ -928,6 +929,7 @@ def verify_signed_apk(
     final_stage_swf: Path,
     *,
     runner: Runner,
+    file_guard: Callable[[Path], Any] | None = None,
 ) -> tuple[
     Mapping[str, Any], tuple[Mapping[str, Any], ...], str
 ]:
@@ -940,23 +942,27 @@ def verify_signed_apk(
     if not _same_digest(_sha256_file(signed_apk), verified_signed_sha256):
         raise ApkBuildError("signed APK changed after verification")
     final_swf = _extract_exactly_one_swf(signed_apk, transaction / "signed-final.swf")
-    if not _same_digest(_sha256_file(final_swf), _sha256_file(final_stage_swf)):
-        raise ApkBuildError("signed APK SWF differs from the final patch stage")
-    stage_runner = _CheckedStageRunner(runner, config.signing)
-    args = _ffdec_args(config, transaction / "final-verify", stage_runner)
-    abyss_report = verify_abyss_gate(final_swf, **args)
-    seris_report = SERIS.verify_seris_phase4(
-        final_swf, lock, timeout=STAGE_TIMEOUT_SECONDS, **args
-    )
-    render_report = RENDER.verify_render_scale(
-        final_swf, lock, timeout=STAGE_TIMEOUT_SECONDS, **args
-    )
-    resource_report = RESOURCE.verify_resource_version(
-        final_swf, lock, timeout=STAGE_TIMEOUT_SECONDS, **args
-    )
-    _require_final_patch_invariants(
-        abyss_report, seris_report, render_report, resource_report, lock
-    )
+    guard = file_guard(final_swf) if file_guard is not None else contextlib.nullcontext()
+    with guard:
+        if not _same_digest(_sha256_file(final_swf), _sha256_file(final_stage_swf)):
+            raise ApkBuildError("signed APK SWF differs from the final patch stage")
+        stage_runner = _CheckedStageRunner(runner, config.signing)
+        args = _ffdec_args(config, transaction / "final-verify", stage_runner)
+        abyss_report = verify_abyss_gate(final_swf, **args)
+        seris_report = SERIS.verify_seris_phase4(
+            final_swf, lock, timeout=STAGE_TIMEOUT_SECONDS, **args
+        )
+        render_report = RENDER.verify_render_scale(
+            final_swf, lock, timeout=STAGE_TIMEOUT_SECONDS, **args
+        )
+        resource_report = RESOURCE.verify_resource_version(
+            final_swf, lock, timeout=STAGE_TIMEOUT_SECONDS, **args
+        )
+        _require_final_patch_invariants(
+            abyss_report, seris_report, render_report, resource_report, lock
+        )
+        if not _same_digest(_sha256_file(final_swf), _sha256_file(final_stage_swf)):
+            raise ApkBuildError("verified SWF changed during patch-gate replay")
     if not _same_digest(_sha256_file(signed_apk), verified_signed_sha256):
         raise ApkBuildError("signed APK changed after verification")
     replay = _ReplayApksignerVerifyRunner(runner, verified_process)

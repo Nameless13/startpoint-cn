@@ -61,6 +61,63 @@ class OfflineContentTests(unittest.TestCase):
         path.write_bytes(data)
         return path
 
+    def test_snapshot_access_guard_fails_before_an_unlocked_logical_is_read(self) -> None:
+        accessed: list[tuple[str, str]] = []
+
+        def reject(root_name: str, logical: str) -> None:
+            accessed.append((root_name, logical))
+            raise self.module.ContentGateError("unlocked logical")
+
+        evidence = self.module._SnapshotEvidence(
+            self.roots,
+            access_guard=reject,
+        )
+        with self.assertRaisesRegex(self.module.ContentGateError, "unlocked logical"):
+            evidence.resolve(self.module.CHARACTER_MASTER_LOGICAL)
+        self.assertEqual(
+            accessed,
+            [("common", self.module.CHARACTER_MASTER_LOGICAL)],
+        )
+
+    def test_immutable_inventory_exposes_unmaterialized_wrong_root_and_equipment(self) -> None:
+        character_relative = str(
+            self.module.hashed_rel(self.module.CHARACTER_MASTER_LOGICAL)
+        ).replace("\\", "/")
+        equipment_relative = str(
+            self.module.hashed_rel(self.module.PLAYER_EQUIPMENT_LOGICAL)
+        ).replace("\\", "/")
+        inventory = {
+            "common": {character_relative, equipment_relative},
+            "medium": {character_relative},
+            "android": set(),
+        }
+
+        def allow_only_locked_common(root_name: str, logical: str) -> None:
+            if (root_name, logical) != (
+                "common",
+                self.module.CHARACTER_MASTER_LOGICAL,
+            ):
+                raise self.module.ContentGateError("unlocked inventory logical")
+
+        evidence = self.module._SnapshotEvidence(
+            self.roots,
+            access_guard=allow_only_locked_common,
+            root_inventory=inventory,
+        )
+        with self.assertRaisesRegex(
+            self.module.ContentGateError,
+            "unlocked inventory logical",
+        ):
+            evidence.resolve(self.module.CHARACTER_MASTER_LOGICAL)
+        with self.assertRaisesRegex(
+            self.module.ContentGateError,
+            "unlocked inventory logical",
+        ):
+            self.module.verify_player_1000_equipment_snapshot(
+                self.roots,
+                _evidence=evidence,
+            )
+
     def valid_client_report(self, *, verified: bool = True) -> dict[str, object]:
         hashes = iter(char * 64 for char in "cdef0")
         swf0, swf1, swf2, swf3, swf4 = tuple(hashes)

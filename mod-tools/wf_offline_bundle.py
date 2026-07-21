@@ -46,6 +46,7 @@ PRODUCTION_ROOT_COUNTS: Mapping[str, int] = {
     "medium": 23_458,
     "android": 1_009,
 }
+_SOURCE_FINGERPRINT_STORE_COUNTS: Mapping[str, int] = dict(PRODUCTION_ROOT_COUNTS)
 ROOT_PREFIXES: Mapping[str, str] = {
     "common": "WorldFlipper/dummy/download/production/upload/",
     "medium": "WorldFlipper/dummy/download/production/medium_upload/",
@@ -142,6 +143,7 @@ class CandidateIdentity:
     apk_sha256: str
     data_zip_sha256: str
     guide_sha256: str
+    evidence_sha256: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -318,6 +320,74 @@ def _entry_root(path: str) -> str | None:
     return None
 
 
+def _validate_source_fingerprint(value: Any) -> dict[str, Any]:
+    fingerprint = _require_mapping(value, "source_fingerprint")
+    checkpoint_names = ("before", "scan", "after")
+    if set(fingerprint) != {*checkpoint_names, "unchanged"}:
+        raise BundleError("source_fingerprint schema must be exactly before, scan, after and unchanged")
+    if fingerprint.get("unchanged") is not True:
+        raise BundleError("source_fingerprint.unchanged must be true")
+
+    checkpoint_fields = {
+        "source_apk_sha256",
+        "store_tree_sha256",
+        "source_apk_size",
+        "store_total_bytes",
+        "store_counts",
+    }
+    checkpoints: dict[str, dict[str, Any]] = {}
+    for name in checkpoint_names:
+        checkpoint = _require_mapping(fingerprint.get(name), f"source_fingerprint.{name}")
+        if set(checkpoint) != checkpoint_fields:
+            raise BundleError(f"source_fingerprint.{name} checkpoint schema is invalid")
+        source_hash = _require_hash(
+            checkpoint.get("source_apk_sha256"),
+            f"source_fingerprint.{name}.source_apk_sha256",
+        )
+        store_hash = _require_hash(
+            checkpoint.get("store_tree_sha256"),
+            f"source_fingerprint.{name}.store_tree_sha256",
+        )
+        source_size = checkpoint.get("source_apk_size")
+        store_bytes = checkpoint.get("store_total_bytes")
+        if type(source_size) is not int or source_size < 0:
+            raise BundleError(f"source_fingerprint.{name}.source_apk_size must be nonnegative")
+        if type(store_bytes) is not int or store_bytes < 0:
+            raise BundleError(f"source_fingerprint.{name}.store_total_bytes must be nonnegative")
+        store_counts = _require_mapping(
+            checkpoint.get("store_counts"),
+            f"source_fingerprint.{name}.store_counts",
+        )
+        if dict(store_counts) != dict(_SOURCE_FINGERPRINT_STORE_COUNTS):
+            raise BundleError(
+                f"source_fingerprint.{name}.store_counts must match the production three-root counts"
+            )
+        checkpoints[name] = {
+            "source_apk_sha256": source_hash,
+            "store_tree_sha256": store_hash,
+            "source_apk_size": source_size,
+            "store_total_bytes": store_bytes,
+            "store_counts": dict(store_counts),
+        }
+
+    baseline = checkpoints["before"]
+    for name in ("scan", "after"):
+        checkpoint = checkpoints[name]
+        hashes_equal = hmac.compare_digest(
+            checkpoint["source_apk_sha256"], baseline["source_apk_sha256"]
+        ) and hmac.compare_digest(
+            checkpoint["store_tree_sha256"], baseline["store_tree_sha256"]
+        )
+        metadata_equal = (
+            checkpoint["source_apk_size"] == baseline["source_apk_size"]
+            and checkpoint["store_total_bytes"] == baseline["store_total_bytes"]
+            and checkpoint["store_counts"] == baseline["store_counts"]
+        )
+        if not hashes_equal or not metadata_equal:
+            raise BundleError(f"source fingerprint changed between before and {name}")
+    return dict(fingerprint)
+
+
 def validate_release_evidence(
     release_evidence: Mapping[str, Any],
     *,
@@ -334,6 +404,7 @@ def validate_release_evidence(
     if _contains_forbidden_self_hash(value):
         raise BundleError("release evidence must not contain a manifest self hash")
     required = {
+        "source_fingerprint",
         "source_apk",
         "patches",
         "signer",
@@ -348,6 +419,11 @@ def validate_release_evidence(
     missing = sorted(required - set(value))
     if missing:
         raise BundleError(f"release evidence is missing fields: {', '.join(missing)}")
+    unknown = sorted(set(value) - required)
+    if unknown:
+        raise BundleError(f"release evidence has unknown fields: {', '.join(unknown)}")
+
+    source_fingerprint = _validate_source_fingerprint(value["source_fingerprint"])
 
     source_apk = _require_mapping(value["source_apk"], "source_apk")
     basename = source_apk.get("basename")
@@ -355,7 +431,16 @@ def validate_release_evidence(
         raise BundleError("source_apk.basename must be a basename only")
     if not isinstance(source_apk.get("size"), int) or int(source_apk["size"]) < 0:
         raise BundleError("source_apk.size must be nonnegative")
-    _require_hash(source_apk.get("sha256"), "source_apk.sha256")
+    source_apk_hash = _require_hash(source_apk.get("sha256"), "source_apk.sha256")
+    before_fingerprint = _require_mapping(source_fingerprint["before"], "source_fingerprint.before")
+    if (
+        not hmac.compare_digest(
+            source_apk_hash,
+            str(before_fingerprint["source_apk_sha256"]),
+        )
+        or source_apk["size"] != before_fingerprint["source_apk_size"]
+    ):
+        raise BundleError("source_apk evidence does not match the source fingerprint")
 
     patches = _require_mapping(value["patches"], "patches")
     _require_hash(patches.get("before_swf_sha256"), "patches.before_swf_sha256")
@@ -542,7 +627,12 @@ def render_import_guide(*, snapshot_version: str = SNAPSHOT_VERSION) -> bytes:
         APK_NAME,
         "所有文件访问权限",
         "直接解压到 /storage/emulated/0/",
-        "/storage/emulated/0/WorldFlipper/dummy/download/production/",
+        "/storage/emulated/0/WorldFlipper/dummy/download/production/upload/",
+        "/storage/emulated/0/WorldFlipper/dummy/download/production/medium_upload/",
+        "/storage/emulated/0/WorldFlipper/dummy/download/production/android_upload/",
+        "/storage/emulated/0/WorldFlipper/dummy/info.json",
+        "/storage/emulated/0/WorldFlipper/dummy/download/.empty",
+        "禁止把 medium_upload 或 android_upload 扁平合并进 upload",
         "不能放在 Download 下",
         "不能多套一层 WorldFlipper",
         "飞行模式",
@@ -1289,6 +1379,7 @@ def _identity_document(identity: CandidateIdentity) -> dict[str, str]:
         "apk_sha256": identity.apk_sha256,
         "data_zip_sha256": identity.data_zip_sha256,
         "guide_sha256": identity.guide_sha256,
+        "evidence_sha256": identity.evidence_sha256,
     }
 
 
@@ -1301,7 +1392,14 @@ def _candidate_identity(value: Mapping[str, Any]) -> CandidateIdentity:
         _require_hash(value.get("apk_sha256"), "candidate.apk_sha256"),
         _require_hash(value.get("data_zip_sha256"), "candidate.data_zip_sha256"),
         _require_hash(value.get("guide_sha256"), "candidate.guide_sha256"),
+        _require_hash(value.get("evidence_sha256"), "candidate.evidence_sha256"),
     )
+
+
+def _release_evidence_sha256(evidence: Mapping[str, Any]) -> str:
+    """Hash only the canonical release-evidence payload, avoiding self-reference."""
+
+    return _sha256_bytes(canonical_json_bytes(evidence))
 
 
 def freeze_candidate(
@@ -1333,7 +1431,13 @@ def freeze_candidate(
         raise BundleError("APK report hash does not match the candidate APK")
     if not hmac.compare_digest(str(evidence["data"]["archive_sha256"]), data_hash):
         raise BundleError("ZIP report hash does not match the candidate data ZIP")
-    identity = CandidateIdentity(build_id, apk_hash, data_hash, _sha256_bytes(guide_bytes))
+    identity = CandidateIdentity(
+        build_id,
+        apk_hash,
+        data_hash,
+        _sha256_bytes(guide_bytes),
+        _release_evidence_sha256(evidence),
+    )
     document = {
         "schema_version": 1,
         "identity": _identity_document(identity),
@@ -1431,12 +1535,19 @@ def _rehash_frozen_candidate(candidate_dir: Path) -> tuple[CandidateIdentity, di
         raise BundleError("candidate evidence schema mismatch")
     identity = _candidate_identity(_require_mapping(document.get("identity"), "candidate identity"))
     evidence = validate_release_evidence(_require_mapping(document.get("release_evidence"), "release evidence"))
+    if not hmac.compare_digest(identity.evidence_sha256, _release_evidence_sha256(evidence)):
+        raise BundleError("candidate release evidence hash mismatch")
     sizes = _require_mapping(document.get("artifact_sizes"), "candidate artifact_sizes")
     observed: dict[str, tuple[int, str]] = {
         "apk": _hash_regular(candidate / APK_NAME, label="frozen APK"),
-        "data_zip": _hash_regular(candidate / DATA_ZIP_NAME, label="frozen data ZIP"),
         "guide": _hash_regular(candidate / GUIDE_NAME, label="frozen guide"),
     }
+    observed["data_zip"] = _verify_data_archive(
+        candidate / DATA_ZIP_NAME,
+        evidence["data"]["entries"],
+        expected_archive_sha256=identity.data_zip_sha256,
+        label="candidate",
+    )
     expected = {
         "apk": (sizes.get("apk"), identity.apk_sha256),
         "data_zip": (sizes.get("data_zip"), identity.data_zip_sha256),
@@ -1454,6 +1565,18 @@ def _rehash_frozen_candidate(candidate_dir: Path) -> tuple[CandidateIdentity, di
     return identity, evidence
 
 
+def verify_candidate(candidate_dir: Path) -> tuple[CandidateIdentity, dict[str, Any]]:
+    """Rehash one frozen four-file candidate and return detached public evidence.
+
+    Release orchestration commands run in separate processes.  This public
+    boundary deliberately reuses the same strict, handle-aware candidate
+    verification as finalization instead of teaching callers to trust or
+    partially parse ``.candidate-evidence.json`` themselves.
+    """
+
+    return _rehash_frozen_candidate(Path(candidate_dir))
+
+
 def _default_receipt_validator(path: Path, identity: CandidateIdentity) -> Mapping[str, Any]:
     return _read_canonical_file(Path(path), label="device acceptance receipt")
 
@@ -1469,6 +1592,7 @@ def _validated_receipt(value: Any, identity: CandidateIdentity) -> dict[str, Any
         "build_id",
         "apk_sha256",
         "data_zip_sha256",
+        "evidence_sha256",
         "serial_digest",
         "probe",
         "checks",
@@ -1480,9 +1604,16 @@ def _validated_receipt(value: Any, identity: CandidateIdentity) -> dict[str, Any
         "build_id": identity.build_id,
         "apk_sha256": identity.apk_sha256,
         "data_zip_sha256": identity.data_zip_sha256,
+        "evidence_sha256": identity.evidence_sha256,
     }
     for key, expected in bindings.items():
-        if receipt.get(key) != expected:
+        actual = receipt.get(key)
+        matches = (
+            hmac.compare_digest(actual, expected)
+            if key.endswith("_sha256") and isinstance(actual, str)
+            else actual == expected
+        )
+        if not matches:
             raise BundleError(f"device receipt {key} mismatch")
     _require_hash(receipt.get("serial_digest"), "device receipt serial_digest")
     probe = _require_mapping(receipt.get("probe"), "device receipt probe")
@@ -1538,6 +1669,7 @@ def _manifest_document(identity: CandidateIdentity, evidence: Mapping[str, Any],
         {
             "schema_version": 1,
             "build_id": identity.build_id,
+            "evidence_sha256": identity.evidence_sha256,
             "artifacts": {
                 "apk": {
                     "name": APK_NAME,
@@ -1557,6 +1689,7 @@ def _manifest_document(identity: CandidateIdentity, evidence: Mapping[str, Any],
             },
             "device_acceptance": {
                 "accepted": True,
+                "evidence_sha256": receipt["evidence_sha256"],
                 "accepted_at_utc": receipt["accepted_at_utc"],
                 "serial_digest": receipt["serial_digest"],
                 "probe": receipt["probe"],
@@ -1617,35 +1750,73 @@ def _parse_sha256sums(raw: bytes) -> dict[str, str]:
     return values
 
 
-def _verify_data_archive(archive_path: Path, entries: Sequence[Mapping[str, Any]]) -> None:
+def _verify_data_archive(
+    archive_path: Path,
+    entries: Sequence[Mapping[str, Any]],
+    *,
+    expected_archive_sha256: str,
+    label: str = "final",
+) -> tuple[int, str]:
     expected = {str(entry["path"]): entry for entry in entries}
+    before = _regular_metadata(archive_path, label=f"{label} data ZIP")
     try:
-        with zipfile.ZipFile(archive_path, "r") as archive:
-            infos = archive.infolist()
-            if len(infos) != len(expected):
-                raise BundleError("final data ZIP member count mismatch")
-            names = [info.filename for info in infos]
-            if len(set(name.casefold() for name in names)) != len(names) or set(names) != set(expected):
-                raise BundleError("final data ZIP entry set mismatch")
-            for info in infos:
-                if info.is_dir() or _zip_member_is_symlink(info):
-                    raise BundleError("final data ZIP contains a directory or symlink")
-                record = expected[info.filename]
-                digest = hashlib.sha256()
-                size = 0
-                with archive.open(info, "r") as stream:
-                    while True:
-                        chunk = stream.read(_CHUNK_SIZE)
-                        if not chunk:
-                            break
-                        digest.update(chunk)
-                        size += len(chunk)
-                if size != record["size"] or not hmac.compare_digest(digest.hexdigest(), str(record["sha256"])):
-                    raise BundleError(f"final data ZIP payload mismatch: {_safe_label(info.filename)}")
+        with archive_path.open("rb") as source:
+            opened = os.fstat(source.fileno())
+            if _is_reparse(opened) or not stat.S_ISREG(opened.st_mode):
+                raise BundleError(f"{label} data ZIP changed type while opening")
+            if (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino):
+                raise BundleError(f"{label} data ZIP identity drift while opening")
+            archive_digest = hashlib.sha256()
+            archive_size = 0
+            while True:
+                chunk = source.read(_CHUNK_SIZE)
+                if not chunk:
+                    break
+                archive_digest.update(chunk)
+                archive_size += len(chunk)
+            archive_hash = archive_digest.hexdigest()
+            if not hmac.compare_digest(archive_hash, expected_archive_sha256):
+                raise BundleError(f"{label} data ZIP outer hash mismatch")
+            source.seek(0)
+            with zipfile.ZipFile(source, "r") as archive:
+                infos = archive.infolist()
+                if len(infos) != len(expected):
+                    raise BundleError(f"{label} data ZIP member count mismatch")
+                names = [info.filename for info in infos]
+                if len(set(name.casefold() for name in names)) != len(names) or set(names) != set(expected):
+                    raise BundleError(f"{label} data ZIP entry set mismatch")
+                for info in infos:
+                    if info.is_dir() or _zip_member_is_symlink(info):
+                        raise BundleError(f"{label} data ZIP contains a directory or symlink")
+                    if info.flag_bits & 0x1:
+                        raise BundleError(f"{label} data ZIP contains an encrypted member")
+                    record = expected[info.filename]
+                    digest = hashlib.sha256()
+                    size = 0
+                    with archive.open(info, "r") as stream:
+                        while True:
+                            chunk = stream.read(_CHUNK_SIZE)
+                            if not chunk:
+                                break
+                            digest.update(chunk)
+                            size += len(chunk)
+                    if size != record["size"] or not hmac.compare_digest(
+                        digest.hexdigest(), str(record["sha256"])
+                    ):
+                        raise BundleError(
+                            f"{label} data ZIP payload mismatch: {_safe_label(info.filename)}"
+                        )
+            after_open = os.fstat(source.fileno())
     except BundleError:
         raise
     except (OSError, zipfile.BadZipFile, RuntimeError, EOFError) as exc:
-        raise BundleError("cannot verify final data ZIP") from exc
+        raise BundleError(f"cannot verify {label} data ZIP") from exc
+    after = _regular_metadata(archive_path, label=f"{label} data ZIP")
+    if _path_identity(before) != _path_identity(after_open) or _path_identity(before) != _path_identity(after):
+        raise BundleError(f"{label} data ZIP drift while verifying members")
+    if archive_size != before.st_size:
+        raise BundleError(f"{label} data ZIP outer size drift")
+    return archive_size, archive_hash
 
 
 def verify_final_bundle(final_dir: Path) -> CandidateIdentity:
@@ -1662,6 +1833,7 @@ def verify_final_bundle(final_dir: Path) -> CandidateIdentity:
     if _contains_forbidden_self_hash(manifest):
         raise BundleError("build manifest contains a forbidden self hash")
     evidence_fields = (
+        "source_fingerprint",
         "source_apk",
         "patches",
         "signer",
@@ -1692,7 +1864,10 @@ def verify_final_bundle(final_dir: Path) -> CandidateIdentity:
         _require_hash(apk_record.get("sha256"), "build manifest APK hash"),
         _require_hash(data_record.get("sha256"), "build manifest data hash"),
         _require_hash(guide_record.get("sha256"), "build manifest guide hash"),
+        _require_hash(manifest.get("evidence_sha256"), "build manifest evidence hash"),
     )
+    if not hmac.compare_digest(identity.evidence_sha256, _release_evidence_sha256(evidence)):
+        raise BundleError("build manifest release evidence hash mismatch")
     expected_names = {"apk": APK_NAME, "data_zip": DATA_ZIP_NAME, "guide": GUIDE_NAME}
     for key, record, digest in (
         ("apk", apk_record, identity.apk_sha256),
@@ -1714,13 +1889,19 @@ def verify_final_bundle(final_dir: Path) -> CandidateIdentity:
         "build_id": identity.build_id,
         "apk_sha256": identity.apk_sha256,
         "data_zip_sha256": identity.data_zip_sha256,
+        "evidence_sha256": device.get("evidence_sha256"),
         "serial_digest": device.get("serial_digest"),
         "probe": device.get("probe"),
         "checks": device.get("checks"),
         "accepted_at_utc": device.get("accepted_at_utc"),
     }
     _validated_receipt(receipt_shape, identity)
-    _verify_data_archive(final / DATA_ZIP_NAME, evidence["data"]["entries"])
+    _verify_data_archive(
+        final / DATA_ZIP_NAME,
+        evidence["data"]["entries"],
+        expected_archive_sha256=identity.data_zip_sha256,
+        label="final",
+    )
     _require_no_findings(scan_release_for_secrets(final, secret_values=_configured_secret_values()))
     return identity
 
@@ -1805,6 +1986,7 @@ __all__ = [
     "build_sha256sums",
     "scan_release_for_secrets",
     "validate_release_layout",
+    "verify_candidate",
     "finalize_candidate",
     "verify_final_bundle",
 ]

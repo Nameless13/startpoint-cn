@@ -117,6 +117,7 @@ class DeviceAcceptanceReceipt:
     build_id: str
     apk_sha256: str
     data_zip_sha256: str
+    evidence_sha256: str
     serial_digest: str
     probe: DeviceProbeReport
     checks: Mapping[str, bool]
@@ -455,6 +456,7 @@ def _validate_identity(identity: CandidateIdentity) -> None:
         ("APK", identity.apk_sha256),
         ("data ZIP", identity.data_zip_sha256),
         ("guide", identity.guide_sha256),
+        ("release evidence", identity.evidence_sha256),
     ):
         if not isinstance(value, str) or _HASH_RE.fullmatch(value) is None:
             raise DeviceError(f"candidate {label} hash is invalid")
@@ -904,6 +906,7 @@ def _receipt_document(receipt: DeviceAcceptanceReceipt) -> dict[str, Any]:
         "build_id": receipt.build_id,
         "apk_sha256": receipt.apk_sha256,
         "data_zip_sha256": receipt.data_zip_sha256,
+        "evidence_sha256": receipt.evidence_sha256,
         "serial_digest": receipt.serial_digest,
         "probe": _probe_document(receipt.probe),
         "checks": dict(receipt.checks),
@@ -953,6 +956,16 @@ def _open_owned_directory(
         raise
 
 
+def _windows_drive_type(root: str) -> int:
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.GetDriveTypeW.argtypes = (wintypes.LPCWSTR,)
+    kernel32.GetDriveTypeW.restype = wintypes.UINT
+    return int(kernel32.GetDriveTypeW(root))
+
+
 def _directory_chain_paths(path: Path, *, label: str) -> tuple[Path, ...]:
     try:
         target = _lexical_absolute(path)
@@ -962,6 +975,8 @@ def _directory_chain_paths(path: Path, *, label: str) -> tuple[Path, ...]:
     if _WINDOWS_ABSOLUTE_RE.match(rendered) is None or target.drive.startswith("\\\\"):
         raise DeviceError(f"{label} must be on one local Windows drive")
     root = Path(target.anchor)
+    if _windows_drive_type(str(root)) != 3:  # DRIVE_FIXED
+        raise DeviceError(f"{label} must be on one fixed local Windows drive")
     try:
         relative = target.relative_to(root)
     except ValueError as exc:
@@ -1591,6 +1606,7 @@ def record_manual_acceptance(
         build_id=identity.build_id,
         apk_sha256=identity.apk_sha256,
         data_zip_sha256=identity.data_zip_sha256,
+        evidence_sha256=identity.evidence_sha256,
         serial_digest=probe.serial_digest,
         probe=probe,
         checks=MappingProxyType(checked),
@@ -1728,6 +1744,7 @@ def validate_acceptance_receipt(
             "build_id",
             "apk_sha256",
             "data_zip_sha256",
+            "evidence_sha256",
             "serial_digest",
             "probe",
             "checks",
@@ -1743,6 +1760,7 @@ def validate_acceptance_receipt(
         ("build_id", identity.build_id),
         ("apk_sha256", identity.apk_sha256),
         ("data_zip_sha256", identity.data_zip_sha256),
+        ("evidence_sha256", identity.evidence_sha256),
     ):
         value = document.get(key)
         if not isinstance(value, str) or not hmac.compare_digest(value, expected):
@@ -1811,6 +1829,7 @@ def validate_acceptance_receipt(
         build_id=identity.build_id,
         apk_sha256=identity.apk_sha256,
         data_zip_sha256=identity.data_zip_sha256,
+        evidence_sha256=identity.evidence_sha256,
         serial_digest=serial_digest,
         probe=probe,
         checks=MappingProxyType(checked),
