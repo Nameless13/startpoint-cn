@@ -2398,10 +2398,15 @@ class RealReleaseServices:
         abyss_lock = lock.get("abyss_stage")
         if not isinstance(abyss_lock, Mapping):
             raise ReleaseError("offline APK lock has no abyss stage")
+        target_class = abyss_lock.get("target_class")
+        if target_class != "pinball.common.data.character.BattleCharacterLogic":
+            raise ReleaseError("offline APK lock abyss target class is invalid")
+        if stages[0].get("target_class") != target_class:
+            raise ReleaseError("independent APK verifier abyss target class is invalid")
         stages[0].update(
             {
                 "stage": "abyss-mode-equipment",
-                "target_class": "BattleCharacterLogic",
+                "target_class": target_class,
                 "before_method_sha256": abyss_lock.get("before_method_sha256"),
                 "match_count": 1,
             }

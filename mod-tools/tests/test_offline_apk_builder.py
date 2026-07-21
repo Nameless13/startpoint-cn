@@ -329,7 +329,7 @@ class BuilderFixture(unittest.TestCase):
             if stage == "abyss-mode-equipment":
                 return types.SimpleNamespace(
                     stage=stage,
-                    target_class="BattleCharacterLogic",
+                    target_class="pinball.common.data.character.BattleCharacterLogic",
                     before_method_sha256="1" * 64,
                     after_method_sha256="2" * 64,
                     match_count=1,

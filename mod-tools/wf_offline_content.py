@@ -2812,7 +2812,7 @@ def _client_gate(client_report: Path | None) -> bool | None:
     )
     if (
         abyss["stage"] != "abyss-mode-equipment"
-        or abyss["target_class"] != "BattleCharacterLogic"
+        or abyss["target_class"] != "pinball.common.data.character.BattleCharacterLogic"
         or type(abyss["match_count"]) is not int
         or abyss["match_count"] != 1
     ):

@@ -2033,6 +2033,70 @@ class OfflineReleaseTestCase(unittest.TestCase):
             )
             self.assertIs(call["shell"], False)
 
+    def test_independent_client_report_uses_locked_abyss_fqcn(self) -> None:
+        target_class = "pinball.common.data.character.BattleCharacterLogic"
+        lock = {
+            "abyss_stage": {
+                "before_method_sha256": "1" * 64,
+                "target_class": target_class,
+            },
+            "post_abyss_swf_sha256": "2" * 64,
+        }
+        builder = mock.Mock()
+        builder.canonical_json_bytes.side_effect = lambda value: json.dumps(
+            value, sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
+        verifier_stages = [
+            {
+                "after_method_sha256": "3" * 64,
+                "target_class": target_class,
+            },
+            {"verified": True},
+            {"verified": True},
+            {"verified": True},
+        ]
+
+        stages = module.RealReleaseServices._verified_client_stage_reports(
+            builder,
+            lock,
+            verifier_stages,
+            "0" * 64,
+            "f" * 64,
+        )
+
+        self.assertEqual(stages[0]["target_class"], target_class)
+        short_lock = {
+            **lock,
+            "abyss_stage": {
+                **lock["abyss_stage"],
+                "target_class": "BattleCharacterLogic",
+            },
+        }
+        with self.assertRaisesRegex(module.ReleaseError, "abyss target class"):
+            module.RealReleaseServices._verified_client_stage_reports(
+                builder,
+                short_lock,
+                verifier_stages,
+                "0" * 64,
+                "f" * 64,
+            )
+        for verifier_target in ("BattleCharacterLogic", None):
+            invalid_verifier_stages = [dict(stage) for stage in verifier_stages]
+            if verifier_target is None:
+                invalid_verifier_stages[0].pop("target_class")
+            else:
+                invalid_verifier_stages[0]["target_class"] = verifier_target
+            with self.subTest(verifier_target=verifier_target), self.assertRaisesRegex(
+                module.ReleaseError, "verifier abyss target class"
+            ):
+                module.RealReleaseServices._verified_client_stage_reports(
+                    builder,
+                    lock,
+                    invalid_verifier_stages,
+                    "0" * 64,
+                    "f" * 64,
+                )
+
     def test_independent_verifier_loads_only_public_signer_without_password_or_keystore(self) -> None:
         certificate = "a7" * 32
         release_home = self.root / "public-signer-only"

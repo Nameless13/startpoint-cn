@@ -142,7 +142,8 @@ class OfflineContentTests(unittest.TestCase):
             "stage_reports": [
                 {
                     "stage": "abyss-mode-equipment", "input_sha256": swf0,
-                    "output_sha256": swf1, "target_class": "BattleCharacterLogic",
+                    "output_sha256": swf1,
+                    "target_class": "pinball.common.data.character.BattleCharacterLogic",
                     "before_method_sha256": "1" * 64, "after_method_sha256": "2" * 64,
                     "match_count": 1,
                 },
@@ -2138,6 +2139,12 @@ class OfflineContentTests(unittest.TestCase):
         wrong_version_stages[3]["is_full_package"] = False
         wrong_version["stage_reports"] = wrong_version_stages
         rejected(wrong_version, "resource-version")
+
+        short_abyss_class = self.valid_client_report()
+        short_abyss_stages = [dict(stage) for stage in short_abyss_class["stage_reports"]]
+        short_abyss_stages[0]["target_class"] = "BattleCharacterLogic"
+        short_abyss_class["stage_reports"] = short_abyss_stages
+        rejected(short_abyss_class, "abyss stage semantics")
 
         no_op = self.valid_client_report()
         no_op_stages = [dict(stage) for stage in no_op["stage_reports"]]
