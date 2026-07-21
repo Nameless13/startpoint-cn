@@ -33,6 +33,9 @@ KNOWN_BACKUP_RE = re.compile(
     r"(?:^|/)(?:\.bak|.*\.bak(?:-.*)?|.*\.tmp|.*\.part|partial_downloaded\.json)$"
 )
 REPARSE_ATTRIBUTE = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+# CPython issue #126253: some Windows stat paths surface invalid bit 0x10000000;
+# it is not a documented persistent FILE_ATTRIBUTE_* value.
+WINDOWS_STAT_INVALID_DIRECTORY_ATTRIBUTE = 0x10000000
 EXPECTED_COUNTS: Mapping[RootName, int] = MappingProxyType(
     {"common": 113_822, "medium": 23_458, "android": 1_009}
 )
@@ -735,8 +738,15 @@ def _directory_identity(metadata: object) -> tuple[int, ...]:
         int(getattr(metadata, "st_dev", 0)),
         int(getattr(metadata, "st_ino", 0)),
         int(getattr(metadata, "st_mode")),
-        int(getattr(metadata, "st_file_attributes", 0)),
+        int(getattr(metadata, "st_file_attributes", 0))
+        & ~WINDOWS_STAT_INVALID_DIRECTORY_ATTRIBUTE,
     )
+
+
+def _owned_directory_signature(metadata: object) -> tuple[int, ...]:
+    signature = list(_stat_signature(metadata))
+    signature[-1] &= ~WINDOWS_STAT_INVALID_DIRECTORY_ATTRIBUTE
+    return tuple(signature)
 
 
 def _verify_owned_chain(
@@ -749,13 +759,17 @@ def _verify_owned_chain(
     except ValueError as error:
         raise StoreError(f"destination parent escapes staging root: {parent}") from error
     current = staging_root
-    _require_same_lstat(current, owned[current], kind="owned staging directory")
+    _require_same_owned_directory(
+        current, owned[current], kind="owned staging directory"
+    )
     for part in relative.parts:
         current = current / part
         expected = owned.get(current)
         if expected is None:
             raise StoreError(f"unowned staging directory in destination chain: {current}")
-        _require_same_lstat(current, expected, kind="owned staging directory")
+        _require_same_owned_directory(
+            current, expected, kind="owned staging directory"
+        )
 
 
 def _refresh_owned_parent(
@@ -786,6 +800,18 @@ class SimpleStat:
         ) = signature
 
 
+def _require_same_owned_directory(
+    path: Path, expected: tuple[int, ...], *, kind: str
+) -> object:
+    metadata = _checked_lstat(path, kind=kind)
+    if not stat.S_ISDIR(int(getattr(metadata, "st_mode"))) or (
+        _owned_directory_signature(metadata)
+        != _owned_directory_signature(SimpleStat(expected))
+    ):
+        raise StoreError(f"{kind} changed during scan: {path}")
+    return metadata
+
+
 def _open_exclusive_at(
     parent_descriptor: int,
     name: str,
@@ -809,7 +835,7 @@ def _open_exclusive_at(
 def _posix_directory_guard(
     path: Path, expected_signature: tuple[int, ...], *, kind: str
 ):
-    before = _require_same_lstat(path, expected_signature, kind=kind)
+    before = _require_same_owned_directory(path, expected_signature, kind=kind)
     flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
     try:
         descriptor = os.open(path, flags)
@@ -839,7 +865,9 @@ def _ensure_owned_directory(
         _verify_owned_chain(staging_root, current, owned)
         child = current / part
         if child in owned:
-            _require_same_lstat(child, owned[child], kind="owned staging directory")
+            _require_same_owned_directory(
+                child, owned[child], kind="owned staging directory"
+            )
             current = child
             continue
         try:

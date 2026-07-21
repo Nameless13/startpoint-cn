@@ -469,6 +469,41 @@ class OfflineStoreTests(unittest.TestCase):
 
         self.assertEqual(1, len(report.copied_members))
 
+    def test_materialize_tolerates_windows_invalid_owned_directory_stat_bit(self) -> None:
+        scan = self.scan_fixture()
+        worldflipper = self.stage / "WorldFlipper"
+        settling_directory = worldflipper / "dummy/download/production/upload/aa"
+        real_lstat = Path.lstat
+        samples = 0
+
+        def settling_lstat(path: Path) -> os.stat_result | SimpleNamespace:
+            nonlocal samples
+            metadata = real_lstat(path)
+            if path != settling_directory:
+                return metadata
+            samples += 1
+            if samples != 1:
+                return metadata
+            values = {
+                name: getattr(metadata, name)
+                for name in dir(metadata)
+                if name.startswith("st_")
+            }
+            values["st_file_attributes"] = (
+                getattr(metadata, "st_file_attributes", 0) | 0x10000000
+            )
+            return SimpleNamespace(**values)
+
+        with mock.patch.object(
+            Path, "lstat", autospec=True, side_effect=settling_lstat
+        ):
+            report = module.materialize_snapshot(
+                scan, worldflipper, snapshot_version="1.4.196"
+            )
+
+        self.assertGreaterEqual(samples, 2)
+        self.assertEqual(1, len(report.copied_members))
+
     def test_materialize_rejects_opened_inode_drift(self) -> None:
         scan = self.scan_fixture()
         real_fstat = os.fstat
@@ -488,6 +523,41 @@ class OfflineStoreTests(unittest.TestCase):
                 module.materialize_snapshot(
                     scan, self.stage / "WorldFlipper", snapshot_version="1.4.196"
                 )
+
+    def test_materialize_rejects_owned_directory_inode_drift(self) -> None:
+        scan = self.scan_fixture()
+        worldflipper = self.stage / "WorldFlipper"
+        raced_directory = worldflipper / "dummy/download/production/upload/aa"
+        destination = raced_directory / HASH
+        real_lstat = Path.lstat
+        samples = 0
+
+        def changed_inode_lstat(path: Path) -> os.stat_result | SimpleNamespace:
+            nonlocal samples
+            metadata = real_lstat(path)
+            if path != raced_directory:
+                return metadata
+            samples += 1
+            if samples == 1:
+                return metadata
+            values = {
+                name: getattr(metadata, name)
+                for name in dir(metadata)
+                if name.startswith("st_")
+            }
+            values["st_ino"] = metadata.st_ino + 1
+            return SimpleNamespace(**values)
+
+        with mock.patch.object(
+            Path, "lstat", autospec=True, side_effect=changed_inode_lstat
+        ):
+            with self.assertRaisesRegex(module.StoreError, "changed during scan"):
+                module.materialize_snapshot(
+                    scan, worldflipper, snapshot_version="1.4.196"
+                )
+
+        self.assertGreaterEqual(samples, 2)
+        self.assertFalse(destination.exists())
 
     def test_materialize_snapshot_requires_a_new_caller_owned_destination(self) -> None:
         scan = self.scan_fixture()
