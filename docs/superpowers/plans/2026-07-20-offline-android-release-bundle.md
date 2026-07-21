@@ -16,7 +16,7 @@
 - 输出根固定为 `out/wf-offline-android/1.4.196/`，最终目录固定为 `WF离线整合版/`，且最终只允许五个文件：`WorldFlipper-离线整合版.apk`、`WorldFlipper-数据-1.4.196.zip`、`导入说明.txt`、`build-manifest.json`、`SHA256SUMS.txt`。
 - APK 必须继续使用 `DevConfig_individual`、`DummyRemote`、`socket=0`、`sdkDummy=true`、`DummyPayment`、`isFullPackage=true`、`WorldFlipper/dummy/download` 和 `WorldFlipper/save_haxe` 读写链路；不得调用 `client-patch/repoint-apk/`、v2 RealRemote/LAN 或任何伴随服务。
 - APK 只允许主 SWF、ZIP 容器布局、对齐结果和顶层签名条目变化；package/version/label、AndroidManifest、DEX、native libraries、AIR wrapper 以及所有非目标 APK member 的内容字节必须保持基线一致。
-- SWF 补丁顺序固定为 `abyss gate → Seris Phase 4 九站点 → PixelArt/MemberView/CharacterCell 三处缩放 → fullResourceVersion 1.4.54→1.4.196`；每站点必须精确匹配一次并在 FFDec reopen 后复验。
+- SWF 补丁顺序固定为 `abyss gate → Seris Phase 4 九站点 → PixelArt/MemberView/CharacterCellView 三处缩放 → fullResourceVersion 1.4.54→1.4.196`；每站点必须精确匹配一次并在 FFDec reopen 后复验。
 - 数据 ZIP 根必须恰好为 `WorldFlipper/`；common/medium/android 分别映射到 `production/upload/`、`production/medium_upload/`、`production/android_upload/`。严格 hashed member 数固定为 `138,289`，加 `info.json` 和 `.empty` 后 ZIP member 数固定为 `138,291`；旧离线包 `137,820` 个 hashed 路径必须零遗漏，新增必须恰好 `469`。
 - `info.json.version` 和内容快照版本固定为 `1.4.196`；`.empty` 固定为单字节 ASCII `0`；外置 ZIP 不重复携带 `bundle.zip`，不携带 `save_haxe`、`dummy_save.json`、账号数据、服务端、Node、构建日志或秘密材料。
 - Player 1000 初始角色表只保留原 `"1":"2"` 并追加 `129999/139999/149999` 各 `"1"`；不得改队伍、mana node、物品、装备、货币、进度或购买记录，不预发 `8000101..8000115`。
@@ -57,7 +57,7 @@
 - `client-patch/offline-android/base-lock.json` — 已审核的 base APK/SWF/manifest/DEX/native/offline/save/method/stage locks；不含本机路径或秘密。
 - `client-patch/offline-android/apk_baseline.py` — APK 基线检查、允许差异比较和离线 wrapper 方法复验。
 - `client-patch/offline-android/seris_phase4_pcode.py` — 从用户 WIP 提升后的九站点纯 P-code 补丁和语义验证。
-- `client-patch/offline-android/render_scale_pcode.py` — PixelArt、MemberView ctor、CharacterCell 三个 base-specific 定点缩放补丁。
+- `client-patch/offline-android/render_scale_pcode.py` — PixelArt、MemberView ctor、CharacterCellView 三个 base-specific 定点缩放补丁。
 - `client-patch/offline-android/resource_version_pcode.py` — 唯一 `fullResourceVersion` 定点替换和 `isFullPackage` 保持验证。
 - `client-patch/offline-android/lock_discovery.py` — 仅供受控基线发现/接受使用；正式 build 路径无 refresh-locks 能力。
 - `client-patch/offline-android/build_offline_apk.py` — 单次提取、顺序 patch、单次回写、zipalign、单次签名、最终复验。
@@ -1096,7 +1096,7 @@ git commit -m "feat(client-patch): merge Seris Phase 4 into offline base"
 - Consumes: post-Seris SWF and the accepted base lock.
 - Produces: `apply_render_scale`, `verify_render_scale`, `patch_pixel_art`, `patch_member_view_ctor`, `patch_character_cell`, `apply_resource_version`, and `verify_resource_version`.
 
-- [ ] **Step 1: Write P-code fixture tests for PixelArt, MemberView and CharacterCell**
+- [ ] **Step 1: Write P-code fixture tests for PixelArt, MemberView and CharacterCellView**
 
 ```python
 def test_member_view_removes_only_character_scale_renderer_and_keeps_shadow_scale(self):
@@ -1105,11 +1105,11 @@ def test_member_view_removes_only_character_scale_renderer_and_keeps_shadow_scal
     self.assertIn(self.shadow_scale_anchor, output)
     module.verify_member_view_ctor(output)
 
-def test_character_cell_applies_custom_character_branch_without_overwriting_base_logic(self):
+def test_character_cell_view_scales_after_matrix_without_overwriting_base_logic(self):
     output = module.patch_character_cell(self.character_cell_before)
-    self.assertIn("149999", output)
-    self.assertIn(self.base_character_cell_branch, output)
-    self.assertEqual(output.count(self.inserted_branch_anchor), 1)
+    self.assertIn(self.base_transformation_matrix_anchor, output)
+    self.assertEqual(output.count(self.default_scale_getter), 2)
+    self.assertEqual(output.count(self.inserted_scale_anchor), 1)
     module.verify_character_cell(output)
 ```
 
@@ -1118,8 +1118,15 @@ Add PixelArt tests, zero/multiple-anchor rejection for all three functions, pre/
 ```text
 PixelArtCharacterView/spriteSheetLoadCompleted  body 88088 / method 96450  9475368c4dd326f0d8230ba724d96a60af5d30dba37ac5d43d5bdd04a85b038b
 MemberView/MemberView                           body 61075 / method 66123  0ca2af059a85e432c9c6dc991126d0eeba57acaa5ecc152aee83e36ed19a9d77
-CharacterCell/CharacterCell                    body 66308 / method 72119  f1d643128a517f7ae5f6c0628c3d96761254a67f34520a257ab302519329a0b8
+CharacterCellView/drawWithAdvanceFlag          body 66257 / method 72109  cc64eafcb0bbaeb4f1ae705944da569cc1d59bf9dc7636b1bbfe64342175e3a7
 ```
+
+Real base inspection showed that `CharacterCell/CharacterCell` only initializes
+timeline, pedestal and playhead state; it has no character id, scale or render
+matrix and therefore cannot implement the list/party scale fix.  The reviewed
+third site is the post-matrix block in `CharacterCellView/drawWithAdvanceFlag`.
+It multiplies both axes by `defaultScale / 6`, which is a no-op for official
+`defaultScale=6` assets while preserving custom frame scale.
 
 - [ ] **Step 2: Write the exact 1.4.54→1.4.196 resource-version tests**
 
@@ -1143,7 +1150,7 @@ python -X utf8 -m unittest mod-tools/tests/test_offline_apk_render_scale.py -v
 python -X utf8 -m unittest mod-tools/tests/test_offline_apk_resource_version.py -v
 ```
 
-Expected: FAIL because the new modules are absent; CharacterCell must not be silently skipped.
+Expected: FAIL because the new modules are absent; CharacterCellView must not be silently skipped.
 
 - [ ] **Step 4: Implement three base-specific P-code patches**
 
@@ -1159,7 +1166,7 @@ class RenderSite:
 RENDER_SITES = (
     RenderSite("pixel-art", "PixelArtCharacterView", "spriteSheetLoadCompleted", patch_pixel_art, verify_pixel_art),
     RenderSite("member-view", "MemberView", "MemberView", patch_member_view_ctor, verify_member_view_ctor),
-    RenderSite("character-cell", "CharacterCell", "CharacterCell", patch_character_cell, verify_character_cell),
+    RenderSite("character-cell", "CharacterCellView", "drawWithAdvanceFlag", patch_character_cell, verify_character_cell),
 )
 
 @dataclass(frozen=True, slots=True)

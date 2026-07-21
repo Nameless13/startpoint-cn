@@ -126,7 +126,7 @@ APK 重打包只允许以下变化：
 
 ### 5.4 角色缩放补丁
 
-PixelArt、MemberView 构造器和 CharacterCell 三个缩放点与 v2 不同；base 本身还有 SCALE_RENDERER 变体。实现必须以 base 为共同祖先做三方合并，只加入 149999 等自制角色所需的缩放分支，不覆盖 base 的既有渲染逻辑。
+PixelArt、MemberView 构造器和 CharacterCellView.drawWithAdvanceFlag 三个缩放点与 v2 不同；base 本身还有 SCALE_RENDERER 变体。实现必须以 base 为共同祖先做三方合并，只加入尊重 frame/defaultScale 的缩放行为，不覆盖 base 的既有渲染逻辑。CharacterCell 构造器不含角色 id、scale 或渲染矩阵，不是合法补丁点；列表/编队补丁必须位于 CharacterCellView 的原矩阵赋值之后。官方 defaultScale=6 时该计算保持无感，自制角色则保留资源声明的比例。
 
 验收同时覆盖：
 
