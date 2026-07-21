@@ -311,6 +311,94 @@ class OfflineZipTests(unittest.TestCase):
                 production=False,
             )
 
+    def test_verifier_accepts_canonical_central_zip64_offset_extra(self) -> None:
+        with mock.patch.object(zipfile, "ZIP64_LIMIT", 128):
+            self.write_physical_archive(self.entries)
+            with zipfile.ZipFile(self.output) as archive:
+                offset_infos = [info for info in archive.infolist() if info.extra]
+            self.assertTrue(offset_infos)
+            for info in offset_infos:
+                self.assertLess(info.file_size, 128)
+                self.assertLess(info.compress_size, 128)
+                self.assertEqual(
+                    info.extra,
+                    struct.pack("<HHQ", 1, 8, info.header_offset),
+                )
+
+            report = module.verify_data_zip(
+                self.output,
+                {entry.path: entry for entry in self.entries},
+                expected_members=len(self.entries),
+                production=False,
+            )
+        self.assertTrue(report.zip64)
+
+    def test_writer_accepts_required_central_zip64_offset_extra(self) -> None:
+        with mock.patch.object(zipfile, "ZIP64_LIMIT", 128):
+            report = module.write_data_zip(
+                self.stage,
+                self.output,
+                self.entries,
+                production=False,
+            )
+
+        self.assertTrue(report.zip64)
+
+    def test_verifier_rejects_zip64_extra_without_raw_offset_sentinel(self) -> None:
+        with mock.patch.object(zipfile, "ZIP64_LIMIT", 128):
+            self.write_physical_archive(self.entries)
+
+        with self.output.open("rb") as stream:
+            zip64 = module._read_zip64_eocd(stream)
+        self.assertIsNotNone(zip64)
+        assert zip64 is not None
+        raw = bytearray(self.output.read_bytes())
+        position = zip64.central_offset
+        end = position + zip64.central_size
+        mutated = False
+        while position < end:
+            header = struct.unpack(
+                zipfile.structCentralDir,
+                raw[position : position + zipfile.sizeCentralDir],
+            )
+            filename_length = header[zipfile._CD_FILENAME_LENGTH]
+            extra_length = header[zipfile._CD_EXTRA_FIELD_LENGTH]
+            comment_length = header[zipfile._CD_COMMENT_LENGTH]
+            extra_start = position + zipfile.sizeCentralDir + filename_length
+            extra = bytes(raw[extra_start : extra_start + extra_length])
+            if (
+                header[zipfile._CD_LOCAL_HEADER_OFFSET] == 0xFFFFFFFF
+                and len(extra) == 12
+            ):
+                tag, size, actual_offset = struct.unpack("<HHQ", extra)
+                self.assertEqual((tag, size), (1, 8))
+                self.assertLess(actual_offset, 0xFFFFFFFF)
+                struct.pack_into(
+                    "<L",
+                    raw,
+                    position + zipfile.sizeCentralDir - 4,
+                    actual_offset,
+                )
+                mutated = True
+                break
+            position += (
+                zipfile.sizeCentralDir
+                + filename_length
+                + extra_length
+                + comment_length
+            )
+        self.assertTrue(mutated)
+        self.output.write_bytes(raw)
+
+        with mock.patch.object(zipfile, "ZIP64_LIMIT", 128):
+            with self.assertRaisesRegex(module.OfflineZipError, "ZIP64 offset"):
+                module.verify_data_zip(
+                    self.output,
+                    {entry.path: entry for entry in self.entries},
+                    expected_members=len(self.entries),
+                    production=False,
+                )
+
     def test_verifier_rejects_central_extra_field(self) -> None:
         entry = self.entries[-1]
         payload = (self.stage.parent / entry.path).read_bytes()

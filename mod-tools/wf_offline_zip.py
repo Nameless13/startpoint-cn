@@ -50,6 +50,7 @@ _EOCD = struct.Struct(zipfile.structEndArchive)
 _ZIP64_EOCD = struct.Struct(zipfile.structEndArchive64)
 _ZIP64_LOCATOR = struct.Struct(zipfile.structEndArchive64Locator)
 _LOCAL_FILE_HEADER = struct.Struct(zipfile.structFileHeader)
+_CENTRAL_DIRECTORY_HEADER = struct.Struct(zipfile.structCentralDir)
 _REPARSE_ATTRIBUTE = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
 _BINARY_FLAG = getattr(os, "O_BINARY", 0)
 _NOFOLLOW_FLAG = getattr(os, "O_NOFOLLOW", 0)
@@ -460,8 +461,6 @@ def _validate_fixed_metadata(info: zipfile.ZipInfo) -> None:
         raise OfflineZipError(f"member is not ZIP_STORED: {info.filename!r}")
     if info.create_system != 3 or info.external_attr != FIXED_EXTERNAL_ATTR:
         raise OfflineZipError(f"member has non-deterministic platform metadata: {info.filename!r}")
-    if info.extra:
-        raise OfflineZipError(f"central directory extra field is forbidden: {info.filename!r}")
     if info.comment:
         raise OfflineZipError(f"member comment is forbidden: {info.filename!r}")
     if (
@@ -483,6 +482,95 @@ def _read_exact_at(stream: BinaryIO, offset: int, size: int, label: str) -> byte
     if len(data) != size:
         raise OfflineZipError(f"{label} is truncated")
     return data
+
+
+def _validate_central_record(
+    stream: BinaryIO,
+    offset: int,
+    central_end: int,
+    info: zipfile.ZipInfo,
+) -> int:
+    header_data = _read_exact_at(
+        stream,
+        offset,
+        _CENTRAL_DIRECTORY_HEADER.size,
+        "central directory header",
+    )
+    header = _CENTRAL_DIRECTORY_HEADER.unpack(header_data)
+    if header[zipfile._CD_SIGNATURE] != zipfile.stringCentralDir:
+        raise OfflineZipError(
+            f"central directory signature mismatch: {info.filename!r}"
+        )
+    filename_length = int(header[zipfile._CD_FILENAME_LENGTH])
+    extra_length = int(header[zipfile._CD_EXTRA_FIELD_LENGTH])
+    comment_length = int(header[zipfile._CD_COMMENT_LENGTH])
+    variable_size = filename_length + extra_length + comment_length
+    record_end = offset + _CENTRAL_DIRECTORY_HEADER.size + variable_size
+    if record_end > central_end:
+        raise OfflineZipError(
+            f"central directory record crosses its declared boundary: {info.filename!r}"
+        )
+    variable = _read_exact_at(
+        stream,
+        offset + _CENTRAL_DIRECTORY_HEADER.size,
+        variable_size,
+        "central directory fields",
+    )
+    filename = variable[:filename_length]
+    extra_start = filename_length
+    extra_end = extra_start + extra_length
+    extra = variable[extra_start:extra_end]
+    comment = variable[extra_end:]
+    try:
+        expected_filename = info.filename.encode("ascii")
+    except UnicodeEncodeError as exc:
+        raise OfflineZipError(
+            f"central directory filename is not ASCII: {info.filename!r}"
+        ) from exc
+    if filename != expected_filename or comment != info.comment or extra != info.extra:
+        raise OfflineZipError(
+            f"central directory variable fields drifted: {info.filename!r}"
+        )
+
+    size_zip64 = (
+        int(info.file_size) > zipfile.ZIP64_LIMIT
+        or int(info.compress_size) > zipfile.ZIP64_LIMIT
+    )
+    offset_zip64 = int(info.header_offset) > zipfile.ZIP64_LIMIT
+    expected_raw_file_size = 0xFFFFFFFF if size_zip64 else int(info.file_size)
+    expected_raw_compress_size = 0xFFFFFFFF if size_zip64 else int(info.compress_size)
+    expected_raw_offset = 0xFFFFFFFF if offset_zip64 else int(info.header_offset)
+    if (
+        int(header[zipfile._CD_UNCOMPRESSED_SIZE]) != expected_raw_file_size
+        or int(header[zipfile._CD_COMPRESSED_SIZE]) != expected_raw_compress_size
+    ):
+        raise OfflineZipError(
+            f"central directory ZIP64 size encoding is non-canonical: {info.filename!r}"
+        )
+    if int(header[zipfile._CD_LOCAL_HEADER_OFFSET]) != expected_raw_offset:
+        raise OfflineZipError(
+            f"central directory ZIP64 offset encoding is non-canonical: {info.filename!r}"
+        )
+
+    zip64_values: list[int] = []
+    if size_zip64:
+        zip64_values.extend((int(info.file_size), int(info.compress_size)))
+    if offset_zip64:
+        zip64_values.append(int(info.header_offset))
+    expected_extra = b""
+    if zip64_values:
+        expected_extra = struct.pack(
+            f"<HH{'Q' * len(zip64_values)}",
+            1,
+            8 * len(zip64_values),
+            *zip64_values,
+        )
+    if extra != expected_extra:
+        raise OfflineZipError(
+            "central directory ZIP64 offset/size extra field is non-canonical: "
+            f"{info.filename!r}"
+        )
+    return record_end
 
 
 def _validate_local_header(stream: BinaryIO, info: zipfile.ZipInfo) -> int:
@@ -645,6 +733,7 @@ def _verify_data_zip_stream(
     counts = {"common": 0, "medium": 0, "android": 0, "markers": 0}
     total_uncompressed_bytes = 0
     physical_payload_end = 0
+    zip64_state: _Zip64EndState | None = None
     try:
         stream.seek(0)
         with zipfile.ZipFile(stream, "r", allowZip64=True) as archive:
@@ -653,15 +742,6 @@ def _verify_data_zip_stream(
             _validate_paths(names)
             if names != sorted(names):
                 raise OfflineZipError("archive member names must be sorted")
-            for info in infos:
-                _validate_fixed_metadata(info)
-                if int(info.header_offset) != physical_payload_end:
-                    raise OfflineZipError(
-                        f"physical local records are not canonical and contiguous: {info.filename!r}"
-                    )
-                physical_payload_end = _validate_local_header(stream, info)
-            if archive.comment:
-                raise OfflineZipError("archive comment is forbidden")
             if len(infos) != expected_members:
                 raise OfflineZipError(
                     f"archive member count mismatch: expected {expected_members}, got {len(infos)}"
@@ -673,6 +753,30 @@ def _verify_data_zip_stream(
                     f"archive/manifest member set mismatch: missing={missing[:3]!r}, "
                     f"unexpected={unexpected[:3]!r}"
                 )
+            zip64_state = _validate_zip64_layout(stream, len(expected))
+            if int(archive.start_dir) != zip64_state.central_offset:
+                raise OfflineZipError("ZIP reader and Zip64 central directory offsets disagree")
+            central_position = zip64_state.central_offset
+            central_end = zip64_state.central_offset + zip64_state.central_size
+            for info in infos:
+                central_position = _validate_central_record(
+                    stream,
+                    central_position,
+                    central_end,
+                    info,
+                )
+                _validate_fixed_metadata(info)
+                if int(info.header_offset) != physical_payload_end:
+                    raise OfflineZipError(
+                        f"physical local records are not canonical and contiguous: {info.filename!r}"
+                    )
+                physical_payload_end = _validate_local_header(stream, info)
+            if central_position != central_end:
+                raise OfflineZipError(
+                    "central directory records do not fill their declared boundary"
+                )
+            if archive.comment:
+                raise OfflineZipError("archive comment is forbidden")
 
             for info in infos:
                 entry = expected[info.filename]
@@ -718,7 +822,8 @@ def _verify_data_zip_stream(
     except (OSError, EOFError, zipfile.BadZipFile) as exc:
         raise OfflineZipError(f"cannot read data ZIP {archive_label!r}: {exc}") from exc
 
-    zip64_state = _validate_zip64_layout(stream, len(expected))
+    if zip64_state is None:
+        raise OfflineZipError("archive Zip64 layout was not validated")
     if physical_payload_end != zip64_state.central_offset:
         raise OfflineZipError(
             "physical local records do not end exactly at the central directory"
