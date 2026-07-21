@@ -298,7 +298,7 @@ class OfflineBundleTests(unittest.TestCase):
         self.assertEqual(raw, b'{"a":[2,1],"\xe4\xb8\xad":1}\n')
         self.assertNotIn(b"\r", raw)
         with self.assertRaisesRegex(module.BundleError, "absolute path"):
-            module.canonical_json_bytes({"input": r"C:\Users\tester\secret.txt"})
+            module.canonical_json_bytes({"input": r"X:\sensitive\secret.txt"})
         with self.assertRaisesRegex(module.BundleError, "sensitive field"):
             module.canonical_json_bytes({"keystore_path": "release.jks"})
         with self.assertRaisesRegex(module.BundleError, "finite"):

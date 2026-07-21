@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- 输入 APK 固定为用户提供的 `C:\Users\12101\Downloads\base.apk.1`；正式构建要求 SHA-256 为 `4f6884f33641788108c0522c7c70036c63ba530e1fdb183105b3cd395bdd66f6`，内置 `assets/worldflipper_android_release.swf` SHA-256 为 `08187f538703aecadce264b7bd5e085411f8e3aedb5f48adf2cf035a100f550d`。
+- 输入 APK 固定为用户下载目录中的 `%USERPROFILE%\Downloads\base.apk.1`；正式构建要求 SHA-256 为 `4f6884f33641788108c0522c7c70036c63ba530e1fdb183105b3cd395bdd66f6`，内置 `assets/worldflipper_android_release.swf` SHA-256 为 `08187f538703aecadce264b7bd5e085411f8e3aedb5f48adf2cf035a100f550d`。
 - 输出根固定为 `out/wf-offline-android/1.4.196/`，最终目录固定为 `WF离线整合版/`，且最终只允许五个文件：`WorldFlipper-离线整合版.apk`、`WorldFlipper-数据-1.4.196.zip`、`导入说明.txt`、`build-manifest.json`、`SHA256SUMS.txt`。
 - APK 必须继续使用 `DevConfig_individual`、`DummyRemote`、`socket=0`、`sdkDummy=true`、`DummyPayment`、`isFullPackage=true`、`WorldFlipper/dummy/download` 和 `WorldFlipper/save_haxe` 读写链路；不得调用 `client-patch/repoint-apk/`、v2 RealRemote/LAN 或任何伴随服务。
 - APK 只允许主 SWF、ZIP 容器布局、对齐结果和顶层签名条目变化；package/version/label、AndroidManifest、DEX、native libraries、AIR wrapper 以及所有非目标 APK member 的内容字节必须保持基线一致。
@@ -1032,7 +1032,7 @@ The implementation stages each replacement into a new SWF, reopens it, verifies 
 Run:
 
 ```powershell
-python -X utf8 client-patch/offline-android/lock_discovery.py discover --source-apk "C:\Users\12101\Downloads\base.apk.1" --expected-apk-sha256 4f6884f33641788108c0522c7c70036c63ba530e1fdb183105b3cd395bdd66f6 --after-stage abyss --output work/offline-lock-review-1.4.196.json
+python -X utf8 client-patch/offline-android/lock_discovery.py discover --source-apk "$env:USERPROFILE\Downloads\base.apk.1" --expected-apk-sha256 4f6884f33641788108c0522c7c70036c63ba530e1fdb183105b3cd395bdd66f6 --after-stage abyss --output work/offline-lock-review-1.4.196.json
 ```
 
 Expected: stable JSON with `status="candidate"`, `stage="post-abyss"`, `site_count=9`, exact base hashes, seven unchanged semantic sites, and two base-specific candidates for `BattleCharacterLogic/resolvePathCollection` and `getPowerFlipAction`. It must not edit `base-lock.json`.

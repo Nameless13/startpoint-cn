@@ -35,7 +35,7 @@
 
 输入 APK 为：
 
-    C:\Users\12101\Downloads\base.apk.1
+    %USERPROFILE%\Downloads\base.apk.1
 
 它已经具备完整离线运行链路：
 
