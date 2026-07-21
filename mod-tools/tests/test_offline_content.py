@@ -285,6 +285,407 @@ class OfflineContentTests(unittest.TestCase):
         )
         self.add_file(self.roots.common, logical, core.build_orderedmap_raw_rows(ordered))
 
+    def install_published_character_snapshot(
+        self, spec: object,
+    ) -> None:
+        """Install one complete staged-only Stella/Gerald release fixture."""
+
+        def nested(mapping: dict[str, str | bytes], label: str) -> bytes:
+            rows = [
+                value if isinstance(value, bytes) else zlib.compress(value.encode("utf-8"))
+                for value in mapping.values()
+            ]
+            return core.build_orderedmap_raw_rows(
+                core.OrderedMap(label, list(mapping), rows, Path("[fixture]"))
+            )
+
+        identity = (spec.character_id, spec.code_name)
+        for logical in sorted(self.module._required_37_logicals(spec.code_name)):
+            root = getattr(self.roots, self.module.expected_root_for_logical(logical))
+            self.add_file(root, logical, f"published:{logical}".encode())
+
+        character = [""] * 37
+        character[0] = spec.code_name
+        character[2] = "5"
+        character[3] = "1"
+        character[8] = spec.code_name
+        character[17] = str(spec.character_id)
+        character[19:25] = [f"{spec.character_id}{index}" for index in range(1, 7)]
+        character[27] = str(spec.character_id)
+        self.add_ordered(
+            self.module.CHARACTER_MASTER_LOGICAL,
+            {str(spec.character_id): core.write_csv_lines([character])},
+        )
+
+        ability_values: dict[str, str] = {}
+        for index, row_count in enumerate(
+            self.module.WORKSPACE_ABILITY_ROW_COUNTS[identity], 1
+        ):
+            rows = [[f"ability-{index}", *([""] * 125)] for _ in range(row_count)]
+            if identity == (149999, "white_wolf_gerald") and index == 5:
+                rows[0][71] = self.module.WORKSPACE_ABILITY_PROGRAMS[identity][0]
+            ability_values[f"{spec.character_id}{index}"] = core.write_csv_lines(rows)
+        self.add_ordered(self.module.ABILITY_MASTER_LOGICAL, ability_values)
+        leader_rows = [
+            [f"leader-{index}", *([""] * 123)]
+            for index in range(self.module.WORKSPACE_LEADER_ROW_COUNTS[identity])
+        ]
+        if identity == (149999, "white_wolf_gerald"):
+            leader_rows[6][80] = self.module.GERALD_UNCLAIMED_POWER_FLIP_KEY
+        self.add_ordered(
+            self.module.LEADER_ABILITY_MASTER_LOGICAL,
+            {str(spec.character_id): core.write_csv_lines(leader_rows)},
+        )
+
+        action_values: dict[str, str] = {}
+        for inner_key, program in zip(
+            ("1", "2"), self.module.WORKSPACE_ACTION_PROGRAMS[identity]
+        ):
+            row = [""] * 24
+            row[0] = f"skill-{inner_key}"
+            row[7] = program
+            action_values[inner_key] = core.write_csv_lines([row])
+        self.add_file(
+            self.roots.common,
+            self.module.ACTION_SKILL_MASTER_LOGICAL,
+            nested({spec.code_name: nested(action_values, "action-inner")}, "action"),
+        )
+
+        def install_program(program: str) -> None:
+            effects = self.module.WORKSPACE_PROGRAM_EFFECTS[program]
+            dsl_raw = wf_dsl.encode_amf3(sorted(effects))
+            compressor = zlib.compressobj(9, zlib.DEFLATED, -15)
+            self.add_file(
+                self.roots.common,
+                wf_dsl.dsl_logical(program),
+                compressor.compress(dsl_raw) + compressor.flush(),
+            )
+            for effect in effects:
+                reference = MasterAssetReference("skill_effect", effect, "fixture")
+                for logical in required_asset_paths(reference):
+                    root = getattr(
+                        self.roots, self.module.expected_root_for_logical(logical)
+                    )
+                    self.add_file(root, logical, f"effect:{logical}".encode())
+
+        for program in (
+            *self.module.WORKSPACE_ACTION_PROGRAMS[identity],
+            *self.module.WORKSPACE_ABILITY_PROGRAMS[identity],
+        ):
+            install_program(program)
+
+        character_key = str(spec.character_id)
+        flat_values = {
+            self.module.CHARACTER_SPEECH_MASTER_LOGICAL: {
+                character_key: "speech"
+            },
+            self.module.CHARACTER_TEXT_MASTER_LOGICAL: {
+                character_key: core.write_csv_lines([[spec.code_name, "text", "desc", "title"]])
+            },
+            self.module.MANA_BOARD2_OPEN_MASTER_LOGICAL: {
+                character_key: "open"
+            },
+        }
+        raw_outer_logicals = {
+            self.module.CHARACTER_STATUS_MASTER_LOGICAL,
+            self.module.FULL_SHOT_ATTRIBUTE_MASTER_LOGICAL,
+            self.module.CHARACTER_IMAGE_MASTER_LOGICAL,
+            self.module.GENERATED_MANA_BOARD_MASTER_LOGICAL,
+            self.module.MANA_NODE_MASTER_LOGICAL,
+        }
+        if identity == (139999, "stella_summer_goddess"):
+            flat_values.update({
+                self.module.SKILL_PREVIEW_CHARACTER_MASTER_LOGICAL: {
+                    character_key: "preview"
+                },
+                self.module.CHARACTER_STANCE_DETAIL_MASTER_LOGICAL: {
+                    character_key: "stance"
+                },
+            })
+            raw_outer_logicals.add(self.module.CHARACTER_GACHA_SOUND_MASTER_LOGICAL)
+        else:
+            trimmed = {
+                f"character/{spec.code_name}/ui/{name}": "1,2,3,4"
+                for name in (
+                    "full_shot_1440_1920_0", "full_shot_1440_1920_1",
+                    "skill_cutin_0", "skill_cutin_1",
+                )
+            }
+            flat_values.update({
+                self.module.SKILL_PREVIEW_CHARACTER_MASTER_LOGICAL: {
+                    character_key: "preview"
+                },
+                self.module.UPSKILL_MASTER_LOGICAL: {character_key: "upskill"},
+                self.module.CHARACTER_STANCE_DETAIL_MASTER_LOGICAL: {
+                    character_key: "stance"
+                },
+                self.module.TRIMMED_IMAGE_MASTER_LOGICAL: trimmed,
+                self.module.CUSTOM_ABILITY_STRING_MASTER_LOGICAL: {
+                    "ability_skill_white_wolf_moon_fang": "Moon Fang"
+                },
+            })
+            raw_outer_logicals.add(self.module.CHARACTER_GACHA_SOUND_MASTER_LOGICAL)
+            self.add_ordered(
+                self.module.POWER_FLIP_ACTION_MASTER_LOGICAL,
+                {
+                    self.module.GERALD_UNCLAIMED_POWER_FLIP_KEY:
+                        core.write_csv_lines([list(self.module.GERALD_POWER_FLIP_PROGRAMS)])
+                },
+            )
+            for program in self.module.GERALD_POWER_FLIP_PROGRAMS:
+                install_program(program)
+
+        for logical, values in flat_values.items():
+            self.add_ordered(logical, values)
+        for logical in raw_outer_logicals:
+            self.add_file(
+                self.roots.common,
+                logical,
+                nested({character_key: nested({"1": "value"}, f"{logical}-inner")}, logical),
+            )
+
+    def validate_one_published_character(self, spec: object):
+        module = self.module
+
+        class Rogue:
+            ready = True
+
+        saved = {name: getattr(module, name) for name in (
+            "CHARACTERS", "validate_rogue_data", "verify_player_1000_snapshot",
+            "verify_player_1000_equipment_snapshot", "_load_current_server_assets",
+            "_bind_current_server_character", "load_workspace", "inspect_workspace",
+            "_workspace_identity_hint",
+        )}
+        self.addCleanup(
+            lambda: [setattr(module, name, value) for name, value in saved.items()]
+        )
+        module.CHARACTERS = (spec,)
+        module.validate_rogue_data = lambda *_args: Rogue()
+        module.verify_player_1000_snapshot = lambda *_args: None
+        module.verify_player_1000_equipment_snapshot = lambda *_args: None
+        module._load_current_server_assets = lambda *_args: object()
+        module._bind_current_server_character = (
+            lambda _spec, report, *_args, **_kwargs: report
+        )
+
+        def forbidden_workspace(*_args, **_kwargs):
+            raise AssertionError("published snapshot consulted a workspace")
+
+        module.load_workspace = forbidden_workspace
+        module.inspect_workspace = forbidden_workspace
+        module._workspace_identity_hint = forbidden_workspace
+        return module.validate_offline_content(
+            self.roots,
+            workspace_sources=None,
+            phase4_asset_logicals=self.phase4,
+            assets_dir=Path(self.temp.name),
+        )
+
+    def test_stella_published_snapshot_is_workspace_free_and_release_ready(self) -> None:
+        spec = self.module.CharacterReleaseSpec(139999, "stella_summer_goddess")
+        self.install_published_character_snapshot(spec)
+        result = self.validate_one_published_character(spec)
+        self.assertTrue(result.ready)
+        self.assertEqual(1, len(result.characters))
+        report = result.characters[0]
+        self.assertEqual("published-snapshot", report.evidence_mode)
+        self.assertEqual((37, 37), (report.required_present, report.required_total))
+        self.assertTrue(report.three_layer_consistent)
+        self.assertEqual(report.seal_sha256, self.module.sha256_canonical_report(report))
+
+    def test_gerald_published_snapshot_is_workspace_free_and_release_ready(self) -> None:
+        spec = self.module.CharacterReleaseSpec(149999, "white_wolf_gerald")
+        self.install_published_character_snapshot(spec)
+        result = self.validate_one_published_character(spec)
+        self.assertTrue(result.ready)
+        self.assertEqual(1, len(result.characters))
+        report = result.characters[0]
+        self.assertEqual("published-snapshot", report.evidence_mode)
+        self.assertEqual((37, 37), (report.required_present, report.required_total))
+        self.assertTrue(report.three_layer_consistent)
+        self.assertEqual(report.seal_sha256, self.module.sha256_canonical_report(report))
+
+    def test_gerald_leader_power_flip_key_requires_exact_row_6_column_80(self) -> None:
+        spec = self.module.CharacterReleaseSpec(149999, "white_wolf_gerald")
+        self.install_published_character_snapshot(spec)
+
+        def replace_leader(location: tuple[int, int] | None) -> None:
+            rows = [
+                [f"leader-{index}", *([""] * 123)]
+                for index in range(self.module.WORKSPACE_LEADER_ROW_COUNTS[
+                    (spec.character_id, spec.code_name)
+                ])
+            ]
+            if location is not None:
+                row_index, column = location
+                rows[row_index][column] = self.module.GERALD_UNCLAIMED_POWER_FLIP_KEY
+            self.add_ordered(
+                self.module.LEADER_ABILITY_MASTER_LOGICAL,
+                {str(spec.character_id): core.write_csv_lines(rows)},
+            )
+
+        for label, location in (
+            ("missing", None),
+            ("wrong-row", (5, 80)),
+            ("wrong-column", (6, 79)),
+        ):
+            with self.subTest(case=label):
+                replace_leader(location)
+                with self.assertRaisesRegex(
+                    self.module.ContentGateError,
+                    "leader power-flip location mismatch",
+                ):
+                    self.module.verify_character_release(
+                        spec, self.roots, workspace_source=None,
+                        phase4_asset_logicals=self.phase4,
+                    )
+
+    def test_explicit_workspace_mapping_requires_exact_three_character_keyset(self) -> None:
+        expected = {spec.code_name for spec in self.module.CHARACTERS}
+        valid = {name: Path(self.temp.name) / name for name in expected}
+        invalid = (
+            {},
+            {"stella_summer_goddess": valid["stella_summer_goddess"]},
+            {**valid, "unexpected_character": Path(self.temp.name) / "unexpected"},
+            {
+                key if key != "white_wolf_gerald" else "white_wolf_gerlad": value
+                for key, value in valid.items()
+            },
+        )
+        original = self.module.validate_rogue_data
+        self.addCleanup(setattr, self.module, "validate_rogue_data", original)
+
+        def forbidden_live_gate(*_args, **_kwargs):
+            raise AssertionError("invalid workspace mapping reached content reads")
+
+        self.module.validate_rogue_data = forbidden_live_gate
+        for mapping in invalid:
+            with self.subTest(keys=sorted(mapping)):
+                with self.assertRaisesRegex(
+                    self.module.ContentGateError,
+                    "workspace source keys must be exactly",
+                ):
+                    self.module.validate_offline_content(
+                        self.roots,
+                        workspace_sources=mapping,
+                        phase4_asset_logicals=self.phase4,
+                        assets_dir=Path(self.temp.name),
+                    )
+        invalid_value = dict(valid)
+        invalid_value["stella_summer_goddess"] = None
+        with self.assertRaisesRegex(
+            self.module.ContentGateError,
+            "workspace source path is invalid",
+        ):
+            self.module.validate_offline_content(
+                self.roots,
+                workspace_sources=invalid_value,
+                phase4_asset_logicals=self.phase4,
+                assets_dir=Path(self.temp.name),
+            )
+
+    def test_published_snapshot_still_rejects_missing_and_wrong_root_assets(self) -> None:
+        spec = self.module.CharacterReleaseSpec(139999, "stella_summer_goddess")
+        self.install_published_character_snapshot(spec)
+        required = sorted(self.module._required_37_logicals(spec.code_name))
+        missing = required[0]
+        missing_root = getattr(self.roots, self.module.expected_root_for_logical(missing))
+        (missing_root / self.module.hashed_rel(missing)).unlink()
+        with self.assertRaisesRegex(self.module.ContentGateError, "missing logical"):
+            self.module.verify_character_release(
+                spec, self.roots, workspace_source=None,
+                phase4_asset_logicals=self.phase4,
+            )
+
+        self.add_file(missing_root, missing, b"restored")
+        wrong = next(
+            logical for logical in required
+            if self.module.expected_root_for_logical(logical) == "medium"
+        )
+        right_path = self.roots.medium / self.module.hashed_rel(wrong)
+        raw = right_path.read_bytes()
+        right_path.unlink()
+        self.add_file(self.roots.common, wrong, raw)
+        with self.assertRaisesRegex(self.module.ContentGateError, "root ownership mismatch"):
+            self.module.verify_character_release(
+                spec, self.roots, workspace_source=None,
+                phase4_asset_logicals=self.phase4,
+            )
+
+    def test_published_snapshot_rejects_hash_drift_before_seal(self) -> None:
+        spec = self.module.CharacterReleaseSpec(149999, "white_wolf_gerald")
+        self.install_published_character_snapshot(spec)
+        target = sorted(self.module._required_37_logicals(spec.code_name))[0]
+        target_root = getattr(self.roots, self.module.expected_root_for_logical(target))
+        target_path = target_root / self.module.hashed_rel(target)
+        original = self.module._read_file_bytes
+        calls = 0
+
+        def mutate_after_capture(root, logical, root_name):
+            nonlocal calls
+            result = original(root, logical, root_name)
+            if logical == target:
+                calls += 1
+                if calls == 1:
+                    target_path.write_bytes(result[1] + b"-tampered")
+            return result
+
+        self.module._read_file_bytes = mutate_after_capture
+        self.addCleanup(setattr, self.module, "_read_file_bytes", original)
+        with self.assertRaisesRegex(
+            self.module.ContentGateError,
+            "bytes changed after capture|metadata changed after capture",
+        ):
+            self.module.verify_character_release(
+                spec, self.roots, workspace_source=None,
+                phase4_asset_logicals=self.phase4,
+            )
+
+    def test_present_workspace_manifest_hash_or_seal_failure_never_falls_back(self) -> None:
+        original_verify = self.module.verify_character_workspace_report
+        original_published = self.module.build_published_snapshot_evidence
+        self.addCleanup(
+            setattr, self.module, "verify_character_workspace_report", original_verify
+        )
+        self.addCleanup(
+            setattr, self.module, "build_published_snapshot_evidence", original_published
+        )
+
+        def forbidden_published(*_args, **_kwargs):
+            raise AssertionError("invalid workspace silently fell back to snapshot evidence")
+
+        self.module.build_published_snapshot_evidence = forbidden_published
+        for spec, error in (
+            (
+                self.module.CharacterReleaseSpec(139999, "stella_summer_goddess"),
+                "workspace server claim hash/size mismatch",
+            ),
+            (
+                self.module.CharacterReleaseSpec(149999, "white_wolf_gerald"),
+                "workspace manifest seal drift",
+            ),
+        ):
+            with self.subTest(spec=spec.code_name, error=error):
+                source = Path(self.temp.name) / f"workspace-{spec.code_name}"
+                source.mkdir()
+                (source / "workspace.json").write_text(
+                    json.dumps({
+                        "character_id": spec.character_id,
+                        "code_name": spec.code_name,
+                    }),
+                    encoding="utf-8",
+                )
+
+                def reject(*_args, _error=error, **_kwargs):
+                    raise self.module.ContentGateError(_error)
+
+                self.module.verify_character_workspace_report = reject
+                with self.assertRaisesRegex(self.module.ContentGateError, error):
+                    self.module.verify_character_release(
+                        spec, self.roots, workspace_source=source,
+                        phase4_asset_logicals=self.phase4,
+                    )
+
     def write_current_server_assets(self) -> Path:
         assets = Path(self.temp.name) / "current-assets"
         client_row = self.module._character_csv_row(self.roots, self.spec)
@@ -1267,14 +1668,16 @@ class OfflineContentTests(unittest.TestCase):
                 ][0]
             ability_values[f"{spec.character_id}{index}"] = core.write_csv_lines(rows)
         self.add_ordered(self.module.ABILITY_MASTER_LOGICAL, ability_values)
+        leader_rows = [
+            ["leader", *([""] * 123)]
+            for _ in range(self.module.WORKSPACE_LEADER_ROW_COUNTS[
+                (spec.character_id, spec.code_name)
+            ])
+        ]
+        leader_rows[6][80] = self.module.GERALD_UNCLAIMED_POWER_FLIP_KEY
         self.add_ordered(
             self.module.LEADER_ABILITY_MASTER_LOGICAL,
-            {str(spec.character_id): core.write_csv_lines([
-                ["leader", *([""] * 123)]
-                for _ in range(self.module.WORKSPACE_LEADER_ROW_COUNTS[
-                    (spec.character_id, spec.code_name)
-                ])
-            ])},
+            {str(spec.character_id): core.write_csv_lines(leader_rows)},
         )
         action_values: dict[str, str] = {}
         for inner_key, program in zip(

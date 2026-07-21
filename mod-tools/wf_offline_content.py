@@ -153,6 +153,7 @@ SERIS_EFFECT_BASES = frozenset({
     "battle/effect/skill_unique/seris_dragon_frozen_thunder_breath/seris_dragon_frozen_thunder_breath",
 })
 GERALD_UNCLAIMED_POWER_FLIP_KEY = "white_wolf_gerald_pf"
+GERALD_LEADER_POWER_FLIP_LOCATION = (6, 80)
 GERALD_POWER_FLIP_PROGRAMS = tuple(
     f"battle/action/power_flip/action/override/white_wolf_gerald_pf$white_wolf_gerald_pf_lv{level}"
     for level in range(1, 4)
@@ -1287,6 +1288,19 @@ def _bind_workspace_master_reference_closure(
             f"character {spec.character_id} leader row shape mismatch: "
             f"expected {expected_leader_count}x124"
         )
+    if identity == (149999, "white_wolf_gerald"):
+        actual_locations = tuple(
+            (row_index, column)
+            for row_index, row in enumerate(decoded_leader_rows)
+            for column, value in enumerate(row)
+            if value == GERALD_UNCLAIMED_POWER_FLIP_KEY
+        )
+        if actual_locations != (GERALD_LEADER_POWER_FLIP_LOCATION,):
+            raise ContentGateError(
+                f"Gerald leader power-flip location mismatch: "
+                f"expected={(GERALD_LEADER_POWER_FLIP_LOCATION,)!r} "
+                f"actual={actual_locations!r}"
+            )
     flat_tables[LEADER_ABILITY_MASTER_LOGICAL][leader_key] = leader_text
 
     action_rows = evidence.ordered(ACTION_SKILL_MASTER_LOGICAL)
@@ -1481,7 +1495,7 @@ def build_published_snapshot_evidence(
     phase4_asset_logicals: Collection[str],
     _evidence: _SnapshotEvidence | None = None,
 ) -> CharacterEvidenceReport:
-    """Produce equivalent byte-bound evidence without reading a stale workspace."""
+    """Produce equivalent byte-bound evidence without reading any workspace."""
     evidence = _evidence or _SnapshotEvidence(snapshot)
     required37 = _required_37_logicals(spec.code_name)
     if len(required37) != 37:
@@ -1496,8 +1510,9 @@ def build_published_snapshot_evidence(
                 f"root ownership mismatch for {logical}: expected {expected_root}, actual {actual_root}"
             )
         bound.append(entry)
-    bound.extend(_bind_seris_phase4_snapshot(snapshot, phase4_asset_logicals, evidence))
-    bound.extend(_bind_seris_published_closure(snapshot, spec, evidence))
+    if (spec.character_id, spec.code_name) == (129999, "seris_dragon_king"):
+        bound.extend(_bind_seris_phase4_snapshot(snapshot, phase4_asset_logicals, evidence))
+    bound.extend(_bind_published_character_contract(snapshot, spec, evidence))
     evidence.audit()
     deduplicated = {
         (entry.source, entry.path): entry for entry in bound
@@ -1657,8 +1672,13 @@ def _workspace_validate_claim_rows(
 def _bind_gerald_unclaimed_power_flip(
     evidence: _SnapshotEvidence,
     root_claims: Mapping[str, set[str]],
-) -> None:
+) -> tuple[ManifestEntry, ...]:
     logical = POWER_FLIP_ACTION_MASTER_LOGICAL
+    if logical not in root_claims.get("common", set()):
+        raise ContentGateError("Gerald power-flip master root claim is missing")
+    bound: dict[tuple[str, str], ManifestEntry] = {}
+    master_entry, _master_raw = evidence.read_root("common", logical)
+    bound[(master_entry.source, master_entry.path)] = master_entry
     rows = evidence.ordered(logical)
     raw = rows.get(GERALD_UNCLAIMED_POWER_FLIP_KEY)
     if raw is None:
@@ -1687,6 +1707,7 @@ def _bind_gerald_unclaimed_power_flip(
         entry, compressed = evidence.resolve(dsl_logical)
         if entry.source != "snapshot:common":
             raise ContentGateError(f"Gerald power-flip DSL root mismatch: {dsl_logical}")
+        bound[(entry.source, entry.path)] = entry
         try:
             parsed_dsl = wf_dsl.parse_dsl(zlib.decompress(compressed, -15))
             tree = parsed_dsl["tree"]
@@ -1722,6 +1743,65 @@ def _bind_gerald_unclaimed_power_flip(
                 raise ContentGateError(
                     f"Gerald power-flip referenced asset is unreadable: {referenced_logical}"
                 )
+            bound[(entry.source, entry.path)] = entry
+    return tuple(bound[key] for key in sorted(bound))
+
+
+def _gerald_published_root_claims() -> dict[str, set[str]]:
+    """Derive Gerald's sanctioned PF closure without consulting a manifest."""
+    claims = {root_name: set() for root_name in _ROOTS}
+    claims["common"].add(POWER_FLIP_ACTION_MASTER_LOGICAL)
+    for program in GERALD_POWER_FLIP_PROGRAMS:
+        claims["common"].add(_require_logical(wf_dsl.dsl_logical(program)))
+        for effect in WORKSPACE_PROGRAM_EFFECTS[program]:
+            reference = MasterAssetReference("skill_effect", effect, "published Gerald PF")
+            for logical in required_asset_paths(reference):
+                logical = _require_logical(logical)
+                claims[expected_root_for_logical(logical)].add(logical)
+    return claims
+
+
+def _bind_published_character_contract(
+    snapshot: StoreRoots,
+    spec: CharacterReleaseSpec,
+    evidence: _SnapshotEvidence,
+) -> tuple[ManifestEntry, ...]:
+    """Bind the sealed-workspace master contract from staged bytes alone."""
+    if (spec.character_id, spec.code_name) == (129999, "seris_dragon_king"):
+        return _bind_seris_published_closure(snapshot, spec, evidence)
+
+    bound: dict[tuple[str, str], ManifestEntry] = {}
+    for contract in _workspace_master_contracts(spec):
+        entry, _raw = evidence.read_root("common", contract.logical_path)
+        rows = evidence.ordered(contract.logical_path)
+        for outer_key in contract.outer_keys:
+            if outer_key not in rows:
+                raise ContentGateError(
+                    f"published character table contract missing outer key: "
+                    f"common:{contract.logical_path}:{outer_key}"
+                )
+        inner_claims = dict(contract.inner_keys)
+        _workspace_validate_claim_rows(
+            logical=contract.logical_path,
+            codec_id=contract.codec_id,
+            rows=rows,
+            outer_keys=contract.outer_keys,
+            inner_claims=inner_claims,
+        )
+        bound[(entry.source, entry.path)] = entry
+
+    reference_entries = _bind_workspace_master_reference_closure(
+        snapshot, spec, evidence
+    )
+    for entry in reference_entries:
+        bound[(entry.source, entry.path)] = entry
+
+    if (spec.character_id, spec.code_name) == (149999, "white_wolf_gerald"):
+        for entry in _bind_gerald_unclaimed_power_flip(
+            evidence, _gerald_published_root_claims()
+        ):
+            bound[(entry.source, entry.path)] = entry
+    return tuple(bound[key] for key in sorted(bound))
 
 
 def _verify_workspace_table_claims(
@@ -2756,15 +2836,13 @@ def verify_character_release(
     phase4_asset_logicals: Collection[str],
     _evidence: _SnapshotEvidence | None = None,
 ) -> CharacterEvidenceReport:
-    """Verify one character, using snapshot evidence only for known-bad Seris."""
+    """Verify one character from a supplied seal or the frozen snapshot."""
     evidence = _evidence or _SnapshotEvidence(snapshot)
     if workspace_source is None:
-        if spec.character_id == 129999:
-            return build_published_snapshot_evidence(
-                spec, snapshot, phase4_asset_logicals=phase4_asset_logicals,
-                _evidence=evidence,
-            )
-        raise ContentGateError(f"missing sealed workspace evidence for {spec.code_name}")
+        return build_published_snapshot_evidence(
+            spec, snapshot, phase4_asset_logicals=phase4_asset_logicals,
+            _evidence=evidence,
+        )
     identity = _workspace_identity_hint(workspace_source)
     if identity != (spec.character_id, spec.code_name):
         if spec.character_id == 129999 and identity == (139999, "stella_summer_goddess"):
@@ -2815,13 +2893,40 @@ def validate_offline_content(
     client_report: Path | None = None,
 ) -> OfflineContentReport:
     """Validate all offline-only release content without consulting live state."""
+    if workspace_sources is None:
+        sources: dict[str, Path] = {}
+    else:
+        if not isinstance(workspace_sources, Mapping):
+            raise ContentGateError("workspace source keys must be exactly the three release characters")
+        expected_keys = {spec.code_name for spec in CHARACTERS}
+        actual_keys = set(workspace_sources)
+        if (
+            any(not isinstance(key, str) for key in actual_keys)
+            or actual_keys != expected_keys
+        ):
+            missing = sorted(expected_keys - {key for key in actual_keys if isinstance(key, str)})
+            unexpected = sorted(
+                repr(key) for key in actual_keys
+                if not isinstance(key, str) or key not in expected_keys
+            )
+            raise ContentGateError(
+                f"workspace source keys must be exactly {sorted(expected_keys)!r}: "
+                f"missing={missing!r} unexpected={unexpected!r}"
+            )
+        sources = {}
+        for code_name in sorted(expected_keys):
+            try:
+                sources[code_name] = Path(workspace_sources[code_name])
+            except (TypeError, ValueError) as exc:
+                raise ContentGateError(
+                    f"workspace source path is invalid for {code_name}"
+                ) from exc
     rogue = validate_rogue_data(staged_roots.common, assets_dir)
     verify_player_1000_snapshot(staged_roots)
     verify_player_1000_equipment_snapshot(staged_roots)
     snapshot_evidence = _SnapshotEvidence(staged_roots)
     current_server = _load_current_server_assets(assets_dir)
     evidence: list[CharacterEvidenceReport] = []
-    sources = workspace_sources or {}
     for spec in CHARACTERS:
         character_report = verify_character_release(
             spec, staged_roots, workspace_source=sources.get(spec.code_name),
