@@ -397,6 +397,53 @@ class TestPendingCompatibility(PublisherCase):
                 archive.read(f"production/medium_upload/{medium_relative}"),
             )
 
+    def test_pending_list_is_cleared_after_a_successful_publish(self):
+        logical = "master/test/pending.orderedmap"
+        relative = self.write_logical(logical, b"pending-bytes")
+        self.pending.write_text(json.dumps([relative]), encoding="utf-8")
+
+        result, stdout, _stderr = self.run_publish([])
+
+        self.assertEqual(0, result)
+        self.assertIn("[OK]", stdout)
+        self.assertIn("pending 列表已清空", stdout)
+        self.assertEqual([], json.loads(self.pending.read_text(encoding="utf-8")))
+
+    def test_pending_list_survives_a_failed_publish(self):
+        logical = "master/test/pending.orderedmap"
+        relative = self.write_logical(logical, b"pending-bytes")
+        self.pending.write_text(json.dumps([relative]), encoding="utf-8")
+
+        with mock.patch.object(
+            wf_publish.zipfile,
+            "ZipFile",
+            side_effect=RuntimeError("fixture zip failure"),
+        ):
+            result, stdout, _stderr = self.run_publish([])
+
+        self.assertNotEqual(0, result)
+        self.assertNotIn("[OK]", stdout)
+        self.assertEqual([], self.archives())
+        self.assertEqual(
+            [relative], json.loads(self.pending.read_text(encoding="utf-8"))
+        )
+
+    def test_explicit_tables_publish_leaves_pending_untouched(self):
+        """--tables 直发不碰 pending:清空只对 pending 来源生效(GUI 走逐表移除)。"""
+        published = "master/test/published.orderedmap"
+        self.write_logical(published, b"explicit-bytes")
+        unrelated = "aa/unrelated-pending-entry"
+        self.pending.write_text(json.dumps([unrelated]), encoding="utf-8")
+
+        result, stdout, _stderr = self.run_publish(["--tables", published])
+
+        self.assertEqual(0, result)
+        self.assertIn("[OK]", stdout)
+        self.assertNotIn("pending 列表已清空", stdout)
+        self.assertEqual(
+            [unrelated], json.loads(self.pending.read_text(encoding="utf-8"))
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -530,13 +530,14 @@ def main(argv: list[str] | None = None) -> int:
             f"改动日志: {stamped} 条标记为 {to_ver},"
             "已公布 changelog.md (work/ + CDN)。"
         )
-    return 0
 
     # 发布来源=pending 时自动清空(与 GUI run_publish 语义对齐;CLI 直跑曾留残留,
-    # 下次发布会把已发文件重复打进 diff——无害但包变大、日志变噪)
+    # 下次发布会把已发文件重复打进 diff——无害但包变大、日志变噪)。
+    # 必须留在 main 末尾:所有失败路径都在此之前 return 1,走到这里=发布已提交。
     if not args.tables and PENDING.exists():
         PENDING.write_text("[]", encoding="utf-8")
         print("pending 列表已清空。")
+    return 0
 
 
 if __name__ == "__main__":
