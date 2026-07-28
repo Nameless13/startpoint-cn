@@ -10,6 +10,7 @@ import json
 import os
 import re
 import stat
+import sys
 import zipfile
 from collections.abc import Collection, Mapping
 from dataclasses import dataclass
@@ -126,6 +127,17 @@ def _is_reparse(metadata: object) -> bool:
     if stat.S_ISLNK(int(getattr(metadata, "st_mode"))):
         return True
     return bool(int(getattr(metadata, "st_file_attributes", 0)) & REPARSE_ATTRIBUTE)
+
+
+def _file_id_stat_identity(volume_serial: int, file_id: int) -> tuple[int, int]:
+    """Truncate FILE_ID_INFO identity to the width this Python's os.stat reports.
+
+    Before 3.12, Windows os.stat fills st_dev/st_ino from GetFileInformationByHandle
+    (32-bit volume serial, 64-bit file index) — the low halves of FILE_ID_INFO.
+    """
+    if os.name == "nt" and sys.version_info < (3, 12):
+        return (volume_serial & 0xFFFF_FFFF, file_id & 0xFFFF_FFFF_FFFF_FFFF)
+    return (volume_serial, file_id)
 
 
 def _stat_signature(metadata: object) -> tuple[int, ...]:
@@ -289,7 +301,7 @@ def _windows_directory_guard(
                 f"cannot inspect guarded Windows {kind}: {path}: "
                 f"WinError {ctypes.get_last_error()}"
             )
-        opened_identity = (
+        opened_identity = _file_id_stat_identity(
             int(info.volume_serial),
             int.from_bytes(bytes(info.file_id), "little"),
         )

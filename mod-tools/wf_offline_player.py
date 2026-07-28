@@ -225,7 +225,7 @@ def _windows_transaction_guard(parent: Path, expected_signature: tuple[int, ...]
                 f"cannot inspect guarded Windows target parent: {parent}: "
                 f"WinError {ctypes.get_last_error()}"
             )
-        opened_identity = (
+        opened_identity = store._file_id_stat_identity(
             int(info.volume_serial), int.from_bytes(bytes(info.file_id), "little")
         )
         if opened_identity != (expected_signature[0], expected_signature[1]):
@@ -270,7 +270,9 @@ def _windows_file_id(handle: int) -> tuple[int, int]:
             ctypes.get_last_error(),
             f"cannot inspect owned temporary FileId: WinError {ctypes.get_last_error()}",
         )
-    return int(info.volume_serial), int.from_bytes(bytes(info.file_id), "little")
+    return store._file_id_stat_identity(
+        int(info.volume_serial), int.from_bytes(bytes(info.file_id), "little")
+    )
 
 
 def _close_windows_handle(handle: int | None, *, strict: bool = False) -> None:
