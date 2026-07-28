@@ -51,8 +51,8 @@ class FakeAdbRunner:
         package_line: str | None = None,
         activity: str = "com.leiting.wf/com.leiting.sdk.activity.PrivacyActivity",
         airplane_mode: str = "1",
-        wifi: str = "Wifi is disabled",
-        mobile: str = "Data service is disabled",
+        wifi: str = "0",
+        mobile: str = "0",
         ipv4_default_route: str = "",
         ipv6_default_route: str = "",
         active_network: str = "null",
@@ -101,9 +101,9 @@ class FakeAdbRunner:
             return self.activity + "\n"
         if args == ("shell", "settings", "get", "global", "airplane_mode_on"):
             return self.airplane_mode + "\n"
-        if args == ("shell", "cmd", "wifi", "status"):
+        if args == ("shell", "settings", "get", "global", "wifi_on"):
             return self.wifi + "\n"
-        if args == ("shell", "svc", "data", "status"):
+        if args == ("shell", "settings", "get", "global", "mobile_data"):
             return self.mobile + "\n"
         if args == ("shell", "ip", "-4", "route", "show", "default"):
             return self.ipv4_default_route
@@ -113,10 +113,19 @@ class FakeAdbRunner:
             return self.active_network
         if args == ("shell", "cat", "/proc/net/tcp", "/proc/net/tcp6"):
             return self.proc_tcp
-        if args[:3] == ("shell", "sh", "-c") and len(args) == 4:
-            if "/WorldFlipper/save_haxe" in args[3]:
+        if args[:4] == ("shell", "if", "[", "-e") and args[5:] == (
+            "];",
+            "then",
+            "printf",
+            "1;",
+            "else",
+            "printf",
+            "0;",
+            "fi",
+        ):
+            if args[4] == "/sdcard/WorldFlipper/save_haxe":
                 return "1\n" if self.save_haxe else "0\n"
-            if "/WorldFlipper/dummy" in args[3]:
+            if args[4] == "/sdcard/WorldFlipper/dummy":
                 return "1\n" if self.dummy_data else "0\n"
         if args == ("logcat", "-d", "-v", "brief"):
             return self.logcat
@@ -213,6 +222,56 @@ class OfflineDeviceTests(unittest.TestCase):
         self.assertEqual(len(report.serial_digest), 64)
         self.assertNotIn(self.serial, report.serial_digest)
 
+    def test_probe_uses_android_15_mobile_data_setting_read_only(self) -> None:
+        runner = self.runner(mobile="1")
+        report = module.probe_device(self.target, runner=runner)
+
+        self.assertFalse(report.mobile_disabled)
+        self.assertIn(
+            (self.serial, ("shell", "settings", "get", "global", "mobile_data")),
+            runner.calls,
+        )
+        self.assertNotIn(
+            (self.serial, ("shell", "svc", "data", "status")),
+            runner.calls,
+        )
+        self.assertEqual(runner.destructive_calls, [])
+
+    def test_probe_uses_android_15_wifi_setting_read_only(self) -> None:
+        runner = self.runner(wifi="1")
+        report = module.probe_device(self.target, runner=runner)
+
+        self.assertFalse(report.wifi_disabled)
+        self.assertIn(
+            (self.serial, ("shell", "settings", "get", "global", "wifi_on")),
+            runner.calls,
+        )
+        self.assertNotIn(
+            (self.serial, ("shell", "cmd", "wifi", "status")),
+            runner.calls,
+        )
+        self.assertEqual(runner.destructive_calls, [])
+
+    def test_probe_uses_remote_shell_directly_for_shared_path_checks(self) -> None:
+        runner = self.runner()
+        module.probe_device(self.target, runner=runner)
+
+        path_calls = [
+            command
+            for _, command in runner.calls
+            if command[:4] == ("shell", "if", "[", "-e")
+        ]
+        self.assertEqual(len(path_calls), 2)
+        self.assertEqual(
+            {command[4] for command in path_calls},
+            {
+                "/sdcard/WorldFlipper/save_haxe",
+                "/sdcard/WorldFlipper/dummy",
+            },
+        )
+        self.assertFalse(any(command[:3] == ("shell", "sh", "-c") for _, command in runner.calls))
+        self.assertEqual(runner.destructive_calls, [])
+
     def test_probe_rejects_no_multiple_and_wrong_serial_devices(self) -> None:
         cases = (
             ([], "exactly one"),
@@ -286,6 +345,20 @@ class OfflineDeviceTests(unittest.TestCase):
         self.assertTrue(report.save_haxe_present_before)
         self.assertTrue(report.dummy_data_present_before)
         self.assertEqual(len(report.fatal_log_lines), 2)
+
+    def test_probe_ignores_benign_android_runtime_startup_lines(self) -> None:
+        runner = self.runner(
+            logcat=(
+                "D/AndroidRuntime: >>>>>> START com.android.internal.os.ZygoteInit uid 0 <<<<<<\n"
+                "I/AndroidRuntime: Using default boot image\n"
+                "I/AndroidRuntime: Leaving lock profiling enabled\n"
+            )
+        )
+
+        report = module.probe_device(self.target, runner=runner)
+
+        self.assertEqual(report.fatal_log_lines, ())
+        self.assertEqual(runner.destructive_calls, [])
 
     def test_probe_is_read_only_and_never_clears_logcat_or_shared_storage(self) -> None:
         runner = self.runner()
@@ -462,8 +535,8 @@ class OfflineDeviceTests(unittest.TestCase):
     def test_prepare_requires_every_offline_probe_gate_before_first_mutation(self) -> None:
         cases = {
             "airplane": {"airplane_mode": "0"},
-            "wifi": {"wifi": "Wifi is enabled"},
-            "mobile": {"mobile": "Data service is enabled"},
+            "wifi": {"wifi": "1"},
+            "mobile": {"mobile": "1"},
             "route": {"ipv4_default_route": "default via 10.0.2.2 dev eth0\n"},
             "network": {"active_network": "Active default network: 101\n"},
             "companion": {

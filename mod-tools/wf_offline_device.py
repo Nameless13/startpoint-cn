@@ -65,7 +65,7 @@ _BUILD_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _WINDOWS_ABSOLUTE_RE = re.compile(r"^[A-Za-z]:[\\/]")
 _PROC_ENDPOINT_RE = re.compile(r"^[0-9A-Fa-f]+:([0-9A-Fa-f]{1,4})$")
 _FATAL_LOG_RE = re.compile(
-    r"fatal\s+exception|fatal\s+signal|androidruntime|\bam_crash\b|"
+    r"fatal\s+exception|fatal\s+signal|\bam_crash\b|"
     r"\bam_anr\b|\banr\s+in\s+com\.leiting\.wf\b|"
     r"process\s+com\.leiting\.wf\s+has\s+died|\bcrash(?:ed)?\b",
     re.IGNORECASE,
@@ -631,14 +631,22 @@ def _companion_ports_unused(value: str) -> bool:
 
 
 def _path_exists(target: DeviceTarget, runner: AdbRunner, path: str, *, label: str) -> bool:
-    script = f'if [ -e "{path}" ]; then printf 1; else printf 0; fi'
     _, output = _adb(
         runner,
         target.serial,
         "shell",
-        "sh",
-        "-c",
-        script,
+        "if",
+        "[",
+        "-e",
+        path,
+        "];",
+        "then",
+        "printf",
+        "1;",
+        "else",
+        "printf",
+        "0;",
+        "fi",
         label=label,
     )
     return _parse_binary_state(output, label=label)
@@ -677,18 +685,20 @@ def probe_device(target: DeviceTarget, *, runner: AdbRunner) -> DeviceProbeRepor
         runner,
         target.serial,
         "shell",
-        "cmd",
-        "wifi",
-        "status",
+        "settings",
+        "get",
+        "global",
+        "wifi_on",
         label="Wi-Fi query",
     )
     _, mobile = _adb(
         runner,
         target.serial,
         "shell",
-        "svc",
-        "data",
-        "status",
+        "settings",
+        "get",
+        "global",
+        "mobile_data",
         label="mobile-data query",
     )
     _, ipv4_route = _adb(
@@ -745,8 +755,8 @@ def probe_device(target: DeviceTarget, *, runner: AdbRunner) -> DeviceProbeRepor
         serial_digest=_serial_digest(target.serial),
         package_name=target.package,
         airplane_mode=_parse_binary_state(airplane, label="airplane mode"),
-        wifi_disabled=_parse_enabled_disabled(wifi, label="Wi-Fi"),
-        mobile_disabled=_parse_enabled_disabled(mobile, label="mobile data"),
+        wifi_disabled=not _parse_binary_state(wifi, label="Wi-Fi"),
+        mobile_disabled=not _parse_binary_state(mobile, label="mobile data"),
         no_default_route=not bool(ipv4_route.strip() or ipv6_route.strip()),
         no_active_network=_no_active_network(connectivity),
         companion_ports_unused=_companion_ports_unused(tcp),
