@@ -8,7 +8,9 @@ import { getDefaultPlayerPartyGroupsSync } from "../../data/domains/player"
 import { getPlayerCharacterSync } from "../../data/domains/character"
 import { getPlayerPartyGroupListSync, insertPlayerPartyGroupListSync } from "../../data/domains/party"
 import { getSession } from "../../data/domains/session"
-import { getQuestFromCategorySync } from "../../lib/assets";
+import { getQuestFromCategorySync, getRogueEventConfig } from "../../lib/assets";
+import { spawn } from "child_process";
+import path from "path";
 import { BattleQuest, QuestCategory, RushEventFolder } from "../../lib/types";
 import { generateDataHeaders, getServerDate, getServerTime } from "../../utils";
 import { FinishBody, insertActiveQuest } from "./singleBattleQuest";
@@ -138,6 +140,26 @@ export const rushEventFolderMaxRounds: { [key in RushEventFolder]?: number } = {
     [RushEventFolder.INTERMEDIATE]: 2,
     [RushEventFolder.ADVANCED]: 2,
     [RushEventFolder.GODLY]: 2
+}
+
+let lastRogueRerollMs = 0
+
+function triggerRogueTowerReroll(cfg: { rounds?: number, difficulty?: string, mix?: boolean }): void {
+    const now = Date.now()
+    if (now - lastRogueRerollMs < 120_000) {
+        console.log("[RUSH] tower reroll skipped (120s cooldown)")
+        return
+    }
+    lastRogueRerollMs = now
+    const repoRoot = path.resolve(__dirname, "..", "..", "..")
+    const args = ["-X", "utf8", "mod-tools/wf_rogue_reroll.py",
+        "--rounds", String(cfg.rounds ?? 30), "--apply", "--no-restart"]
+    if (cfg.difficulty) args.push("--difficulty", String(cfg.difficulty))
+    if (cfg.mix) args.push("--mix")
+    console.log("[RUSH] spawning tower reroll:", args.join(" "))
+    const child = spawn(process.env.WF_PYTHON ?? "python", args,
+        { cwd: repoRoot, detached: true, stdio: "ignore" })
+    child.unref()
 }
 
 const routes = async (fastify: FastifyInstance) => {
@@ -490,6 +512,17 @@ const routes = async (fastify: FastifyInstance) => {
         const resetTargetId: number | undefined = body.reset_target_id
         const isResetAfterTargetRound: boolean | undefined = body.is_reset_after_target_round
         console.log(`[RUSH] reset: viewer=${viewerId} eventId=${eventId} questType=${questType} resetTargetId=${resetTargetId} isResetAfterTarget=${isResetAfterTargetRound}`)
+
+        // mod: roguelike 塔重摇钩子——整段 folder 重置时按配置拉起重摇
+        // (rogue_event.json reset_rerolls_tower;冷却 120s;完成后玩家重启游戏拉新塔)
+        try {
+            const rerollCfg = (getRogueEventConfig(eventId) as any)?.reset_rerolls_tower
+            if (rerollCfg && questType === ResetQuestType.FOLDER && resetTargetId === undefined) {
+                triggerRogueTowerReroll(rerollCfg)
+            }
+        } catch (err) {
+            console.error("[RUSH] reroll hook failed:", err)
+        }
         if (isNaN(viewerId) || isNaN(eventId) || isNaN(questType)) return reply.status(400).send({
             "error": "Bad Request",
             "message": "Invalid request body."

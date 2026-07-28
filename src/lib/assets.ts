@@ -42,7 +42,7 @@ import itemSaleData from "../../assets/item_sale.json"
 import equipmentCraftData from "../../assets/equipment_craft.json"
 import equipmentMaxLevels from "../../assets/equipment_max_level.json"
 import equipmentElements from "../../assets/equipment_element.json"
-import { AssetCharacter, BattleQuest, BossCoinShopItems, BoxGacha, ClearRewards, ConfigValues, EquipmentCraftEntry, EquipmentDissolveEntry, EventItemShopIdMapItem, EventShopItems, ExAbilities, ExBoostItem, ExBoostItems, ExStatus, Gacha, Gachas, ItemSaleEntry, ManaNode, ManaNodes, QuestCategory, RareScoreReward, RareScoreRewardGroups, RawAssetCharacters, RawBoxGachas, RawBoxRewards, RawQuests, Reward, RushEventFolders, ScoreReward, ScoreRewardGroups, ShopItem, ShopItems, ShopType, StoryQuest } from "./types";
+import { AssetCharacter, BattleQuest, BossCoinShopItems, BoxGacha, ClearRewards, ConfigValues, EquipmentCraftEntry, EquipmentDissolveEntry, EventItemShopIdMapItem, EventShopItems, ExAbilities, ExBoostItem, ExBoostItems, ExStatus, Gacha, Gachas, ItemSaleEntry, ManaNode, ManaNodes, QuestCategory, RareScoreReward, RareScoreRewardGroups, RawAssetCharacters, RawBoxGachas, RawBoxRewards, RawQuests, Reward, EquipmentItemReward, RushEventFolders, ScoreReward, ScoreRewardGroups, ShopItem, ShopItems, ShopType, StoryQuest } from "./types";
 
 // ---------------------------------------------------------------------------
 // Mod-editable assets (hot-reloadable).
@@ -71,6 +71,7 @@ const MOD_ASSET_FILES = [
     "treasure_shop.json",
     "equipment_enhancement_shop.json",
     "rogue_event.json",
+    "rush_event_quest_folder.json",
 ] as const;
 
 let characters: any;
@@ -83,6 +84,9 @@ let starGrainShopItems: any;
 let treasureShopItems: any;
 let equipmentEnhancementShopItems: any;
 let rogueEventConfig: any;
+// rush 通关奖励:静态 import 只作首帧兜底,热重载后以 modRushEventQuestFolders 为准
+// (2026-07-28 起 700099 奖励由用户定制,改完 POST /api/mod-admin/reload_assets 即生效)
+let modRushEventQuestFolders: any;
 
 /**
  * (Re)loads the mod-editable asset files from disk.
@@ -100,6 +104,7 @@ export function reloadModAssets(): string[] {
     treasureShopItems = loadModAsset("treasure_shop.json");
     equipmentEnhancementShopItems = loadModAsset("equipment_enhancement_shop.json");
     rogueEventConfig = loadModAsset("rogue_event.json");
+    modRushEventQuestFolders = loadModAsset("rush_event_quest_folder.json");
     return [...MOD_ASSET_FILES];
 }
 
@@ -825,17 +830,93 @@ export function getRushEventFolderClearRewards(
     rushEventId: number,
     folderId: number
 ): Reward[] | null {
-    const folders = (rushEventQuestFolders as RushEventFolders)[rushEventId]
+    // mod: roguelike 追加奖励(rogue_event.json)。客户端结算面板只有 10 个道具槽位,
+    // 货币类(星导石 type=3)不占槽 —— 固定表尽量精简,变化交给下面两条随机规则。
+    const rogueCfg = getRogueEventConfig(rushEventId) as any
+    const chanceExtras: Reward[] = []
+
+    // ① folder_clear_chance:每条独立掷骰(十连券等)
+    const rogueChance = rogueCfg?.folder_clear_chance
+    if (Array.isArray(rogueChance)) {
+        for (const entry of rogueChance) {
+            const p = Number(entry?.chance)
+            if (Number.isFinite(p) && Math.random() < p) {
+                chanceExtras.push({
+                    type: Number(entry.type ?? 0),
+                    id: Number(entry.id),
+                    count: Number(entry.count ?? 1),
+                } as Reward)
+            }
+        }
+    }
+
+    // ② folder_clear_random:每条从 pool 随机挑 pick 种,每种数量在 count 区间内随机
+    const rogueRandom = rogueCfg?.folder_clear_random
+    if (Array.isArray(rogueRandom)) {
+        const randInt = (lo: number, hi: number): number =>
+            lo + Math.floor(Math.random() * (Math.max(lo, hi) - lo + 1))
+        const asRange = (v: unknown, fallbackLo: number, fallbackHi: number): [number, number] =>
+            Array.isArray(v) && v.length >= 2
+                ? [Number(v[0]), Number(v[1])]
+                : (Number.isFinite(Number(v)) ? [Number(v), Number(v)] : [fallbackLo, fallbackHi])
+
+        for (const entry of rogueRandom) {
+            const pool = (Array.isArray(entry?.pool) ? entry.pool : [])
+                .map(Number).filter(Number.isFinite)
+            if (pool.length === 0) continue
+            const [pickLo, pickHi] = asRange(entry?.pick, pool.length, pool.length)
+            const take = Math.max(0, Math.min(pool.length, randInt(pickLo, pickHi)))
+            const shuffled = [...pool]
+            for (let i = shuffled.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]]
+            }
+            const [countLo, countHi] = asRange(entry?.count, 1, 1)
+            for (const id of shuffled.slice(0, take)) {
+                const amount = randInt(countLo, countHi)
+                if (amount > 0) {
+                    chanceExtras.push({
+                        type: Number(entry?.type ?? 0), id, count: amount,
+                    } as Reward)
+                }
+            }
+        }
+    }
+
+    // 同 type+id 的条目合并计数(固定表 + 概率/随机追加可能命中同一道具,
+    // 不合并会在结算面板占两格显示 ×1 ×1)
+    const mergeRewards = (list: Reward[]): Reward[] => {
+        const merged: Reward[] = []
+        const index = new Map<string, number>()
+        for (const reward of list) {
+            const item = reward as EquipmentItemReward
+            const key = `${reward.type}:${item.id ?? ""}`
+            const at = index.get(key)
+            if (at === undefined) {
+                index.set(key, merged.length)
+                merged.push({ ...reward } as Reward)
+            } else {
+                (merged[at] as EquipmentItemReward).count += item.count
+            }
+        }
+        return merged
+    }
+
+    const folderSource = (modRushEventQuestFolders ?? rushEventQuestFolders) as RushEventFolders
+    const folders = folderSource[rushEventId]
     if (folders !== undefined) {
         const rewards = folders[folderId]
         if (rewards !== undefined && Array.isArray(rewards) && rewards.length > 0) {
-            return rewards
+            return chanceExtras.length > 0 ? mergeRewards([...rewards, ...chanceExtras]) : rewards
         }
+    }
+    if (chanceExtras.length > 0) {
+        return mergeRewards(chanceExtras)
     }
 
     // Fallback: for rush event reruns (700011-700017), try primary event (ID - 10)
     if (rushEventId >= 700010 && rushEventId <= 700019) {
-        const primaryFolders = (rushEventQuestFolders as RushEventFolders)[rushEventId - 10]
+        const primaryFolders = folderSource[rushEventId - 10]
         if (primaryFolders !== undefined) {
             return primaryFolders[folderId] ?? null
         }
