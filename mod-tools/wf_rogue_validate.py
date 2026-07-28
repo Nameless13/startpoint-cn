@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import importlib.util
 import json
+import os
 import sys
 import tempfile
 import zipfile
@@ -49,7 +50,16 @@ def _load_task7_builder():
     existing = sys.modules.get(module_name)
     if existing is not None:
         return existing
-    path = ROOT / "client-patch" / "abyss-mode-equipment" / "build_apk.py"
+    # client-patch 属服务端仓工作区;独立布局用 WF_CLIENT_PATCH_DIR/WF_SERVER_DIR 定位
+    client_patch = (
+        Path(os.environ["WF_CLIENT_PATCH_DIR"])
+        if os.environ.get("WF_CLIENT_PATCH_DIR")
+        else (
+            Path(os.environ["WF_SERVER_DIR"]) if os.environ.get("WF_SERVER_DIR")
+            else ROOT
+        ) / "client-patch"
+    )
+    path = client_patch / "abyss-mode-equipment" / "build_apk.py"
     spec = importlib.util.spec_from_file_location(module_name, path)
     if spec is None or spec.loader is None:
         raise ImportError(f"cannot load Task 7 APK builder: {path}")
