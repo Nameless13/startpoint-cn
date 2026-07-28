@@ -735,6 +735,11 @@ def _verify_data_zip_stream(
     physical_payload_end = 0
     zip64_state: _Zip64EndState | None = None
     try:
+        # Validate the raw Zip64 end records before zipfile parses the stream:
+        # pre-3.12 zipfile fails on some malformed layouts with its own error,
+        # hiding the canonical rejection message.
+        stream.seek(0)
+        zip64_state = _validate_zip64_layout(stream, len(expected))
         stream.seek(0)
         with zipfile.ZipFile(stream, "r", allowZip64=True) as archive:
             infos = archive.infolist()
@@ -753,7 +758,6 @@ def _verify_data_zip_stream(
                     f"archive/manifest member set mismatch: missing={missing[:3]!r}, "
                     f"unexpected={unexpected[:3]!r}"
                 )
-            zip64_state = _validate_zip64_layout(stream, len(expected))
             if int(archive.start_dir) != zip64_state.central_offset:
                 raise OfflineZipError("ZIP reader and Zip64 central directory offsets disagree")
             central_position = zip64_state.central_offset
