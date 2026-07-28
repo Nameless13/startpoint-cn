@@ -151,9 +151,13 @@ export function handleRushEventFinish(params: RushHandlerParams): {
     if (rushEventBattleType === RushEventBattleType.FOLDER && rushEventRound >= (folderMaxRounds[rushEventFolderId] ?? 0)) {
         const rewards = getFolderRewards(rushEventId, rushEventFolderId) ?? []
         rushEventRewardsResult = giveRewards(playerId, rewards)
-        rushEventData.rush_battle_reward_list = rewards.map(reward => {
+        // 货币类奖励(BEADS/MANA/EXP)没有 id,读出来是 undefined —— msgpack 会把它
+        // 编成 0xD4,客户端结算时 DecodeError R1(2026-07-28 星导石奖励实锤)。
+        // 它们已由 giveRewards 走 user_info 下发,这里只列出有 id 的道具/装备/角色。
+        rushEventData.rush_battle_reward_list = rewards.flatMap(reward => {
             const itemReward = reward as EquipmentItemReward
-            return { "kind": 1, "kind_id": itemReward.id, "number": itemReward.count }
+            if (itemReward.id === undefined || itemReward.id === null) return []
+            return [{ "kind": 1, "kind_id": itemReward.id, "number": itemReward.count }]
         })
     }
 
