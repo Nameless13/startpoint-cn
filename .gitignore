@@ -70,3 +70,10 @@ logs/
 
 # codex agent 本地配置(不提交)
 .codex/
+.codex-remote-attachments/
+
+# JVM 崩溃转储(FFDec/jansi)
+hs_err_pid*.log
+
+# GUI 写入的本地运行时调参(领域数值倍率,构建端缺省容忍)
+mod-tools/rogue_field_tuning.json
