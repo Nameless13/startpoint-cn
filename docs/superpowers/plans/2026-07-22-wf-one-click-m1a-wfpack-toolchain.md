@@ -546,13 +546,13 @@ The scan must return `excluded == ()`; a known backup file is an error, not an i
 Commands:
 
 ```powershell
-python -X utf8 mod-tools/wfpack_cli.py init-signer --directory C:\Users\12101\.wfpack-signer
-$env:WF_WFPACK_SIGNING_KEY_FILE = 'C:\Users\12101\.wfpack-signer\wfpack-ed25519.key'
+python -X utf8 mod-tools/wfpack_cli.py init-signer --directory $env:USERPROFILE\.wfpack-signer
+$env:WF_WFPACK_SIGNING_KEY_FILE = "$env:USERPROFILE\.wfpack-signer\wfpack-ed25519.key"
 python -X utf8 mod-tools/wfpack_cli.py build --payload-root mod-tools/tests/fixtures/wfpack/v1/payload --template mod-tools/tests/fixtures/wfpack/v1/manifest-template.json --output out/wfpack/golden.wfpack
-python -X utf8 mod-tools/wfpack_cli.py verify --archive out/wfpack/golden.wfpack --trusted-key C:\Users\12101\.wfpack-signer\trusted-key.json
+python -X utf8 mod-tools/wfpack_cli.py verify --archive out/wfpack/golden.wfpack --trusted-key $env:USERPROFILE\.wfpack-signer\trusted-key.json
 ```
 
-`build` has no private-key command-line option and never prompts. Cumulative versions after v1 additionally pass `--previous-archive out/wfpack/prior.wfpack --trusted-key C:\Users\12101\.wfpack-signer\trusted-key.json`; the builder calls the same public archive/signature verifier before using its manifest, and the first release rejects the previous-archive option. Every command emits a human-readable summary followed by one canonical JSON result line suitable for automation.
+`build` has no private-key command-line option and never prompts. Cumulative versions after v1 additionally pass `--previous-archive out/wfpack/prior.wfpack --trusted-key $env:USERPROFILE\.wfpack-signer\trusted-key.json`; the builder calls the same public archive/signature verifier before using its manifest, and the first release rejects the previous-archive option. Every command emits a human-readable summary followed by one canonical JSON result line suitable for automation.
 
 - [ ] **5.6 Run focused integration tests**
 
