@@ -41,7 +41,7 @@
   },
   "dependencies": {
     "@fastify/multipart": "10.1.0",
-    "@fastify/static": "10.1.0",
+    "@fastify/static": "10.1.2",
     "bcryptjs": "^3.0.3",
     "better-sqlite3": "^11.3.0",
     "cli-progress": "^3.12.0",
