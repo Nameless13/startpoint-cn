@@ -249,7 +249,11 @@ class MainStoryPoolCase(unittest.TestCase):
 
     def test_model_reads_both_path_shapes(self):
         # general_boss: battle/boss/<族>/…   standard_boss: battle/enemy/boss/<族>…
-        self.assertEqual(rb.boss_model("lich_wind_expert_80"), "lich")
+        try:
+            model = rb.boss_model("lich_wind_expert_80")
+        except FileNotFoundError:
+            self.skipTest("store 不可用")
+        self.assertEqual(model, "lich")
         self.assertEqual(rb.boss_model("不存在的代号"), "")
 
     def test_upgraded_source_cats(self):
@@ -266,7 +270,10 @@ class MainStoryPoolCase(unittest.TestCase):
         """实测唯一命中:主线人型「管理者」admin_human vs 追忆
         administrator_light_expert_80/100 —— 同名不同模型,靠名字判出来。"""
         self.assertIn("admin_human", rb.MAIN_STORY_BOSSES)
-        pooled = {b for e in rb.main_story_boss_pool() for b in e["bosses"]}
+        try:
+            pooled = {b for e in rb.main_story_boss_pool() for b in e["bosses"]}
+        except FileNotFoundError:
+            self.skipTest("store 不可用")
         self.assertNotIn("admin_human", pooled)
         # 其余名单成员不该被误伤
         for code in ("maou2", "eye_dragon_boss", "epuration_boss_variant_ver_single"):
@@ -890,7 +897,10 @@ class FixedSlotQuotaCase(unittest.TestCase):
     def test_phenomena_still_lives_in_the_source_pools(self):
         """这条是 bug 的前提:它**没有**被从池里剔除,所以必须靠配额挡。"""
         for cat in ("boss_battle", "advent"):
-            fields = {e["field"] for e in rb.quest_pool(cat)}
+            try:
+                fields = {e["field"] for e in rb.quest_pool(cat)}
+            except FileNotFoundError:
+                self.skipTest("store 不可用")
             self.assertIn("steampunk_another", fields, cat)
 
     def test_phenomena_and_dragon_are_scheduled_as_fixed_slots(self):
