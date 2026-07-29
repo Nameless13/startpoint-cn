@@ -132,6 +132,20 @@
    "created_at": "2026-07-28"
   },
   {
+   "id": "backfill-to-live-20260729",
+   "type": "patch",
+   "name": "1.4.217→1.4.247 现役态回灌(整合包)",
+   "description": "把 2026-07-28 回灌(1.4.217)之后发布到现役 CDN 的 29 个中间版本边(1.4.218…1.4.247,去重 290 个被覆盖条目)整合为单边 2 包,自建部署 clone 即得连战塔随机重做现役态:全塔烈狱+组合诅咒+数值对标官方带(atk 修正中位 1.46/最大 7.21)、funnel 等级门禁、系列配额防一塔两出、环境场地效果(刮风/重力)。平铺:1=common(14 条目)、2=android(dev 双格式 .empty 占位,线上客户端已验证无害);本区间 medium 无净变更。单包≤5MiB(CI 卫生门禁)。与服务端 masterdata(assets/rush_event_quest*.json@34ae1d5)配套,缺此边则新部署 server/client 两半不同步。",
+   "version": "1.4.247",
+   "depends_on": "1.4.217",
+   "enabled": true,
+   "chain": [
+    "pinball-1.4.217-1.4.247-1-backfill0729.zip",
+    "pinball-1.4.217-1.4.247-2-backfill0729.zip"
+   ],
+   "created_at": "2026-07-29"
+  },
+  {
    "id": "gacha-feature-fix-v1",
    "type": "patch",
    "name": "特辑图片 C2032 修复（第一步）",
