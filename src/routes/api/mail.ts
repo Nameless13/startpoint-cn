@@ -1,13 +1,12 @@
 import { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { MailType, RawPlayerMail, getPlayerMailCountSync, getPlayerMailsSync, insertReceiveHistorySync, receiveAllMailsSync, receiveMailSync } from "../../data/domains/mail"
-import { getPlayerCharacterSync, insertDefaultPlayerCharacterSync, updatePlayerCharacterSync } from "../../data/domains/character"
 import { getPlayerItemSync, givePlayerItemSync } from "../../data/domains/item"
+import { givePlayerCharacterSync } from "../../lib/character"
 import { getPlayerSync, updatePlayerSync } from "../../data/domains/player"
 import { getSession } from "../../data/domains/session"
 import { insertPlayerEquipmentSync } from "../../data/domains/equipment"
 import { resolvePlayerIdSync } from "../../data/activeAccount";
 import { generateDataHeaders, getServerTime } from "../../utils";
-import { clientSerializeDate } from "../../data/utils";
 import { givePlayerEquipmentSync } from "../../lib/equipment";
 
 interface IndexBody {
@@ -79,30 +78,15 @@ function applyMailReward(playerId: number, mail: RawPlayerMail): {
         }
         case MailType.CHARACTER: {
             if (mail.type_id === null) break
-            const existing = getPlayerCharacterSync(playerId, mail.type_id)
-            if (existing) {
-                updatePlayerCharacterSync(playerId, mail.type_id, {
-                    entryCount: existing.entryCount + 1
-                })
-            } else {
-                insertDefaultPlayerCharacterSync(playerId, mail.type_id)
+            // same grant path as gacha/exchange: new characters get their bond
+            // tokens, dupes get stack+1 plus the rarity×element compensation item
+            const result = givePlayerCharacterSync(playerId, mail.type_id)
+            if (result === null) break
+            characterList.push(result.character)
+            if (result.item) {
+                itemList[String(result.item.id)] =
+                    getPlayerItemSync(playerId, result.item.id) ?? result.item.count
             }
-            const charData = getPlayerCharacterSync(playerId, mail.type_id)!
-            characterList.push({
-                character_id: mail.type_id,
-                entry_count: charData.entryCount,
-                evolution_level: charData.evolutionLevel,
-                over_limit_step: charData.overLimitStep,
-                protection: charData.protection,
-                exp: charData.exp,
-                stack: charData.stack,
-                bond_token_list: charData.bondTokenList?.map(bt => ({
-                    mana_board_index: bt.manaBoardIndex,
-                    status: bt.status
-                })) ?? [],
-                join_time: clientSerializeDate(charData.joinTime),
-                update_time: clientSerializeDate(charData.updateTime)
-            })
             break
         }
         case MailType.EQUIPMENT: {
