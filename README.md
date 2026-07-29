@@ -111,6 +111,7 @@ bash scripts/start-cn.sh
 - `CDN_BASE_URL` — `http://<你的LAN_IP>:<端口>/patch/cn`。
 - `CN_RES_VERSION` — 须与客户端 resourceVersion 一致(当前 1.4.54)。
 - `DROP_MULTIPLIER` / `NPC_*` — 测试与联机调参。
+- `QUEST_FINISH_STRICT` — 结算严格模式，默认关闭。关闭时缺少开战登记也能结算（重启/多进程/客户端没调 `/start`），开启则恢复旧的 400 行为。
 
 ## 客户端改造(最小功能)
 

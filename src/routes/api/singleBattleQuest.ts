@@ -23,6 +23,7 @@ import { handleRoguePerRoundDrops } from "../../lib/quest/finish/rogue-drops";
 import { handleRaidEventFinish } from "../../lib/quest/finish/raid-handler";
 import { calculateClearRank } from "../../lib/quest/finish/quest-calc";
 import { validateSessionAndPlayer } from "../../lib/quest/finish/session-validator";
+import { resolveActiveQuest } from "../../lib/quest/finish/active-quest-resolver";
 import { handleDailyChallengePoint } from "../../lib/quest/finish/challenge-point";
 import { trackCharacterClears } from "../../lib/quest/finish/character-clear-tracker";
 import { trackPowerflip } from "../../lib/quest/finish/powerflip-tracker";
@@ -182,12 +183,16 @@ const routes = async (fastify: FastifyInstance) => {
         const { playerId, playerData } = sessionResult
 
         // get active quest data
-        const activeQuestData = activeQuests[playerId]
-        console.log(`[FINISH] req: playerId=${playerId} questId=${body.quest_id} category=${body.category} activeExists=${activeQuestData !== undefined} multi=${activeQuestData?.isMulti ?? false}`)
-        if (activeQuestData === undefined) return reply.status(400).send({
+        const resolved = resolveActiveQuest({ playerId, hint: body, memory: activeQuests })
+        const activeQuestData = resolved?.quest
+        console.log(`[FINISH] req: playerId=${playerId} questId=${body.quest_id} category=${body.category} activeExists=${activeQuestData !== undefined} source=${resolved?.source ?? 'none'} multi=${activeQuestData?.isMulti ?? false}`)
+        if (resolved === null || activeQuestData === undefined) return reply.status(400).send({
             "error": "Bad Request",
             "message": "No active quest to finish."
         })
+        if (resolved.source !== "memory") {
+            console.warn(`[FINISH] recovered active quest from ${resolved.source}: playerId=${playerId} questId=${activeQuestData.questId} category=${activeQuestData.category}`)
+        }
 
         const questCategory = activeQuestData.category
         const questId = activeQuestData.questId
@@ -658,9 +663,8 @@ const routes = async (fastify: FastifyInstance) => {
             afterStamina = player?.stamina ?? 0
         }
 
-        // add to active quests table
-        delete activeQuests[playerId]
-        activeQuests[playerId] = {
+        // add to active quests table (persisted, so finish survives a restart)
+        insertActiveQuest(playerId, {
             questId: questId,
             category: category,
             useBoostPoint: useBoostPoint,
@@ -670,7 +674,7 @@ const routes = async (fastify: FastifyInstance) => {
             entryItemId: entryCost?.itemId,
             playId: body.play_id,
             continueCount: 0
-        }
+        })
 
         // update player last party slot
         if (questData.fixedParty === undefined) {
@@ -716,11 +720,20 @@ const routes = async (fastify: FastifyInstance) => {
         const { playerId, playerData: player } = sessionResult
 
         // get active quest data
-        const activeQuestData = activeQuests[playerId]
-        if (activeQuestData === undefined) return reply.status(400).send({
+        const resolvedContinue = resolveActiveQuest({
+            playerId,
+            hint: { quest_id: body.quest_id, category: body.category, play_id: body.paly_id },
+            memory: activeQuests
+        })
+        if (resolvedContinue === null) return reply.status(400).send({
             "error": "Bad Request",
             "message": "No active quest to continue."
         })
+        const activeQuestData = resolvedContinue.quest
+        if (resolvedContinue.source === "rebuilt") {
+            // Register it so the finish that follows resolves from memory.
+            insertActiveQuest(playerId, activeQuestData)
+        }
 
         const questData = getQuestFromCategorySync(activeQuestData.category, activeQuestData.questId) as BattleQuest | null
         if (questData === null || !('rankPointReward' in questData)) return reply.status(400).send({
