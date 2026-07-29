@@ -76,7 +76,7 @@ python -X utf8 client-patch/dual-form-v1/build_patch.py \
 最后把产出的 SWF 替换进 APK、`zipalign` + `apksigner` 重签名、安装。
 `client-patch/abyss-mode-equipment/build_apk.py` 提供了打包+回读验证的一体化脚本(参数见其 README)。
 
-> ‼️ 已发布的 [`WorldFlipper-abyss.apk`](https://github.com/kuronzzhan-droid/wf-abyss-client/releases) 是给"连某个固定服"用的,**自建服请自己重打**指向自己域名的客户端——那个现成包对你没用。
+> ‼️ 已发布的 [`WorldFlipper-abyss.apk`](https://github.com/kuronzzhan-droid/startpoint-cn-mod-tools/releases) 是给"连某个固定服"用的,**自建服请自己重打**指向自己域名的客户端——那个现成包对你没用。
 
 ### 5. 发放三位角色(服务端管理后台)
 
