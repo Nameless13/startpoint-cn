@@ -2,6 +2,15 @@
 
 面向**已经有(或能自己搞到)一套能跑的 WF CN 私服**、想在其上加载两个自制模式、深渊武器和三位自制角色(苍海龙王·赛瑞斯 / 夏日女神·史黛拉 / 白狼骑士·杰拉德)的人。本 mod 只提供**增量**(数据 + 客户端补丁),不含官方基础 CDN。
 
+> **走错门了?**
+> - **从零开一台服** → 先看 [README](../README.md) 的「我该下载什么」三步、跑
+>   [`deploy.ps1`](../deploy.ps1)(自动装 Git/Node → clone → 构建 → 起服 → 自检),再回本文。
+>   图文向的部署走 [`docs/部署攻略.md`](部署攻略.md)。
+> - **只是要用别人给的 mod 分享包** → 看 [`mod-tools/docs/分享包收方指南.md`](../mod-tools/docs/分享包收方指南.md)
+>   (放文件的位置、`requires.json` 怎么读)。**但先回本文「通用桥接」一节判一下你的血统**
+>   ——外血统直接整表替换会砸掉你自己的活动数据。
+> - **本文**讲的是:把本仓库的模式/武器/角色增量装进一台**已经能跑**的私服,以及卡链时怎么救。
+
 ## 先备齐
 
 | # | 东西 | 说明 |
@@ -29,7 +38,7 @@ cd starpoint-cn && npm install
 - **基础 CDN(~11GB)**:确保 `.cdn/cn/` 已就位(目录结构与校验见 [`docs/cdn/overview.md`](cdn/overview.md))。官方源已停服,本 mod **不分发**基础 CDN——需你自行从 WF 私服圈/现有部署获取。已有能跑的 WF CN 私服的人跳过此项。
 - **本 mod 的增量(①+②两层都在分支里)**:
   - ① **服务端层**:两模式和武器的 masterdata 在 `assets/*.json`(服务端直接读)。
-  - ② **客户端层**:深渊武器/兑换商店/rush 700099 的客户端 orderedmap 数据,已打包成 **`assets/asset-patch/active/pinball-1.4.90→1.4.101-mod*.zip`(11 个,git 跟踪)**,服务端 `asset.ts` 会自动 serve;**整链链尾以 `manifest.json` 为准(当前 1.4.247)**——2026-07-28/29 两条 backfill 条目(1.4.107→1.4.217→1.4.247)把三角色之后发布的现役内容全部回灌(C8016 色替预载修复/深渊法阵场地效果/连战塔随机重做)。**这层缺了 → 打完 15 轮或开兑换商店会 C8601**(客户端没有武器/商店主数据)。
+  - ② **客户端层**:深渊武器/兑换商店/rush 700099 的客户端 orderedmap 数据,已打包成 **`assets/asset-patch/active/pinball-1.4.90→1.4.102-mod*.zip`(12 个,git 跟踪;前 11 个是 1.4.90→1.4.101 逐版本边,第 12 个是末尾的 `1.4.101→1.4.102` 撞车桥接包)**,服务端 `asset.ts` 会自动 serve;**整链链尾以 `manifest.json` 为准(当前 1.4.247)**——2026-07-28/29 两条 backfill 条目(1.4.107→1.4.217→1.4.247)把三角色之后发布的现役内容全部回灌(C8016 色替预载修复/深渊法阵场地效果/连战塔随机重做)。**这层缺了 → 打完 15 轮或开兑换商店会 C8601**(客户端没有武器/商店主数据)。
   - ⚠️ **前提**:你的 base CDN 必须接到 **1.4.90**(这条增量链的起点),客户端才能续上 1.4.90→1.4.101 拿到 ② 层。base CDN 版本不到 1.4.90 的话这段接不上。
   - ③ **双新角色层(1.4.102→1.4.103)**:`assets/asset-patch/active/pinball-1.4.102-1.4.103-*-charpkg*.zip`(7 个分包共 28MB、164 个 payload,git 跟踪;同一版本跨越拆多包,客户端按 get_path 列表全部下载)——赛瑞斯(129999)与史黛拉(139999)的全部客户端资产:16 表克隆数据、UI、像素动画、语音、技能 DSL、独有状态图标。打完模式链的客户端自动续上这层。服务端侧的角色表已在 `assets/*.json` 里随分支到手。
   - ④ **窗口/闭环/平衡层(1.4.103→1.4.106)**:横幅窗口包、资产闭环包、深渊武器最终平衡,依次自动续链(见 `assets/asset-patch/manifest.json` 各条说明)。
@@ -76,7 +85,14 @@ python -X utf8 client-patch/dual-form-v1/build_patch.py \
 最后把产出的 SWF 替换进 APK、`zipalign` + `apksigner` 重签名、安装。
 `client-patch/abyss-mode-equipment/build_apk.py` 提供了打包+回读验证的一体化脚本(参数见其 README)。
 
-> ‼️ 已发布的 [`WorldFlipper-abyss.apk`](https://github.com/kuronzzhan-droid/startpoint-cn-mod-tools/releases) 是给"连某个固定服"用的,**自建服请自己重打**指向自己域名的客户端——那个现成包对你没用。
+> ‼️ 已发布的 [`WorldFlipper-abyss.apk`](https://github.com/kuronzzhan-droid/startpoint-cn-mod-tools/releases) 是给"连某个固定服"用的,**自建服请自己重打**指向自己域名的客户端——那个现成包直接装对你没用。
+>
+> **但你不一定要走上面整条 FFDec 流水线**:`client-patch/repoint-apk/repoint_build.py` 拿已发布的
+> **v2.0 五合一基座 APK**,只改 `DevConfig_gf_android` 里的 `host:port`(即②号补丁落点)再重签,
+> ①③④⑤四个补丁的字节原样保留,构建内置回读校验(见其 [README](../client-patch/repoint-apk/README.md))。
+> 需要自己改补丁内容时才走完整流水线。
+> 签名选择的取舍:**沿用玩家旧包同一个 keystore** → 可覆盖安装,本地身份保留;**换签名** →
+> 玩家必须卸载重装,本地身份被抹掉、下次登录开新号,存档还在服务端 DB,服主按 `device_id` 重绑。
 
 ### 5. 发放三位角色(服务端管理后台)
 
@@ -109,24 +125,59 @@ python -X utf8 client-patch/dual-form-v1/build_patch.py \
 **先判断**:你的基础 CDN/客户端表是不是**跟着本指南**走的(基线 ≤1.4.101 等价内容)?
 还是来自**别的私服血统**(基础表内容比本链新,比如经别家更新链到了 1.4.1xx)?
 
-**A. 基线血统 → 整表替换救援(一跳 9 包)**:
+**A. 基线血统 → 终态整合包救援(一跳直达链尾)**:
+
+⚠ **旧版本的「cp 9 个 1.4.10x 包改名」写法在 2026-07-28/29 回填之后已经失效,别再照抄**:
+那样只把客户端推到 1.4.102 时代的内容,而落点 `W` 之后**没有任何 `from ≥ W` 的边**
+(回填两条边的 from 是 1.4.107 和 1.4.217,都排在 `W` 之前),客户端会缺 1.4.103→链尾的
+全部内容并**第二次搁浅**。正确做法是先把整条链压成一个终态整合包,再改名成一跳:
 
 ```bash
-cd assets/asset-patch/active
-V=1.4.123        # ← 换成你玩家客户端实际卡住的版本
-W=1.4.124        # ← V 的下一号
-cp pinball-1.4.101-1.4.102-1-mod07142258.zip "pinball-$V-$W-1-mod07142258.zip"
-for i in 1 2 3 4 5 6 7; do
-  cp "pinball-1.4.102-1.4.103-$i-charpkgmod07161121.zip" "pinball-$V-$W-$((i+1))-charpkgmod07161121.zip"
+V=1.4.123      # ← 玩家客户端实际卡住的版本
+W=1.4.247      # ← 链尾,以 assets/asset-patch/manifest.json 为准;必须 > V
+
+# 1) 先看一眼计划(不落盘):确认范围、分包数、被排除的平行边
+python -X utf8 mod-tools/wf_pack_consolidate.py plan --from-ver 1.4.90 --to-ver "$W"
+
+# 2) 生成终态整合包。产物落 mod-tools/work/pack_consolidate/rescue/,
+#    **按 CDN 目录结构摆放**(archive-common-diff / archive-medium-diff / archive-android-diff)
+python -X utf8 mod-tools/wf_pack_consolidate.py build \
+  --from-ver 1.4.90 --to-ver "$W" --tag rescue
+
+# 3) 逐 root 拷进 CDN 对应目录,只把文件名里的 from 换成 V(to/序号/tag 原样保留)
+OUT=mod-tools/work/pack_consolidate/rescue
+for d in archive-common-diff archive-medium-diff archive-android-diff; do
+  for f in "$OUT/$d"/pinball-1.4.90-"$W"-*.zip; do
+    [ -e "$f" ] || continue
+    cp "$f" ".cdn/cn/$d/$(basename "$f" | sed "s/^pinball-1\.4\.90-/pinball-$V-/")"
+  done
 done
-cp ../archive/pinball-1.4.90-1.4.101-9-modassets07170102.zip "pinball-$V-$W-9-modassets07170102.zip"
 ```
 
-服务端自动感知目录变化(重启更稳妥);`get_path` 带 `res_ver: V` 应返回一跳 9 个 zip。
-⚠ 此路对基线血统外的部署是**破坏性**的:桥接 6 表/角色 16 表是整表替换,会抹掉你血统
-自己的活动/商店/角色行(实测:外血统换上后活动页/领主战直接「数据不足」瘫痪)。
+服务端自动感知目录变化(重启更稳妥);`get_path` 带 `res_ver: V` 应返回这一跳的全部 zip,
+**落点直接是链尾**——日后上游再发 `from=链尾` 的新边,这批玩家自动续得上,不用再救第二次。
+
+- ⚠ **必须按 root 分目录放,别全丢进一个目录**:三个 root 的分包序号各自从 1 开始,
+  文件名会撞(`…-1-rescue.zip` 有三份)。`assets/asset-patch/active/` 是**扁平**的单 root 目录
+  (`src/lib/cn-asset-graph.ts` 按 `patch` root 扫描),只适合放单 root 的小桥接包,不适合整合包。
+- ⚠ 落点 `W` 必须 **大于** `V`:`findReleasePath` 只在比起点高的版本里选目标
+  (`src/lib/cn-asset-graph.ts:135`)。玩家卡住的版本号反而高于链尾时,只能把 `W` 设成
+  `V` 的下一号,代价是上游下次发新内容还得再桥一次。
+- ⚠ 整合包放进 CDN 后**不要删除被它整合掉的旧包**——还停在中间版本的客户端要走原来那些边,
+  删了就永久搁浅(见 `wf_pack_consolidate.py` 文件头的安全红线)。
+- ⚠ 此路对基线血统外的部署是**破坏性**的:桥接 6 表/角色 16 表是整表替换,会抹掉你血统
+  自己的活动/商店/角色行(实测:外血统换上后活动页/领主战直接「数据不足」瘫痪)。外血统走 B。
 
 **B. 外血统 → 行级合并,禁止整表替换**:
+
+> ⚠ **前提 -1:服务端逻辑**。下面 0-4 步全是**数据**层的活。深渊连战/兑换商店/连战塔要真能跑,
+> 你的**服务端代码**还必须带模式逻辑,两个来源二选一:
+> - **本分支 `release/modes-20260714`**:模式逻辑直接编译进服务端,装好就有,最省事;
+> - **上游 `dev` + 装载缝**:基座零玩法逻辑,玩法以 `modes.d/*.mjs` 改造包形式手动安装,
+>   见本节末尾的「dev 架构服务端(modes.d 装载缝)」。
+>
+> 只做完数据合并、服务端仍是**不带模式逻辑的 main/dev 基座** → 客户端能看到活动入口和商店,
+> 但进本崩溃/结算不发奖。这一条与血统无关,A 路同样适用。
 
 > ⚠ **前提 0(2026-07-17 野外事故后补明)**:mod-tools 的 **store(数据包)基线必须等于你目标
 > 客户端的当前版本**。`wf_publish` 是整文件发布——store 里的表是什么状态,发出去客户端就被
@@ -165,6 +216,22 @@ cp ../archive/pinball-1.4.90-1.4.101-9-modassets07170102.zip "pinball-$V-$W-9-mo
    ```
    ⚠ `windowquests`(连战塔任务表+event_list)是给**跟链血统**的:`event_list` 会整表替换
    活动页列表,外血统换上会把你自己的活动滤没,只有连战塔内 UI 出问题时再单独考虑前三张。
+
+   ⚠ **这套救援包的连战塔部分已经过期**。tables125 里的 `master/battle/floor`、windowquests 里的
+   `rush_event_quest`/`rush_event_quest_folder`,是本链 **1.4.125 / 1.4.104 时代的塔布局**,
+   早于 2026-07-28、07-29 两次连战塔随机重做;而本分支现在的服务端 masterdata
+   (`assets/rush_event_quest*.json`)是 **1.4.247 配套态**。直接混用 = server/client 两半不同步
+   (楼层/boss 对不上、结算异常)。其余六张表(item / equipment / equipment_status /
+   ability_soul / rush_event / event_item_shop)不受影响,照用即可;**塔表必须在你自己的
+   store 上重新生成**:
+
+   ```bash
+   python -X utf8 mod-tools/wf_rogue_build.py --write --publish
+   ```
+
+   `--write` 同时写客户端表和服务端 `assets/rush_event_quest*.json`,`--publish` 发成你自己血统
+   的增量——**服务端 JSON 与客户端表出自同一次构建**,只有这样两半才配套(单独换一半必错)。
+   服务端 JSON 是静态 import,写完**必须重启服务端**。
 1. **纯资产补充包对任何血统都安全**(`archive/pinball-1.4.90-1.4.101-9-modassets07170102.zip`,
    30 个全新路径文件:武器图/横幅/商店图,不含任何表),重命名成你的一跳直接发;
 2. 深渊行数据用 [mod-tools](https://github.com/kuronzzhan-droid/startpoint-cn-mod-tools) 在
@@ -177,6 +244,50 @@ cp ../archive/pinball-1.4.90-1.4.101-9-modassets07170102.zip "pinball-$V-$W-9-mo
 
 通用备注:救援后你的玩家停在自己的号位,**日后上游再发新内容链时需重做对应步骤**;
 修完仍有「数据不足」→ 复现一次,把服务端 `logs/http404.log` 新增的 404 路径发给上游定位。
+
+### dev 架构服务端(modes.d 装载缝)
+
+上游 `dev` 走的是**内容编译**架构(`content:sync` + Content Release),和本分支的
+"masterdata 直读 + CDN 增量"不是一回事。想在 dev 上跑模式类玩法,走**装载缝**:
+
+**基座已在上游**——玩法模块装载缝已随 PR #19 合并进 `dev`(`df3ad91`,`src/modes/` +
+`docs/systems/mode-seam.md`),**你不需要再 fork 服务端**。基座本身零玩法逻辑:没装模块时
+所有挂点是空操作,行为与不带本机制的基座逐字节一致。
+
+分发模型是三件产物,别混:
+
+| 产物 | 是什么 | 谁来装 |
+|---|---|---|
+| **基座** | 上游 dev 构建的服务端,只含激活入口 | 正常部署 |
+| **玩法改造包** | `rogue.mjs` + manifest,**代码** | 运营者手动放进 `modes.d/` 并登记哈希 |
+| **内容包** | CDN 增量(资源 + 激活表),**数据** | 照常下发 |
+
+> 红线:**内容包永不携带可自动加载的代码**。装模块 = 以服务器权限运行第三方代码,
+> 与"安装服务端本身"同级别的信任决定,所以没有自动发现、没有热加载。
+
+装载是**双重显式**的:文件要在 `modes.d/`,**且**其 sha256 要登记在
+`modes.d/modes-allowlist.json`(形如 `{"rogue.mjs": "<sha256>"}`)。缺一或哈希不符都会跳过
+并打日志,不会静默加载。装卸模块都要重启。总开关 `MODES_ENABLED=0`,目录可用 `MODES_DIR` 覆盖。
+
+安装(rogue 改造包目前在 fork 的 `fork/dev-base` 分支 `modes-src/rogue/`,不参与基座构建):
+
+```bash
+cp modes-src/rogue/rogue.mjs modes.d/rogue.mjs
+# sha256 不用自己算:mode-manifest.json 里带了(连同 install 三步、activationTable 一起),
+# 照抄成 {"rogue.mjs": "<sha256>"} 写进 modes.d/modes-allowlist.json
+CDN_DIR=<cdn父目录> npm run content:sync && node --env-file=.env out/cn-server.js
+```
+
+启动日志出现 `[modes] loaded rogue-rush (rogue-settlement@1) sha256=…` 才算装上;
+没有这行 = 没装成(哈希没登记/不符,或激活表缺失)。三个挂点、事务边界与失败模型见
+上游 `docs/systems/mode-seam.md`——要点是 `onRushFinish` 跑在结算事务**内部**,模块抛错
+**整次结算回滚**(不吞异常是为了不留撕裂存档);`onQuestStart` 抛错则拒绝进本,消息回传客户端。
+
+激活语义是**内容键控**:模块第一步读自己的激活表,表缺失或未启用就直接返回。所以
+"装了模块但没下发内容"与"完全没装模块"表现一致,可以先装模块再按需下发内容。
+
+⚠ 已验证到服务端级(结算发奖/防跳关/惰性/CDN 下发,2026-07-26),**客户端真机验收
+(进本、掉落到账、轮次锁)尚未在 dev 架构上完成**。要稳,用本分支。
 
 ---
 
