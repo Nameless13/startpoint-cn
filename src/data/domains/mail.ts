@@ -91,6 +91,50 @@ export function getPlayerMailsSync(
 }
 
 /**
+ * Looks up a single mail by ID, scoped to the owning player.
+ *
+ * Claim endpoints must use this instead of paging through the mail list: a
+ * mailbox with more pending mail than one page holds would otherwise leave the
+ * older mail unclaimable.
+ */
+export function getPlayerMailByIdSync(
+    playerId: number,
+    mailId: number,
+    unreceivedOnly: boolean = false
+): RawPlayerMail | null {
+    let query = `SELECT * FROM players_mails WHERE id = ? AND player_id = ?`
+    if (unreceivedOnly) {
+        query += ` AND receive_time = '0000-00-00 00:00:00'`
+    }
+    return (getDb().prepare(query).get(mailId, playerId) as RawPlayerMail | undefined) ?? null
+}
+
+/**
+ * Looks up mails by ID, scoped to the owning player. IDs are queried in chunks
+ * so a large batch stays under SQLite's bound-parameter limit.
+ */
+export function getPlayerMailsByIdsSync(
+    playerId: number,
+    mailIds: number[],
+    unreceivedOnly: boolean = false
+): RawPlayerMail[] {
+    if (mailIds.length === 0) return []
+
+    const db = getDb()
+    const found: RawPlayerMail[] = []
+    const chunkSize = 500
+    for (let offset = 0; offset < mailIds.length; offset += chunkSize) {
+        const chunk = mailIds.slice(offset, offset + chunkSize)
+        let query = `SELECT * FROM players_mails WHERE player_id = ? AND id IN (${chunk.map(() => '?').join(',')})`
+        if (unreceivedOnly) {
+            query += ` AND receive_time = '0000-00-00 00:00:00'`
+        }
+        found.push(...db.prepare(query).all(playerId, ...chunk) as RawPlayerMail[])
+    }
+    return found
+}
+
+/**
  * Gets total mail count for a player.
  */
 export function getPlayerMailCountSync(
@@ -107,7 +151,11 @@ export function getPlayerMailCountSync(
 
 /**
  * Marks a mail as received and returns its attachment data.
- * Does NOT apply the reward — caller must do that.
+ * Does NOT apply the reward — the caller must do that, inside the same
+ * transaction (see `claimMailSync`).
+ *
+ * The mark is a conditional update, so it doubles as the claim guard: a null
+ * return means the mail was already received and its reward already paid out.
  */
 export function receiveMailSync(
     playerId: number,
@@ -120,7 +168,12 @@ export function receiveMailSync(
     if (!mail) return null
 
     const now = new Date().toISOString().replace('T', ' ').substring(0, 19)
-    getDb().prepare(`UPDATE players_mails SET receive_time = ? WHERE id = ?`).run(now, mailId)
+    const result = getDb().prepare(`
+        UPDATE players_mails SET receive_time = ?
+        WHERE id = ? AND player_id = ? AND receive_time = '0000-00-00 00:00:00'
+    `).run(now, mailId, playerId)
+
+    if (result.changes === 0) return null
 
     return {
         mail_id: mail.id,
@@ -128,25 +181,6 @@ export function receiveMailSync(
         type_id: mail.type_id,
         number: mail.number,
     }
-}
-
-/**
- * Batch receive mails. Returns list of successfully claimed mail IDs.
- */
-export function receiveAllMailsSync(
-    playerId: number,
-    mailIds: number[]
-): number[] {
-    const claimed: number[] = []
-    getDb().transaction(() => {
-        for (const mailId of mailIds) {
-            const result = receiveMailSync(playerId, mailId)
-            if (result !== null) {
-                claimed.push(mailId)
-            }
-        }
-    })()
-    return claimed
 }
 
 /**

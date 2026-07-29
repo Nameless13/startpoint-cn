@@ -1,13 +1,9 @@
 import { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import { MailType, RawPlayerMail, getPlayerMailCountSync, getPlayerMailsSync, insertReceiveHistorySync, receiveAllMailsSync, receiveMailSync } from "../../data/domains/mail"
-import { getPlayerItemSync, givePlayerItemSync } from "../../data/domains/item"
-import { givePlayerCharacterSync } from "../../lib/character"
-import { getPlayerSync, updatePlayerSync } from "../../data/domains/player"
+import { RawPlayerMail, getPlayerMailCountSync, getPlayerMailsSync } from "../../data/domains/mail"
 import { getSession } from "../../data/domains/session"
-import { insertPlayerEquipmentSync } from "../../data/domains/equipment"
 import { resolvePlayerIdSync } from "../../data/activeAccount";
-import { generateDataHeaders, getServerTime } from "../../utils";
-import { givePlayerEquipmentSync } from "../../lib/equipment";
+import { generateDataHeaders } from "../../utils";
+import { MailRewards, claimMailSync, claimMailsSync } from "../../lib/mail";
 
 interface IndexBody {
     api_count: number
@@ -43,105 +39,11 @@ function formatMailResponse(mail: RawPlayerMail) {
     }
 }
 
-function applyMailReward(playerId: number, mail: RawPlayerMail): {
-    characterList: any[]
-    equipmentList: any[]
-    itemList: Record<string, number>
-    userInfo: Record<string, any>
-} {
-    const player = getPlayerSync(playerId)
-    const characterList: any[] = []
-    const equipmentList: any[] = []
-    const itemList: Record<string, number> = {}
-    const userInfo: Record<string, any> = {}
-
-    if (!player) return { characterList, equipmentList, itemList, userInfo }
-
-    switch (mail.type) {
-        case MailType.ITEM: {
-            if (mail.type_id === null) break
-            const newAmount = givePlayerItemSync(playerId, mail.type_id, mail.number)
-            itemList[String(mail.type_id)] = newAmount
-            break
-        }
-        case MailType.PAID_VMONEY: {
-            const newVmoney = player.vmoney + mail.number
-            updatePlayerSync({ id: playerId, vmoney: newVmoney })
-            userInfo['vmoney'] = newVmoney
-            break
-        }
-        case MailType.FREE_VMONEY: {
-            const newFreeVmoney = player.freeVmoney + mail.number
-            updatePlayerSync({ id: playerId, freeVmoney: newFreeVmoney })
-            userInfo['free_vmoney'] = newFreeVmoney
-            break
-        }
-        case MailType.CHARACTER: {
-            if (mail.type_id === null) break
-            // same grant path as gacha/exchange: new characters get their bond
-            // tokens, dupes get stack+1 plus the rarity×element compensation item
-            const result = givePlayerCharacterSync(playerId, mail.type_id)
-            if (result === null) break
-            characterList.push(result.character)
-            if (result.item) {
-                itemList[String(result.item.id)] =
-                    getPlayerItemSync(playerId, result.item.id) ?? result.item.count
-            }
-            break
-        }
-        case MailType.EQUIPMENT: {
-            if (mail.type_id === null) break
-            const result = givePlayerEquipmentSync(playerId, mail.type_id, mail.number)
-            equipmentList.push(result)
-            break
-        }
-        case MailType.STAR_CRUMB: {
-            const newCrumb = player.starCrumb + mail.number
-            updatePlayerSync({ id: playerId, starCrumb: newCrumb })
-            userInfo['star_crumb'] = newCrumb
-            break
-        }
-        case MailType.FREE_MANA: {
-            const newMana = player.freeMana + mail.number
-            updatePlayerSync({ id: playerId, freeMana: newMana, totalManaObtained: (player.totalManaObtained ?? 0) + mail.number })
-            userInfo['free_mana'] = newMana
-            break
-        }
-        case MailType.EXP_POOL: {
-            const newExp = player.expPool + mail.number
-            updatePlayerSync({ id: playerId, expPool: newExp })
-            userInfo['exp_pool'] = newExp
-            break
-        }
-        case MailType.BOND_TOKEN: {
-            const newBond = player.bondToken + mail.number
-            updatePlayerSync({ id: playerId, bondToken: newBond })
-            userInfo['bond_token'] = newBond
-            break
-        }
-        case MailType.BOSS_BOOST_POINT: {
-            const newBoss = player.bossBoostPoint + mail.number
-            updatePlayerSync({ id: playerId, bossBoostPoint: newBoss })
-            userInfo['boss_boost_point'] = newBoss
-            break
-        }
-        case MailType.BOOST_POINT: {
-            const newBoost = player.boostPoint + mail.number
-            updatePlayerSync({ id: playerId, boostPoint: newBoost })
-            userInfo['boost_point'] = newBoost
-            break
-        }
-        case MailType.RANK_POINT: {
-            const newRank = player.rankPoint + mail.number
-            updatePlayerSync({ id: playerId, rankPoint: newRank })
-            userInfo['rank_point'] = newRank
-            break
-        }
-    }
-
-    insertReceiveHistorySync(playerId, { type: mail.type, type_id: mail.type_id, number: mail.number })
-
-    return { characterList, equipmentList, itemList, userInfo }
+function attachRewards(responseData: Record<string, any>, rewards: MailRewards): void {
+    if (rewards.characterList.length > 0) responseData.character_list = rewards.characterList
+    if (rewards.equipmentList.length > 0) responseData.equipment_list = rewards.equipmentList
+    if (Object.keys(rewards.itemList).length > 0) responseData.item_list = rewards.itemList
+    if (Object.keys(rewards.userInfo).length > 0) responseData.user_info = rewards.userInfo
 }
 
 const routes = async (fastify: FastifyInstance) => {
@@ -200,33 +102,25 @@ const routes = async (fastify: FastifyInstance) => {
             message: "No player bound to account"
         })
 
-        // Read mail before claiming to get attachment info
-        const mails = getPlayerMailsSync(playerId, 1, 1000, true)
-        const mail = mails.find(m => m.id === mailId)
-        if (!mail) return reply.status(400).send({
+        // mark-received and reward application share one transaction
+        const claim = claimMailSync(playerId, mailId)
+        if (claim.status === "not_found") return reply.status(400).send({
             error: "Bad Request",
-            message: "Mail not found or already received"
+            message: "Mail not found"
         })
 
-        // Apply reward first
-        const { characterList, equipmentList, itemList, userInfo } = applyMailReward(playerId, mail)
-
-        // Then mark as received
-        receiveMailSync(playerId, mailId)
-
-        const totalCount = getPlayerMailCountSync(playerId)
+        // an already received mail replays as an empty success: a double tap or
+        // a retried request must not raise the client's communication-error
+        // dialog over a reward that already landed
 
         const responseData: Record<string, any> = {
             auto_sale_expired_mail: false,
             dispose_expired_mail: false,
-            total_count: totalCount,
+            total_count: getPlayerMailCountSync(playerId),
             mail_arrived: getPlayerMailCountSync(playerId, true) > 0,
         }
 
-        if (characterList.length > 0) responseData.character_list = characterList
-        if (equipmentList.length > 0) responseData.equipment_list = equipmentList
-        if (Object.keys(itemList).length > 0) responseData.item_list = itemList
-        if (Object.keys(userInfo).length > 0) responseData.user_info = userInfo
+        attachRewards(responseData, claim.rewards)
 
         reply.header("content-type", "application/x-msgpack")
         return reply.status(200).send({
@@ -256,29 +150,8 @@ const routes = async (fastify: FastifyInstance) => {
             message: "No player bound to account"
         })
 
-        // Get all unreceived mails
-        const unreceivedMails = getPlayerMailsSync(playerId, 1, 1000, true)
-        const mailMap = new Map(unreceivedMails.map(m => [m.id, m]))
-
-        const alreadyCount = mailIds.filter(id => !mailMap.has(id)).length
-        const characterList: any[] = []
-        const equipmentList: any[] = []
-        const itemList: Record<string, number> = {}
-        const userInfo: Record<string, any> = {}
-
-        for (const mailId of mailIds) {
-            const mail = mailMap.get(mailId)
-            if (!mail) continue
-
-            const { characterList: cl, equipmentList: el, itemList: il, userInfo: ui } = applyMailReward(playerId, mail)
-            characterList.push(...cl)
-            equipmentList.push(...el)
-            Object.assign(itemList, il)
-            Object.assign(userInfo, ui)
-        }
-
-        // Mark all as received
-        const claimed = receiveAllMailsSync(playerId, mailIds.filter(id => mailMap.has(id)))
+        // every mail is marked received and paid out inside one transaction
+        const { claimed, alreadyCount, rewards } = claimMailsSync(playerId, mailIds)
 
         const responseData: Record<string, any> = {
             already_mail_count: alreadyCount,
@@ -293,10 +166,7 @@ const routes = async (fastify: FastifyInstance) => {
             mail_arrived: getPlayerMailCountSync(playerId, true) > 0,
         }
 
-        if (characterList.length > 0) responseData.character_list = characterList
-        if (equipmentList.length > 0) responseData.equipment_list = equipmentList
-        if (Object.keys(itemList).length > 0) responseData.item_list = itemList
-        if (Object.keys(userInfo).length > 0) responseData.user_info = userInfo
+        attachRewards(responseData, rewards)
 
         reply.header("content-type", "application/x-msgpack")
         return reply.status(200).send({
