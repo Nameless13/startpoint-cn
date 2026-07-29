@@ -50,7 +50,10 @@ from datetime import date
 from pathlib import Path
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.join(ROOT, "mod-tools"))
+# 本脚本所在目录:主仓 = ROOT/mod-tools,平铺导出仓 = 仓根。工具自带的数据文件
+# (rogue_*.json / work/)一律以此为基准,两种布局都能找到。
+MOD_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, MOD_DIR)
 import wf_quest_lib as q          # noqa: E402
 import wf_chain_build as cb       # noqa: E402
 
@@ -1110,7 +1113,7 @@ def field_menu_all() -> list[tuple[str, str, str]]:
     if _FIELD_MENU_ALL is None:
         menu = list(FIELD_MENU)
         try:
-            cat = json.load(open(os.path.join(ROOT, "mod-tools", "rogue_field_menu.json"),
+            cat = json.load(open(os.path.join(MOD_DIR, "rogue_field_menu.json"),
                                  encoding="utf-8"))
             have = {m[1] for m in menu}
             for c in cat:
@@ -1132,7 +1135,7 @@ PLAN_TIERS = {"easy": ("off", 0.85), "normal": ("standard", 1.0),
 # 原机制**(mix 不拆解拼接),诅咒/等级修正照常叠加。general 系特殊 boss 的深渊法阵
 # 仍可落(克隆自身追加程序=原样+机制);standard 系(菲诺梅那/终始之龙等)无 action
 # 列可挂,法阵落不上(两条克隆路 2026-07-26 均已探明不通)。
-SPECIAL_BOSSES_PATH = os.path.join(ROOT, "mod-tools", "rogue_special_bosses.json")
+SPECIAL_BOSSES_PATH = os.path.join(MOD_DIR, "rogue_special_bosses.json")
 
 
 def load_special_bosses() -> tuple[set[str], tuple[str, ...]]:
@@ -1202,7 +1205,7 @@ def is_special_boss(code: str, special: tuple[set[str], tuple[str, ...]]) -> boo
 # ---- boss 出场历史(2026-07-26 用户需求:出现过的 boss 降低再出现概率)----
 # work/rogue_boss_history.json = 最近 3 座塔的 boss 名单;抽取时 80% 概率
 # 优先从"最近两座塔没出过"的候选里挑,新面孔优先但不绝对禁止(池子小不至于枯竭)。
-BOSS_HISTORY_PATH = os.path.join(ROOT, "mod-tools", "work", "rogue_boss_history.json")
+BOSS_HISTORY_PATH = os.path.join(MOD_DIR, "work", "rogue_boss_history.json")
 
 
 def load_boss_history() -> list[list[str]]:
@@ -1403,7 +1406,7 @@ def layout_plan() -> dict:
      "floors": {"5": {"curses": ["深渊重甲"], "field": "battle/…program"}}}
     stages 决定该层诅咒档位+难度乘区(PLAN_TIERS);floors 显式指定优先于随机。"""
     try:
-        return json.load(open(os.path.join(ROOT, "mod-tools", "rogue_layout_plan.json"),
+        return json.load(open(os.path.join(MOD_DIR, "rogue_layout_plan.json"),
                               encoding="utf-8"))
     except Exception:
         return {}
@@ -1424,7 +1427,7 @@ def field_tuning() -> dict:
     {"global": {"加成": 1.0, "诅咒": 1.0, "场地": 1.0, "领域": 1.0},
      "per": {program: 倍率}}。倍率≠1 时构建期锻造缩放变体(wf_field_catalog.forge)。"""
     try:
-        return json.load(open(os.path.join(ROOT, "mod-tools", "rogue_field_tuning.json"),
+        return json.load(open(os.path.join(MOD_DIR, "rogue_field_tuning.json"),
                               encoding="utf-8"))
     except Exception:
         return {}
@@ -2949,7 +2952,7 @@ def main() -> int:
     pub_items = written + sorted(forged_pubs)
     pub_tables = ",".join(pub_items)
     if args.publish:
-        r = subprocess.run([sys.executable, os.path.join(ROOT, "mod-tools", "wf_publish.py"),
+        r = subprocess.run([sys.executable, os.path.join(MOD_DIR, "wf_publish.py"),
                             "--tables", pub_tables],
                            cwd=ROOT)
         print(f"[PUBLISH] wf_publish 退出码 {r.returncode}")
