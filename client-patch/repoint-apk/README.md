@@ -11,7 +11,7 @@
 $env:WF_APK_KS_PASS = "<keystore 口令>"   # 只走环境变量，不落盘不进命令行
 python -X utf8 client-patch/repoint-apk/repoint_build.py `
   --base <五合一基座.apk> `
-  --host 192.168.1.246:800 `
+  --host 192.168.1.10:8001 `
   --out out/repoint-deployer/WorldFlipper-5in1-<host>.apk `
   --work out/repoint-deployer/work `
   --ffdec ffdec_26.2.1/ffdec.jar --java <java8> `

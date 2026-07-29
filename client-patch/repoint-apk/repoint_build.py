@@ -85,7 +85,7 @@ def main() -> int:
     ap.add_argument("--base", required=True, type=Path,
                     help="五合一基座 APK（真机验证过的那只）")
     ap.add_argument("--host", required=True,
-                    help="新服务器 host:port，如 192.168.1.246:800")
+                    help="新服务器 host:port，如 192.168.1.10:8001")
     ap.add_argument("--out", required=True, type=Path)
     ap.add_argument("--work", required=True, type=Path)
     ap.add_argument("--ffdec", required=True, type=Path)
