@@ -60,6 +60,8 @@
 | `/toolbox/status` | — | 工具箱任务状态 `{state:idle/running/cancelling/done/failed/cancelled, tool, title, log[](尾120行), rc, progress:{done,total}, started, ended, cmd, tools:{名:{title,desc,available}}}` |
 | `/backups` | — | `[{table, name, size, mtime}]` |
 | `/mainpos` | — | `{restricted_rows, state}`(主位限制现状) |
+| `/enh/state` | — | 增强开关状态 `{state:idle/running/done/error, step, error, computedAt, status?}`;`status` = `{store, cdn, snapshot, toggles[{id,label,scope,state,counts:{official,enhanced,foreign},default,subs,offEqualsOfficial,guiReadonly,warn,note,tables}], current, presets, presetExcluded, guarded, escalated:{R1,R2}, misaligned}`。**只读缓存,不同步计算**(首次要建官方基准索引,先 POST `/enh/prime`) |
+| `/enh/snapshots` | — | `{snapshots:[{name, created, entries, forced}]}`(增强基线快照列表) |
 
 ## POST 端点(写;均支持 `"dry_run": true`)
 
@@ -103,6 +105,11 @@
 | `/asset/import_pack` | `{character, dir, force?}` | **资产包一比一导入**:datamine 解包目录批量替换当前角色资产(命中 store 的全替换,提取器产物自动跳过) |
 | `/toolbox/run` | `{tool:"export_assets"\|"recover_pathlist"\|"restore_package", args:{out?,limit?,workers?,...}}` | 启动工具箱长任务(子进程;同时只允许一个,参数白名单透传;**无 dry_run,输出均在 store 之外**) → `{ok, tool, title, cmd}` |
 | `/toolbox/cancel` | `{}` | 终止当前工具箱任务 → `{ok, log}` |
+| `/enh/prime` | `{force?}` | 后台线程重算增强开关状态(官方基准索引 + 逐表比对)→ `{seq, state}`;结果轮询 GET `/enh/state` |
+| `/enh/plan` | `{toggles:{开关ID:bool}, sub:{power,feel,gate}, scope:"all"\|"character"\|"weapon"\|"enemy"\|"other", allowForeign?}` | 预览:`{digest, details[{logical,toOfficial,toEnhanced,rowsAdded,rowsDropped,rowsRestored,foreignCount}], selfcheck:{E1,E2}, escalated, misaligned, foreign[], tables[]}`。**不写任何文件**;`toggles` 里没给的开关取 store 实测态 |
+| `/enh/apply` | `{toggles, sub, scope, digest, dryRun?, allowForeign?}` | 写 store:`{written[], preimage, changed, plan}`。`digest` 与重算结果不符即拒绝(store 在预览之后变过);写后自动登记待发布 + 改动日志 |
+| `/enh/snapshot` | `{tag?, force?}` | 把当前 store 冻结成「增强侧」基线 → `{name, created, store, entries}`。守卫:自制内容行必须在场 |
+| `/enh/rollback` | `{preimage, dryRun?}` | 回滚某次 apply → `{restored[], preimage, dry_run}` |
 
 ## 环境变量
 
