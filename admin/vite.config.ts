@@ -27,13 +27,24 @@ export default defineConfig(({ mode }) => {
             rolldownOptions: {
                 output: {
                     codeSplitting: {
-                        includeDependenciesRecursively: false,
                         groups: [
                             {
+                                // 按包边界拆而不用 maxSize 自动切:自动切会把互相依赖的模块
+                                // 切进不同分片(求值期跨片读 KeyCode 得 undefined => /admin 白屏)。
+                                // icons/rc-* 只被 antd 单向依赖,无环,求值顺序安全。
+                                name: "vendor-icons",
+                                test: /[\\/]node_modules[\\/]@ant-design[\\/]icons/,
+                                priority: 50
+                            },
+                            {
+                                name: "vendor-rc",
+                                test: /[\\/]node_modules[\\/](?:@rc-component[\\/]|rc-[^\\/]+[\\/])/,
+                                priority: 45
+                            },
+                            {
                                 name: "vendor-antd",
-                                test: /[\\/]node_modules[\\/](?:antd[\\/]|@ant-design[\\/]|@rc-component[\\/]|rc-[^\\/]+[\\/])/,
-                                priority: 40,
-                                maxSize: 700 * 1024
+                                test: /[\\/]node_modules[\\/](?:antd[\\/]|@ant-design[\\/])/,
+                                priority: 40
                             },
                             {
                                 name: "vendor-query",
