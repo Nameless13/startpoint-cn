@@ -7,32 +7,57 @@
 ## ⚠️ 免责声明
 
 - 本工具仅用于**学习、研究、单机 / 私服环境**下对**你自己拥有的**游戏资源进行修改。
-- **不包含、不分发任何游戏本体资产**(数据包、APK、美术、语音等版权内容归游戏运营方所有)。
-  使用者需自备合法获得的游戏资源。
+- 本工具仓库**不包含、不分发任何游戏本体资产**(数据包、APK、美术、语音等版权内容归游戏运营方所有)。
+  CDN 直解只读取使用者自己部署的 startpoint-cn 服务端 CDN;使用者需自备合法获得的游戏资源。
 - 修改联网正式服数据、用于作弊或商业用途均可能违反游戏服务条款,由使用者自行承担后果。
 - 逆向所得的字段语义 / 解密方式仅供技术交流;上游生态(wfax / wdfp-extractor)已公开同类逻辑。
 
 ## 环境
 
 - Python ≥ 3.10(仅标准库,无第三方依赖)
-- 一份合法的手机端游戏数据包(`WorldFlipper/dummy/download/production/upload`)
-- startpoint-cn 服务端(用于把改动下发给客户端)
+- 已部署的 startpoint-cn 服务端(首选仓内已有 `.cdn/cn`;用于物化数据和下发改动)
+- 或一份合法的手机端游戏数据包(`WorldFlipper/dummy/download/production/upload`)
 - 可选:MuMu 12 模拟器 + adb(用于直接同步 / 重启游戏)
 
 ## 快速开始
 
+首选:已经部署 startpoint-cn,且仓内有 `.cdn/cn`。
+
 ```bash
-# 1) 配置数据包路径
-cp mod-tools/profiles.example.json mod-tools/profiles.json
-#    编辑 profiles.json,把 store 指向你的 upload 目录
+# 1) 先做只读规划(默认 dry-run,不会创建或写入目标目录)
+python mod-tools/wf_store_materialize.py --dest D:/WF/wf-store-fresh
 
-# 2) 启动网页修改器
+# 2) 确认规划后物化、校验,并写入当前版本档案
+python mod-tools/wf_store_materialize.py --dest D:/WF/wf-store-fresh --apply --verify --write-profile
+
+# 3) 首跑自检
+python mod-tools/wf_selftest.py
+
+# 4) 启动网页修改器
 python mod-tools/wf_gui.py          # 浏览器打开 http://127.0.0.1:8765
+```
 
-# 3) 改完发布到 CDN(客户端增量更新时拉取)
+`--dest` 必须不存在或是空目录。物化结果写到
+`<dest>/production/{upload,medium_upload,android_upload}`;不加 `--apply` 时始终只规划、不写盘。
+`--official-only` 可只重放官方归档链,终点固定为 `1.4.54`。
+
+备用:自备合法数据包并手工配置版本档案。
+
+```bash
+cp mod-tools/profiles.example.json mod-tools/profiles.json
+# 编辑 profiles.json,把 store 指向你的 production/upload 目录
+
+python mod-tools/wf_selftest.py
+python mod-tools/wf_gui.py
+```
+
+开始修改后:
+
+```bash
+# 把改动打成 CDN 增量包(客户端增量更新时拉取)
 python mod-tools/wf_publish.py --tables ability,character_status
 
-# 4) 重启服务端 + 重启游戏 → 改动生效
+# 重启服务端 + 重启游戏 → 改动生效
 ```
 
 ## 目录结构(约定)
@@ -64,7 +89,8 @@ mod-tools/
 |---|---|
 | `wf_gui.py` + `wf_gui.html` | 网页修改器,分组导航(角色 / 武器 / 全局 / 系统):词条(含**词条工坊**结构化组装) / 数值 / 技能·倍率(含**效果词条**命令级编辑、**强化弹射**) / 资料 / 资产 / 新建角色 / 武器·魂珠 / Boss·副本 / 速查 / 移植 / 配方 / 工具箱 / 日志 / 备份 |
 | `wf_mod_tool.py` | 核心引擎:orderedmap(含嵌套表)读写、AMF3 schema 解析、recipe 配方、版本档案 |
-| `wf_selftest.py` | **全链路自检**:环境可用性检测 + 功能模拟演练(--deep 含金丝雀写入闭环,写完即复原);GUI 工具箱可跑 |
+| `wf_store_materialize.py` | **首次部署首选**:从自己服务端的 `.cdn/cn` 本地重放到全新 store;默认只规划,`--apply` 才写盘 |
+| `wf_selftest.py` | **首跑自检**:物化/配置版本档案后先运行;环境可用性检测 + 功能模拟演练(--deep 含金丝雀写入闭环,写完即复原);GUI 工具箱可跑 |
 | `wf_publish.py` | 把改动打成增量包发布到服务端 CDN(与官方增量更新同构) |
 | `wf_boss.py` / `wf_quest_lib.py` | Boss 数值 + 22 类副本列表;quest 系三层压缩索引嵌套表读写 |
 | `wf_assets.py` / `wf_dsl.py` / `wf_describe.py` | 角色资产编解码;技能 ActionDsl 编辑(AMF3);行级中文描述 |
