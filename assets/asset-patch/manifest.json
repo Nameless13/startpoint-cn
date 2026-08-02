@@ -146,6 +146,24 @@
    "created_at": "2026-07-29"
   },
   {
+   "id": "backfill-to-live-20260802",
+   "type": "patch",
+   "name": "1.4.247→1.4.276 现役态回灌(整合包)",
+   "description": "把 2026-07-29 回灌(1.4.247)之后发布到现役 CDN 的 28 个中间版本边(1.4.248…1.4.276,去重 310 个被覆盖条目)整合为单边 6 包,自建部署 clone 即得四项现役内容:①白狼杰拉德 1.4.251 全套 kit 重做(队长技 9 行、能力 1-6 全改、六属性各 10 倍、技能 DSL 加能力伤害弱点与光耐性削减);②赛瑞斯双形态修复列车(人形/龙形 PF override、专属特效、立绘与 trimmed_image 收尾、1.4.269 Wait 节点修复);③风巨蜥蜴 land_dragon_wind 1.1.10 新角色(charpkg 1.4.275,特殊强化弹射+三 Fever 特效+PF 激光);④深渊连战塔伤害带修复后重摇版(1.4.276,构建期四道闸+分位硬闸+敌等级爬坡,中后段 col 修正中位 4.03→1.56,12 张塔表齐备)。平铺:1=common(121 条目)、2-5=medium、6=android(dev 双格式 .empty 占位)。单包≤5MiB(CI 卫生门禁)。与服务端 masterdata(assets/{character,mana_node}.json 与 assets/cdndata/{character,character_text}.json)配套,缺此边则新部署 server/client 两半不同步。",
+   "version": "1.4.276",
+   "depends_on": "1.4.247",
+   "enabled": true,
+   "chain": [
+    "pinball-1.4.247-1.4.276-1-backfill0802.zip",
+    "pinball-1.4.247-1.4.276-2-backfill0802.zip",
+    "pinball-1.4.247-1.4.276-3-backfill0802.zip",
+    "pinball-1.4.247-1.4.276-4-backfill0802.zip",
+    "pinball-1.4.247-1.4.276-5-backfill0802.zip",
+    "pinball-1.4.247-1.4.276-6-backfill0802.zip"
+   ],
+   "created_at": "2026-08-02"
+  },
+  {
    "id": "gacha-feature-fix-v1",
    "type": "patch",
    "name": "特辑图片 C2032 修复（第一步）",
