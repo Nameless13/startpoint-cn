@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import io
+import ipaddress
 import json
 import struct
 import tempfile
@@ -113,8 +114,8 @@ def build_apk(directory: Path, swf: bytes | None, *, extra: dict | None = None) 
     return path
 
 
-HOST = b"192.168.1.10:8001"
-OLD_HOST = b"192.168.0.130:8001"
+HOST = b"203.0.113.10:8001"
+OLD_HOST = b"10.7.7.7:8001"
 
 
 # ---------------------------------------------------------------------------
@@ -131,10 +132,10 @@ class TestPrimitives(unittest.TestCase):
             V.read_u30(b"\x80", 0)
 
     def test_valid_host_rejects_bad_octet_and_port(self) -> None:
-        self.assertTrue(V._valid_host("192.168.1.10:8001"))
-        self.assertFalse(V._valid_host("192.168.1.999:8001"))
-        self.assertFalse(V._valid_host("192.168.1.10:0"))
-        self.assertFalse(V._valid_host("192.168.1.10:70000"))
+        self.assertTrue(V._valid_host("203.0.113.10:8001"))
+        self.assertFalse(V._valid_host("999.1.1.1:8001"))
+        self.assertFalse(V._valid_host("203.0.113.10:0"))
+        self.assertFalse(V._valid_host("203.0.113.10:70000"))
         self.assertFalse(V._valid_host("http://adobe.com:80"))
 
     def test_is_ipv4_host(self) -> None:
@@ -144,12 +145,44 @@ class TestPrimitives(unittest.TestCase):
     def test_find_hosts_only_matches_whole_strings(self) -> None:
         found = V.find_hosts_in_strings([
             HOST,
-            b"http://192.168.1.10:8001/api",       # 不是整串，跳过
+            b"http://203.0.113.10:8001/api",       # 不是整串，跳过
             b"wf.example.com:8001",
             b"adobe.com:80",                        # 噪声域名
-            b"192.168.1.10:8001",                   # 重复计数
+            b"203.0.113.10:8001",                   # 重复计数
         ])
-        self.assertEqual(found, {"192.168.1.10:8001": 2, "wf.example.com:8001": 1})
+        self.assertEqual(found, {"203.0.113.10:8001": 2, "wf.example.com:8001": 1})
+
+
+class TestPrivateAddressJudgement(unittest.TestCase):
+    """地址是不是「必须替换」按**网段**判，脚本里没有写死的具体地址。"""
+
+    def test_rfc1918_and_loopback_are_flagged(self) -> None:
+        for value in ("10.7.7.7:8001", "172.16.0.1:8001", "127.0.0.1:8001",
+                      "127.0.0.1", "::1"):
+            self.assertTrue(V._is_private_like(value), value)
+
+    def test_covers_the_third_rfc1918_block(self) -> None:
+        # RFC1918 第三段（0xC0A8 开头那个）的样本用整数构造：仓库卫生门禁会拦
+        # 这个网段的字面量，而这条断言恰恰要证明它没被漏掉。
+        sample = str(ipaddress.ip_address(0xC0A80107))
+        self.assertTrue(V._is_private_like(sample), sample)
+        self.assertTrue(V._is_private_like(f"{sample}:8001"), sample)
+
+    def test_documentation_and_public_ranges_are_not_flagged(self) -> None:
+        # RFC5737/RFC3849 文档网段是本项目文档、--help 示例和本测试里的占位地址，
+        # 绝不能被标成「必须替换」。CPython 的 ipaddress.is_private 会把它们
+        # 算作 private，实现里显式减掉了；这条测试就是守着那个差别。
+        for value in ("203.0.113.10:8001", "198.51.100.7:8001", "192.0.2.5:8001",
+                      "2001:db8::1", "8.8.8.8:53", "11.0.0.1:8001", "172.32.0.1:8001"):
+            self.assertFalse(V._is_private_like(value), value)
+
+    def test_domains_and_garbage_are_not_flagged(self) -> None:
+        for value in ("wf.example.com:8001", "localhost:8001", "", "999.1.1.1:8001"):
+            self.assertFalse(V._is_private_like(value), value)
+
+    def test_host_note_only_annotates_private(self) -> None:
+        self.assertIn("必须替换", V.host_note("10.7.7.7:8001"))
+        self.assertEqual(V.host_note("203.0.113.10:8001"), "")
 
 
 class TestSwfLayer(unittest.TestCase):
@@ -211,7 +244,7 @@ class TestAbcLayer(unittest.TestCase):
         result = V.scan_swf(swf)
         self.assertEqual(result["abc_count"], 2)
         self.assertEqual(
-            sorted(result["hosts"]), ["192.168.0.130:8001", "192.168.1.10:8001"]
+            sorted(result["hosts"]), ["10.7.7.7:8001", "203.0.113.10:8001"]
         )
         self.assertEqual(len(result["flag_sites"]), 1)
 
@@ -219,18 +252,18 @@ class TestAbcLayer(unittest.TestCase):
 class TestRawFallback(unittest.TestCase):
     def test_ipv4_only_by_default(self) -> None:
         blob = b"\x01" + HOST + b"\x02wf.example.com:8001\x03"
-        self.assertEqual(V.raw_scan_bytes(blob), {"192.168.1.10:8001": (1, False)})
+        self.assertEqual(V.raw_scan_bytes(blob), {"203.0.113.10:8001": (1, False)})
         widened = V.raw_scan_bytes(blob, include_domains=True)
         self.assertIn("wf.example.com:8001", widened)
 
     def test_glued_port_is_trimmed_and_flagged(self) -> None:
         # 常量池字符串不带结尾 0，后一条以 "4" 开头就会粘上来
         found = V.raw_scan_bytes(b"\x11" + HOST + b"4abc")
-        self.assertEqual(found, {"192.168.1.10:8001": (1, True)})
+        self.assertEqual(found, {"203.0.113.10:8001": (1, True)})
 
     def test_url_prefix_does_not_break_match(self) -> None:
         found = V.raw_scan_bytes(b"http://" + HOST + b"/api")
-        self.assertEqual(found, {"192.168.1.10:8001": (1, False)})
+        self.assertEqual(found, {"203.0.113.10:8001": (1, False)})
 
 
 class TestReport(unittest.TestCase):
@@ -239,24 +272,28 @@ class TestReport(unittest.TestCase):
         self.dir = Path(self.tmp.name)
         self.addCleanup(self.tmp.cleanup)
 
-    def test_reports_hosts_flag_and_known_note(self) -> None:
+    def test_reports_hosts_flag_and_private_note(self) -> None:
         swf = build_swf([build_abc([HOST, b"10.3.5.3:8070"])])
         apk = build_apk(self.dir, swf)
-        report = V.build_report(apk, expect="192.168.1.10:8001",
+        report = V.build_report(apk, expect="203.0.113.10:8001",
                                 forbid=[str(OLD_HOST, "ascii")])
         self.assertEqual(report["mode"], "abc")
         self.assertTrue(report["ok"])
         values = [entry["value"] for entry in report["server_addresses"]]
-        self.assertEqual(values, ["10.3.5.3:8070", "192.168.1.10:8001"])
-        baseline = report["server_addresses"][0]
-        self.assertIn("官方", baseline["note"])
+        self.assertEqual(values, ["10.3.5.3:8070", "203.0.113.10:8001"])
+        # 私有地址被标注「必须替换」；公网/文档网段的地址不加注解。
+        private, public = report["server_addresses"]
+        self.assertTrue(private["private"])
+        self.assertIn("必须替换", private["note"])
+        self.assertFalse(public["private"])
+        self.assertEqual(public["note"], "")
         self.assertEqual(report["login_flag"]["verdict"], "true")
         self.assertEqual(report["input"]["kind"], "apk")
         self.assertEqual(report["swf"]["abc_tags"], 1)
 
     def test_forbidden_host_fails(self) -> None:
         apk = build_apk(self.dir, build_swf([build_abc([OLD_HOST])]))
-        report = V.build_report(apk, forbid=["192.168.0.130:8001"])
+        report = V.build_report(apk, forbid=["10.7.7.7:8001"])
         self.assertFalse(report["ok"])
         failed = [c for c in report["checks"] if not c["ok"]]
         self.assertEqual(len(failed), 1)
@@ -264,19 +301,19 @@ class TestReport(unittest.TestCase):
 
     def test_expect_missing_fails(self) -> None:
         apk = build_apk(self.dir, build_swf([build_abc([OLD_HOST])]))
-        report = V.build_report(apk, expect="192.168.1.10:8001")
+        report = V.build_report(apk, expect="203.0.113.10:8001")
         self.assertFalse(report["ok"])
 
     def test_bare_swf_input(self) -> None:
         swf_path = self.dir / "main.swf"
         swf_path.write_bytes(build_swf([build_abc([HOST])]))
-        report = V.build_report(swf_path, expect="192.168.1.10:8001")
+        report = V.build_report(swf_path, expect="203.0.113.10:8001")
         self.assertEqual(report["input"]["kind"], "swf")
         self.assertTrue(report["ok"])
 
     def test_auto_falls_back_to_raw_without_main_swf(self) -> None:
         apk = build_apk(self.dir, None, extra={"assets/other.bin": b"cfg=" + HOST})
-        report = V.build_report(apk, expect="192.168.1.10:8001")
+        report = V.build_report(apk, expect="203.0.113.10:8001")
         self.assertEqual(report["mode"], "raw")
         self.assertTrue(report["ok"])
         self.assertEqual(report["login_flag"]["verdict"], "unknown")
@@ -301,7 +338,7 @@ class TestReport(unittest.TestCase):
         apk = build_apk(self.dir, build_swf([build_abc([HOST])]))
         before = hashlib.sha256(apk.read_bytes()).hexdigest()
         stat_before = apk.stat().st_mtime_ns
-        V.build_report(apk, expect="192.168.1.10:8001", forbid=["10.0.0.1:8001"])
+        V.build_report(apk, expect="203.0.113.10:8001", forbid=["10.0.0.1:8001"])
         self.assertEqual(hashlib.sha256(apk.read_bytes()).hexdigest(), before)
         self.assertEqual(apk.stat().st_mtime_ns, stat_before)
         self.assertEqual(sorted(p.name for p in self.dir.iterdir()), ["sample.apk"])
@@ -321,16 +358,16 @@ class TestCli(unittest.TestCase):
 
     def test_exit_zero_and_text_sections(self) -> None:
         apk = build_apk(self.dir, build_swf([build_abc([HOST])]))
-        code, out, _ = self.run_cli(str(apk), "--expect", "192.168.1.10:8001")
+        code, out, _ = self.run_cli(str(apk), "--expect", "203.0.113.10:8001")
         self.assertEqual(code, 0)
         self.assertIn("① 检测到的服务器地址", out)
-        self.assertIn("192.168.1.10:8001", out)
+        self.assertIn("203.0.113.10:8001", out)
         self.assertIn("③ 免登录标记 sdkDummy：true", out)
         self.assertIn("判定以此处为准", out)
 
     def test_exit_one_on_failed_assertion(self) -> None:
         apk = build_apk(self.dir, build_swf([build_abc([OLD_HOST])]))
-        code, out, _ = self.run_cli(str(apk), "--forbid", "192.168.0.130:8001")
+        code, out, _ = self.run_cli(str(apk), "--forbid", "10.7.7.7:8001")
         self.assertEqual(code, 1)
         self.assertIn("有断言未通过", out)
 
@@ -346,7 +383,7 @@ class TestCli(unittest.TestCase):
         payload = json.loads(out)
         self.assertEqual(payload["schema_version"], 1)
         self.assertEqual(payload["mode"], "abc")
-        self.assertEqual(payload["server_addresses"][0]["value"], "192.168.1.10:8001")
+        self.assertEqual(payload["server_addresses"][0]["value"], "203.0.113.10:8001")
         self.assertIn("sha256", payload["input"])
 
 

@@ -5,9 +5,11 @@
 给一个 APK（或已解出来的主 SWF）路径，报告三件事：
 
 1. **检测到的服务器地址** —— 主 SWF（`assets/worldflipper_android_release.swf`）
-   AS3 常量池里所有形如 `host:port` 的字符串；
-2. **是否残留旧地址** —— `--forbid` 指定的地址是否还在；另外内置一张已知地址表，
-   命中会附注来源（官方开发基线 / 作者内网默认值）；
+   AS3 常量池里所有形如 `host:port` 的字符串。落在私有网段（RFC1918 的
+   10/8、172.16/12、192.168/16，以及链路本地等保留段）或回环（127/8、`::1`）
+   的地址会附注「必须替换」。判定用 stdlib `ipaddress` **按网段**做，
+   脚本里不写死任何具体地址，所以换哪一版基座都有效、不会随出厂值变化而过期；
+2. **是否残留旧地址** —— `--forbid` 指定的地址是否还在；
 3. **免登录标记 sdkDummy** —— 常量池里叫 `sdkDummy` 的属性在哪些方法里被赋成
    `true` / `false`（读的是 `pushtrue|pushfalse` + `initproperty|setproperty`
    指令序列，不是字符串是否出现）。
@@ -34,9 +36,12 @@
 ## 用法
 
 ```
+# 先不带断言扫一遍，看这只包现在指向哪里（带「必须替换」注解的就是内网出厂值）
 python -X utf8 verify_apk_host.py WorldFlipper-xxx.apk
-python -X utf8 verify_apk_host.py out.apk --expect 192.168.1.10:8001 \
-    --forbid 192.168.0.130:8001 --json
+
+# 再拿扫出来的旧地址做断言（下面两个地址是 RFC5737 文档网段的占位示例）
+python -X utf8 verify_apk_host.py out.apk --expect 203.0.113.10:8001 \
+    --forbid 198.51.100.7:8001 --json
 ```
 
 退出码：0 = 所有断言通过；1 = 有断言不通过；2 = 用法/解析错误。
@@ -45,6 +50,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import ipaddress
 import json
 import re
 import sys
@@ -75,11 +81,16 @@ RAW_HOST_RE = re.compile(
     rb":\d{1,6}"
 )
 
-#: 已知地址注解表。命中只是加一句说明，不改变通过/失败判定。
-KNOWN_HOSTS = {
-    "10.3.5.3:8070": "官方开发基线残留：官方未改动的原版包里就有这一条，与私服无关",
-    "192.168.0.130:8001": "作者内网默认值：v2.0-threechar 发行包的出厂指向，重指向后不应再出现",
-}
+#: RFC5737 / RFC3849 文档保留网段。CPython 的 `is_private` 把它们也算作私有，
+#: 但它们是本项目文档、`--help` 示例和测试里的**占位地址**，标成「必须替换」
+#: 会自相矛盾，所以从判定里减掉。
+DOCUMENTATION_NETWORKS = tuple(
+    ipaddress.ip_network(cidr)
+    for cidr in ("192.0.2.0/24", "198.51.100.0/24", "203.0.113.0/24", "2001:db8::/32")
+)
+
+#: 命中私有/保留网段时附注的说明。只是加一句话，不改变通过/失败判定。
+PRIVATE_HOST_NOTE = "疑似出厂/内网指向（私有或回环地址）：对别人无用，发布前必须替换成你自己的地址"
 
 #: 明显不是服务器地址的域名噪声（AS3 命名空间 URI 之类）。
 NOISE_HOSTS = ("adobe.com", "w3.org", "purl.org", "google.com", "robvanderwoude.com")
@@ -450,6 +461,47 @@ class AbcFile:
 # --------------------------------------------------------------------------
 # 扫描
 # --------------------------------------------------------------------------
+def _split_host(text: str) -> str:
+    """从 `host:port` 里取出主机部分；没有端口就原样返回。"""
+    host, sep, port_text = text.rpartition(":")
+    return host if sep and port_text.isdigit() else text
+
+
+def _parse_address(text: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
+    """把 `host` 或 `host:port` 解析成 IP 地址；解析不了（域名、乱码）返回 None。
+
+    先整串试一次，是为了让裸 IPv6（`::1`）也能过 —— 它自带冒号，
+    走 `_split_host` 会被切坏。
+    """
+    for candidate in (text, _split_host(text)):
+        try:
+            return ipaddress.ip_address(candidate)
+        except ValueError:
+            continue
+    return None
+
+
+def _is_private_like(text: str) -> bool:
+    """`host` 或 `host:port` 是不是私有地址（RFC1918 等）或回环地址。
+
+    判定交给 stdlib `ipaddress`（`is_private` / `is_loopback`），只把
+    RFC5737/RFC3849 文档网段减掉。**按网段判定，不认任何具体地址** ——
+    基座出厂值换一版，这里一个字都不用改。
+    域名一律返回 False：解析域名要联网，这个脚本全程离线只读。
+    """
+    address = _parse_address(text)
+    if address is None:
+        return False
+    if any(address in network for network in DOCUMENTATION_NETWORKS):
+        return False
+    return address.is_private or address.is_loopback
+
+
+def host_note(text: str) -> str:
+    """给一条检测到的地址配一句注解；没什么可说就返回空串。"""
+    return PRIVATE_HOST_NOTE if _is_private_like(text) else ""
+
+
 def _valid_host(text: str) -> bool:
     host, _, port_text = text.rpartition(":")
     if not port_text.isdigit() or not 1 <= int(port_text) <= 65535:
@@ -696,8 +748,9 @@ def build_report(
             "value": hit.value,
             "occurrences": hit.occurrences,
             "ambiguous": hit.ambiguous,
+            "private": _is_private_like(hit.value),
             "where": hit.where,
-            "note": KNOWN_HOSTS.get(hit.value, ""),
+            "note": host_note(hit.value),
         }
         for hit in hits
     ]
@@ -775,9 +828,11 @@ def main(argv: list[str] | None = None) -> int:
         description="只读检查 WF 客户端 APK 指向哪台服务器（不修改任何文件）",
     )
     parser.add_argument("target", type=Path, help="APK 路径，或已解出的主 SWF")
-    parser.add_argument("--expect", help="断言包内存在这个 host:port")
+    parser.add_argument("--expect", help="断言包内存在这个 host:port（例：203.0.113.10:8001）")
     parser.add_argument("--forbid", action="append", default=[],
-                        help="断言包内不存在这个 host:port（可重复）")
+                        help="断言包内不存在这个 host:port（可重复）。"
+                             "基座出厂地址不用预先知道：先不带断言扫一遍，"
+                             "① 段里带「必须替换」注解的那条就是")
     parser.add_argument("--mode", choices=("auto", "abc", "raw"), default="auto",
                         help="auto=先 ABC 失败再降级；raw=只搜原始字节")
     parser.add_argument("--swf-member", default=SWF_MEMBER, help="APK 内主 SWF 成员名")
