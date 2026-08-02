@@ -2,6 +2,22 @@
  "cdn_version": "1.4.54",
  "patches": [
   {
+   "id": "bridge-official-tail-to-mod-chain",
+   "type": "patch",
+   "name": "1.4.54→1.4.90 官方链尾接自制链(桥接边)",
+   "description": "把作者本地 1.4.54→1.4.90 的 36 条自发布边整合成一条边补进公开链。在此之前公开仓的自制链从 1.4.90 起,而官方 CN dump 只到 1.4.54,收方服务端从 1.4.0 只能走到 1.4.54、看不到任何自制内容(4 个自制角色/深渊连战塔/深渊武器全部不下发)。108 个输入包去重为 18 个终态条目,分 4 包(common 1 / medium 2 / android 1)。补上后公开链连通:1.4.54→1.4.90→…→1.4.277。",
+   "version": "1.4.90",
+   "depends_on": "1.4.54",
+   "enabled": true,
+   "chain": [
+    "pinball-1.4.54-1.4.90-1-bridge0802.zip",
+    "pinball-1.4.54-1.4.90-2-bridge0802.zip",
+    "pinball-1.4.54-1.4.90-3-bridge0802.zip",
+    "pinball-1.4.54-1.4.90-4-bridge0802.zip"
+   ],
+   "created_at": "2026-08-02"
+  },
+  {
    "id": "rush-abyss-modes",
    "type": "patch",
    "name": "深渊连战 + 深渊武器 ②层客户端数据",
