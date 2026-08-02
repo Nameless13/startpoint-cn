@@ -27,6 +27,7 @@ import wf_quest_lib as quest  # noqa: E402
 ACTIVE = REPO_ROOT / "assets" / "asset-patch" / "active"
 EDGE_GLOB = "pinball-1.4.106-1.4.107-*-threechar0719.zip"
 EDGE_RE = re.compile(r"^pinball-1\.4\.106-1\.4\.107-([1-9]\d*)-threechar0719\.zip$")
+EDGE_FROM_VERSION = (1, 4, 106)
 PART_COUNT = 10
 PART_HARD_CAP = 5_242_880
 AGGREGATE_SHA256 = (
@@ -64,6 +65,11 @@ def load_members() -> dict[str, bytes]:
 
 
 def prior_chain_state() -> dict[str, bytes]:
+    """本边(1.4.106→1.4.107)落地时的链状态 = 到达版本 ≤ 1.4.106 的包。
+
+    必须按版本过滤:active/ 里也有比本边新的包(后续回灌整合边),它们带着本边
+    之后才出现的角色行(如 1.4.275 的 149998),混进来会让本边被误判成"丢行"。
+    """
     state: dict[str, bytes] = {}
     pattern = re.compile(
         r"^pinball-(\d+\.\d+\.\d+)-(\d+\.\d+\.\d+)-([1-9]\d*)-(.+)\.zip$"
@@ -73,8 +79,11 @@ def prior_chain_state() -> dict[str, bytes]:
         match = pattern.match(path.name)
         if match is None or EDGE_RE.match(path.name):
             continue
+        to_version = tuple(int(x) for x in match.group(2).split("."))
+        if to_version > EDGE_FROM_VERSION:
+            continue
         names.append((
-            tuple(int(x) for x in match.group(2).split(".")),
+            to_version,
             int(match.group(3)),
             path,
         ))
