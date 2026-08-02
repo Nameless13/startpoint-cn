@@ -164,6 +164,21 @@
    "created_at": "2026-08-02"
   },
   {
+   "id": "seris-dragon-king-rework-20260802",
+   "type": "patch",
+   "name": "1.4.276→1.4.277 赛瑞斯(龙王)kit 重做",
+   "description": "赛瑞斯 129999(seris_dragon_king)整套 kit 重做:能力 2-5 四行(1299992-1299995,含湿润增伤、倍率与帧梯度调整)、队长技 9 行重排、角色文本与技能描述、四个技能 DSL(seris_dragon_king / _2 / _matched / _matched_2)、三个龙形 PF override DSL(lv1-3)、固有状态「龙王显现」持续 1800→1500 帧(30s→25s,文案同步改为 25 秒)、技能预览新增 129999 行。13 个文件,单边 common 642,790 B。",
+   "version": "1.4.277",
+   "depends_on": "1.4.276",
+   "enabled": true,
+   "chain": [
+    "pinball-1.4.276-1.4.277-1-08021408.zip",
+    "pinball-1.4.276-1.4.277-2-08021408.zip",
+    "pinball-1.4.276-1.4.277-3-08021408.zip"
+   ],
+   "created_at": "2026-08-02"
+  },
+  {
    "id": "gacha-feature-fix-v1",
    "type": "patch",
    "name": "特辑图片 C2032 修复（第一步）",
