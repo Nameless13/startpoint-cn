@@ -183,8 +183,18 @@ done
 > 客户端的当前版本**。`wf_publish` 是整文件发布——store 里的表是什么状态,发出去客户端就被
 > 覆盖成什么状态;用落后的 store(如 1.4.54)对 1.4.125 的客户端发布 = 把表滚回 71 个版本,
 > 版本间隙里官方加的 key 全部丢失(实例:item 表缺 10000140 → 仓库 C8601)。
-> store 落后时先刷新,两个办法任选:
-> - **从你自己的 base CDN 重建**:把 `.cdn/cn/archive-common-full` 和 `archive-common-diff`
+> store 落后时先刷新,下面几个办法任选(**首选第一条**):
+> - **用物化器一键重建(推荐)**:`mod-tools/wf_store_materialize.py` 就是把下一条的手工解压
+>   自动化了——它从 `.cdn/cn` 按版本升序重放整条链,一次产出三个 root
+>   (`<dest>/production/{upload,medium_upload,android_upload}`),默认只规划、`--apply` 才写盘,
+>   `--verify` 校验、`--write-profile` 顺手把档案指过去:
+>   ```bash
+>   python mod-tools/wf_store_materialize.py --dest D:/WF/wf-store-fresh --apply --verify --write-profile
+>   ```
+>   前提是 `.cdn/cn` 下 `archive-common-full` / `archive-medium-full` / `archive-android-full`
+>   三个目录都在(缺一个就报 `full archive directory is missing` 并退出、不写盘);链够不到 mod
+>   段时会告警并非零退出,详见 `mod-tools/README.md`「快速开始 → 前提」。
+> - **从你自己的 base CDN 重建(手工版)**:把 `.cdn/cn/archive-common-full` 和 `archive-common-diff`
 >   里的 zip **按版本升序**依次解压到同一目录(后解压覆盖先解压),得到的 `production/upload`
 >   树就是链尾基线的 store(表数据全在 common 变体,跑数据工具足够;要编辑语音/立绘再按同法
 >   叠 android 链),把 profiles/WF_TARGET_STORE 指过去;

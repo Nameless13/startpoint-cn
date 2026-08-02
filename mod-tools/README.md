@@ -21,7 +21,28 @@
 
 ## 快速开始
 
-首选:已经部署 startpoint-cn,且仓内有 `.cdn/cn`。
+> 本目录嵌在 startpoint-cn 仓里,命令从**服务端仓根**执行(`python mod-tools/wf_xxx.py`)。
+
+### 前提(先读)
+
+**CDN 直解不是凭空生成数据包**,而是**从你自己那份基础 CDN 本地重放**出来的。它替你省掉的是
+"另外再自备一份手机端数据包 `production/upload`"(约 10 GB),**不是**省掉基础 CDN。开跑前确认:
+
+- **基础 CDN 仍须自备**:按本仓 `deploy.ps1` 的说明取得并放到仓内 `.cdn/cn`
+  (版权原因不随仓分发任何游戏资产)。
+- **三个 full 目录一个都不能少**:`.cdn/cn/archive-common-full`、`.cdn/cn/archive-medium-full`、
+  `.cdn/cn/archive-android-full`(官方约 11 GB dump 自带)。缺任一个,工具直接报
+  `full archive directory is missing: <目录>` 并退出,**不写盘**。
+- **官方链尾要 ≥ mod 链起点(本链为 `1.4.90`)**:够不到时重放出来的是**不含任何 mod 内容的
+  纯官方 store**。这种情况工具会告警并以非零码退出;确认只要官方段,再加
+  `--allow-partial-chain` 显式放行。
+- **跑完 `--write-profile` 后**:若 GUI 角色列表为空,检查 `profiles.json` 的 `cdndata` 是否
+  指向服务端的 `assets/cdndata`(必要时手工补 `cdndata` / `server_dir`)。
+- store 基线落后于目标客户端的后果与其他补救路子,见 [docs/self-host-modes.md 「前提 0」](../docs/self-host-modes.md)。
+
+### 首选:从服务端 CDN 直解
+
+已经部署 startpoint-cn、且仓内有 `.cdn/cn` 时走这条。
 
 ```bash
 # 1) 先做只读规划(默认 dry-run,不会创建或写入目标目录)
@@ -41,7 +62,9 @@ python mod-tools/wf_gui.py          # 浏览器打开 http://127.0.0.1:8765
 `<dest>/production/{upload,medium_upload,android_upload}`;不加 `--apply` 时始终只规划、不写盘。
 `--official-only` 可只重放官方归档链,终点固定为 `1.4.54`。
 
-备用:自备合法数据包并手工配置版本档案。
+### 备用:自备手机端数据包
+
+自备合法数据包并手工配置版本档案。
 
 ```bash
 cp mod-tools/profiles.example.json mod-tools/profiles.json
@@ -51,7 +74,7 @@ python mod-tools/wf_selftest.py
 python mod-tools/wf_gui.py
 ```
 
-开始修改后:
+### 开始修改后
 
 ```bash
 # 把改动打成 CDN 增量包(客户端增量更新时拉取)
