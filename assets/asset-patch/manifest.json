@@ -21,7 +21,7 @@
    "id": "rush-abyss-modes",
    "type": "patch",
    "name": "深渊连战 + 深渊武器 ②层客户端数据",
-   "description": "rush 700099 深渊连战 roguelike + 15 把深渊武器(8000101-8000115)/代币 2370099/兑换商店的客户端 orderedmap(equipment/ability_soul/item/equipment_status/event_item_shop/rush_event)。缺此层→打完15轮或开兑换商店 C8601。关键:末尾 `1.4.101→1.4.102` 是整合桥接包(6表完整文件整替换),让任何卡在 1.4.101 的客户端(不论血统、不论base CDN如何到的1.4.101)一跳拿到深渊②层——解决版本号撞车(客户端已是1.4.101→原1.4.90→1.4.101增量链不会被下发)。前面的链供更早版本客户端逐级追到1.4.101。",
+   "description": "rush 700099 深渊连战 roguelike + 15 把深渊武器(8000101-8000115)/代币 2370099/兑换商店的客户端 orderedmap(equipment/ability_soul/item/equipment_status/event_item_shop/rush_event)。缺此层→打完15轮或开兑换商店 C8601。关键:末尾 `1.4.101→1.4.102` 是整合桥接包(6表完整文件整替换),让任何卡在 1.4.101 的客户端(不论血统、不论base CDN如何到的1.4.101)一跳拿到深渊②层——解决版本号撞车(客户端已是1.4.101→原1.4.90→1.4.101增量链不会被下发)。前面的链供更早版本客户端逐级追到1.4.101。补:末尾 4 个包补齐扁平目录同名冲突丢失的 medium/android 分包——`1.4.94→1.4.95` 与 `1.4.95→1.4.96` 这两条边在 CDN 侧分居 common/medium/android 三个 root 且同名不同内容,而本仓 active/ 是扁平单目录只能存一个,历史上只收了 common 包,收方物化出的 store 因此少 45 个文件(43 medium_upload + 2 android_upload);现按边追加:94→95 的 medium 超 5MiB 卫生上限拆为 seq2/seq3、android 为 seq4,95→96 的 medium 为 seq2。已逐边校验成员并集与 CDN 三 root 并集完全一致(键集/CRC32/大小/内容 sha256 零差异),既有 12 个包一字未动。",
    "version": "1.4.102",
    "depends_on": "1.4.90",
    "enabled": true,
@@ -37,7 +37,11 @@
     "pinball-1.4.98-1.4.99-1-mod07130732.zip",
     "pinball-1.4.99-1.4.100-1-mod07130812.zip",
     "pinball-1.4.100-1.4.101-1-mod07130822.zip",
-    "pinball-1.4.101-1.4.102-1-mod07142258.zip"
+    "pinball-1.4.101-1.4.102-1-mod07142258.zip",
+    "pinball-1.4.94-1.4.95-2-mod07130639.zip",
+    "pinball-1.4.94-1.4.95-3-mod07130639.zip",
+    "pinball-1.4.94-1.4.95-4-mod07130639.zip",
+    "pinball-1.4.95-1.4.96-2-mod07130645.zip"
    ],
    "created_at": "2026-07-14"
   },
