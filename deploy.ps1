@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   startpoint-cn(release/modes-20260714 分支)一键部署脚本。
 
@@ -85,6 +85,24 @@ Step "构建服务端"
 if ($LASTEXITCODE -ne 0) { throw "构建失败" }
 Ok "构建完成"
 
+# 后台管理界面(admin SPA)单独一套依赖,根 package.json 无 postinstall,
+# 必须先 npm --prefix admin ci;产物 web/dist 不进 git,不构建则 /admin 不挂载。
+# 后台只是管理面,构建失败不阻断部署(服务端本体照常起)。
+Step "构建后台管理界面(/admin)"
+$adminBuilt = $false
+try {
+    & npm --prefix admin ci
+    if ($LASTEXITCODE -ne 0) { throw "npm --prefix admin ci 失败" }
+    & npm run build:admin
+    if ($LASTEXITCODE -ne 0) { throw "npm run build:admin 失败" }
+    $adminBuilt = $true
+    Ok "后台已构建到 web\dist"
+} catch {
+    Warn "后台构建失败($($_.Exception.Message))"
+    Warn "不影响服务端启动,但 /admin 后台不会挂载(邮件/存档等管理页不可用)"
+    Warn "修好后手动重跑: npm --prefix admin ci ; npm run build:admin"
+}
+
 # ---------- 4. .env ----------
 if (-not (Test-Path ".env")) {
     Step "生成 .env(基于 .env.example)"
@@ -141,5 +159,8 @@ Write-Host @"
   1) 客户端:照 docs/部署攻略.md 重打指向你服务器的 APK
      (通用 selfhost 包发布后可跳过重打:装包 + adb reverse tcp:8001 tcp:8001 即可)
   2) 模拟器(MuMu 12)装 APK,启动游戏自动增量更新到 mod 内容
-  3) 管理后台: $baseUrl (邮件发放三位自制角色)
+  3) 管理后台: $baseUrl/admin (邮件发放四位自制角色 129999/139999/149999/149998;旧版页面在 $baseUrl)
 "@
+if (-not $adminBuilt) {
+    Warn "注意:后台未构建,$baseUrl/admin 现在是 404;补构建后重启服务端即可"
+}

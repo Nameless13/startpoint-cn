@@ -9,8 +9,8 @@
 
 | 你是谁 | 需要什么 |
 |---|---|
-| **想进别人的服玩** | 不用下载本仓库。找服主要:① 他重打好的客户端 APK ② 服务器地址/账号说明。([mod-tools 仓 Releases](https://github.com/kuronzzhan-droid/startpoint-cn-mod-tools/releases) 的 v2.0 整合包已是五合一、**支持全部三位自制角色**,但仍只适用于它指向的那个服) |
-| **想自己开服**(玩全部内容,含三自制角色) | **三步**:① 下载 [deploy.ps1](deploy.ps1) 运行(自动装 Git/Node → clone → 构建 → 起服 → 自检)→ ② 自备基础 CDN ~11GB 放入 `.cdn\cn\`(唯一手工环节,脚本会指引)→ ③ 照 [docs/部署攻略.md](docs/部署攻略.md) 重打**五合一**客户端装进模拟器。技术参考/存量服升级/救援见 [docs/self-host-modes.md](docs/self-host-modes.md);mod 增量内容(1.4.54→**1.4.277** 现役态)已随仓库自带,clone 即得 |
+| **想进别人的服玩** | 不用下载本仓库。找服主要:① 他重打好的客户端 APK ② 服务器地址/账号说明。([mod-tools 仓 Releases](https://github.com/kuronzzhan-droid/startpoint-cn-mod-tools/releases) 的 v2.0 整合包已是五合一、**支持全部四位自制角色**,但仍只适用于它指向的那个服) |
+| **想自己开服**(玩全部内容,含四位自制角色) | **三步**:① 下载 [deploy.ps1](deploy.ps1) 运行(自动装 Git/Node → clone → 构建 → 起服 → 自检)→ ② 自备基础 CDN ~11GB 放入 `.cdn\cn\`(唯一手工环节,脚本会指引)→ ③ 照 [docs/部署攻略.md](docs/部署攻略.md) 重打**五合一**客户端装进模拟器。技术参考/存量服升级/救援见 [docs/self-host-modes.md](docs/self-host-modes.md);mod 增量内容(1.4.54→**1.4.277** 现役态)已随仓库自带,clone 即得 |
 | **想改数据 / 做自己的 mod** | 数据修改工具链:[mod-tools/](mod-tools/)(独立仓 [startpoint-cn-mod-tools](https://github.com/kuronzzhan-droid/startpoint-cn-mod-tools),带全套文档与《新角色制作心得》) |
 
 ## 功能状态
