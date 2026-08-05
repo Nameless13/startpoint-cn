@@ -7629,10 +7629,14 @@ ROGUE_TABLES_LOGICAL = ",".join([
     "master/quest/event/event_list.orderedmap",
     "master/quest/event/rush_event_battle_quest_correction.orderedmap",
 ])
-# 构建会往这七张 battle 表写 mod_rogue_* 克隆(法阵载体/克隆场)。历史事故
+# 构建会往这八张 battle 表写 mod_rogue_* 克隆(法阵载体/克隆场)。历史事故
 # (C8601 key=mod_rogue_f9):GUI 随机走 build --write 不发布,发布按钮又只发
 # ②五表,克隆永远上不了链 → quest 引用在客户端侧断裂。发布按钮必须把
 # store 与链不一致的 battle 表一并带上。
+# ⚠ 这份清单是 GUI 独有的硬编码,与 wf_rogue_build 里 written→pub_items 那条
+# **是两条路**:GUI 默认流程(随机生成只 --write 不发布 → 再点「📤 发布」)只走这里。
+# 所以 build 那边新加任何一张会被写的表,**必须同步加到这里**,否则就是
+# 「store 有、链上没有」的静默漂移 —— 2026-08-03 补 general_enemy_watch 时踩到。
 ROGUE_BATTLE_LOGICALS = [
     "master/battle/field_data.orderedmap",
     "master/battle/zone.orderedmap",
@@ -7641,6 +7645,11 @@ ROGUE_BATTLE_LOGICALS = [
     "master/battle/boss/general_boss.orderedmap",
     "master/battle/boss/boss_level.orderedmap",
     "master/battle/boss/general_boss_variable.orderedmap",
+    # 法阵载体克隆要连自身观察表的 self 条目一起复制(见 wf_rogue_build.make_caster_boss),
+    # 漏发这张 = 客户端 getSelfData 查不到 → 自身观察联动静默失效。
+    "master/battle/boss/general_enemy_watch.orderedmap",
+    # 八岐父体与八头按 round 整包克隆；parent 本身仍由 BossKind=3 从专表读取。
+    "master/battle/boss/orochi.orderedmap",
 ]
 
 
@@ -7672,7 +7681,8 @@ def rogue_publish() -> dict:
             r["log"] += "\n[ERR] 发布自检未通过(链上仍缺/旧字节):\n" \
                         + "\n".join(f"  {l}: {w}" for l, w in left)
         else:
-            r["log"] += ("\n[OK] 发布自检:②五表 + battle 七表 + 锻造 DSL "
+            r["log"] += (f"\n[OK] 发布自检:②五表 + battle {len(ROGUE_BATTLE_LOGICALS)}表"
+                         " + 锻造 DSL "
                          f"{len(forged)} 个,全部在 CDN 链上且字节一致")
     return r
 
