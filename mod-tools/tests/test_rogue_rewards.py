@@ -72,73 +72,256 @@ TASK3_API = (
 MISSING_TASK3_API = tuple(name for name in TASK3_API if not hasattr(rewards, name))
 
 
-# 强度分档(2026-07-17):属性把封顶 2,000,000(官方×2),通用把封顶 1,000,000(官方×1),
-# 各把等比压档保留主次配比。见 wf_rogue_rewards.WEAPONS 顶部说明。
-EXPECTED_WEAPONS = [
-    ("8000101", "灰烬巨剑", "5010060", 0, "Red", "item/equipment/mod/abyss/fire_01",
-     (("3020006", "32", 1_200_000), ("5050009", "55", 2_000_000))),
-    ("8000102", "熔核法杖", "5020042", 0, "Red", "item/equipment/mod/abyss/fire_02",
-     (("4020013", "34", 2_000_000), ("3050010", "211", 400_000))),
-    ("8000103", "深潮长枪", "5010075", 1, "Blue", "item/equipment/mod/abyss/water_01",
-     (("3020006", "32", 1_200_000), ("5070035", "33", 2_000_000))),
-    ("8000104", "冻海战锚", "5020031", 1, "Blue", "item/equipment/mod/abyss/water_02",
-     (("3040003", "205", 1_000_000), ("3010013", "195", 1_000_000),
-      ("3050010", "211", 1_000_000))),
-    ("8000105", "雷鸣双刃", "5010077", 2, "Yellow", "item/equipment/mod/abyss/thunder_01",
-     (("3020006", "32", 1_200_000), ("5070035", "33", 2_000_000))),
-    ("8000106", "轰电战锤", "5020038", 2, "Yellow", "item/equipment/mod/abyss/thunder_02",
-     (("4020013", "34", 2_000_000), ("3050010", "211", 400_000))),
-    ("8000107", "裂空战镰", "5010068", 3, "Green", "item/equipment/mod/abyss/wind_01",
-     (("3020006", "32", 1_200_000), ("5070035", "33", 2_000_000))),
-    ("8000108", "苍岚长弓", "5020026", 3, "Green", "item/equipment/mod/abyss/wind_02",
-     (("4020013", "34", 2_000_000), ("3050010", "211", 400_000))),
-    ("8000109", "晨星圣剑", "5017716", 4, "White", "item/equipment/mod/abyss/light_01",
-     (("3020006", "32", 1_200_000), ("5090029", "388", 2_000_000))),
-    ("8000110", "辉环法器", "5020039", 4, "White", "item/equipment/mod/abyss/light_02",
-     (("3040003", "205", 650_000), ("3010013", "195", 650_000),
-      ("4020013", "34", 2_000_000))),
-    ("8000111", "蚀月大剑", "5010078", 5, "Black", "item/equipment/mod/abyss/dark_01",
-     (("3020006", "32", 2_000_000), ("4020013", "34", 2_000_000))),
-    ("8000112", "冥灯魔杖", "5020040", 5, "Black", "item/equipment/mod/abyss/dark_02",
-     (("5090029", "388", 2_000_000), ("3050010", "211", 400_000))),
-    ("8000113", "深渊征服者", "5010057", -1, "(None)", "item/equipment/mod/abyss/universal_01",
-     (("3020006", "32", 1_000_000), ("3040003", "205", 350_000))),
-    ("8000114", "深渊轮转核", "5020010", -1, "(None)", "item/equipment/mod/abyss/universal_02",
-     (("4020013", "34", 1_000_000), ("3050010", "211", 200_000))),
-    ("8000115", "深渊万象铳", "5090045", -1, "(None)", "item/equipment/mod/abyss/universal_03",
-     (("5070035", "33", 1_000_000), ("5050009", "55", 500_000),
-      ("5090029", "388", 500_000))),
+# v3.3 canonical metadata and all 71 uplift slots are deliberately static.  Do not
+# derive these oracles from WEAPONS/resolve_effect_strength: the test must catch a
+# production declaration and its resolver drifting together.
+EXPECTED_WEAPON_METADATA = [
+    ("8000101", "深渊·灰烬巨剑", "5010060", 0, "Red", "item/equipment/mod/abyss/fire_01", (3, 2)),
+    ("8000102", "深渊·熔核法杖", "5020042", 0, "Red", "item/equipment/mod/abyss/fire_02", (3, 2)),
+    ("8000103", "深渊·深潮长枪", "5010075", 1, "Blue", "item/equipment/mod/abyss/water_01", (3, 2)),
+    ("8000104", "深渊·冻海战锚", "5020031", 1, "Blue", "item/equipment/mod/abyss/water_02", (3, 2)),
+    ("8000105", "深渊·雷鸣双刃", "5010077", 2, "Yellow", "item/equipment/mod/abyss/thunder_01", (3, 2)),
+    ("8000106", "深渊·轰电战锤", "5020038", 2, "Yellow", "item/equipment/mod/abyss/thunder_02", (3, 2)),
+    ("8000107", "深渊·裂空战镰", "5010068", 3, "Green", "item/equipment/mod/abyss/wind_01", (3, 2)),
+    ("8000108", "深渊·苍岚长弓", "5020026", 3, "Green", "item/equipment/mod/abyss/wind_02", (3, 2)),
+    ("8000109", "深渊·晨星圣剑", "5017716", 4, "White", "item/equipment/mod/abyss/light_01", (3, 2)),
+    ("8000110", "深渊·辉环法器", "5020039", 4, "White", "item/equipment/mod/abyss/light_02", (3, 2)),
+    ("8000111", "深渊·蚀月大剑", "5010078", 5, "Black", "item/equipment/mod/abyss/dark_01", (3, 2)),
+    ("8000112", "深渊·冥灯魔杖", "5020040", 5, "Black", "item/equipment/mod/abyss/dark_02", (3, 2)),
+    ("8000113", "深渊·征服者", "5010057", -1, "(None)", "item/equipment/mod/abyss/universal_01", (3, 2)),
+    ("8000114", "深渊·轮转核", "5020010", -1, "(None)", "item/equipment/mod/abyss/universal_02", (3, 2)),
+    ("8000115", "深渊·万象铳", "5090045", -1, "(None)", "item/equipment/mod/abyss/universal_03", (3, 2)),
 ]
 
-TEMPLATE_KINDS = {
-    "3020006": "32",
-    "3040003": "205",
-    "3050010": "211",
-    "4020013": "34",
-    "5070035": "33",
-    "5050009": "55",
-    "5090029": "388",
-    "3010013": "195",
+# (template_id, donor_line, emitted_kind, v3.3 strength, expected c48/c49 after uplift)
+EXPECTED_EFFECT_ROWS = {
+    "8000101": (
+        ("3020011", 0, "51", 150000, "225000"),
+        ("300001", 4, "202", 50000, "75000"),
+        ("300001", 0, "32", 200000, "300000"),
+        ("5020041", 0, "33", 200000, "300000"),
+    ),
+    "8000102": (
+        ("3050010", 0, "211", 100000, "100000"),
+        ("5050037", 0, "40", 15000, "22500"),
+        ("4030004", 0, "190", 20000, "30000"),
+        ("5100004", 1, "157", 30000, "45000"),
+        ("300001", 0, "32", 200000, "300000"),
+    ),
+    "8000103": (
+        ("5090059", 0, "50", 150000, "225000"),
+        ("5040033", 4, "56", 20000, "30000"),
+        ("5020041", 0, "33", 200000, "300000"),
+        ("300001", 0, "32", 200000, "300000"),
+        ("5050009", 0, "55", 200000, "300000"),
+    ),
+    "8000104": (
+        ("5050020", 1, "227", 20000, "30000"),
+        ("4030019", 2, "70", "", ""),
+        ("300001", 8, "226", 600000, "900000"),
+        ("5080029", 0, "205", 25000, "37500"),
+        ("5020024", 0, "34", 400000, "600000"),
+        ("3080008", 0, "36", 20000, "30000"),
+    ),
+    "8000105": (
+        ("5090054", 0, "213", 12000000, "18000000"),
+        ("5030021", 1, "26", "", ""),
+        ("5090027", 0, "33", 300000, "450000"),
+        ("300001", 0, "32", 300000, "450000"),
+    ),
+    "8000106": (
+        ("4030004", 0, "190", 25000, "37500"),
+        ("5070040", 0, "38", 15000, "22500"),
+        ("3010035", 0, "35", 15000, "16000"),
+        ("300001", 0, "32", 250000, "375000"),
+    ),
+    "8000107": (
+        ("300001", 8, "226", 600000, "900000"),
+        ("5040009", 1, "211", 5000, "7500"),
+        ("5070017", 1, "200", 200000, "300000"),
+        ("5050009", 0, "55", 200000, "300000"),
+        ("300001", 0, "32", 200000, "300000"),
+    ),
+    "8000108": (
+        ("4040021", 1, "226", 1000000, "1500000"),
+        ("4040007", 0, "191", 20000, "30000"),
+        ("5090027", 0, "33", 200000, "300000"),
+        ("300001", 0, "32", 200000, "300000"),
+    ),
+    "8000109": (
+        ("3010027", 1, "209", 45000, "67500"),
+        ("5090029", 0, "388", 250000, "375000"),
+        ("300001", 0, "32", 250000, "375000"),
+        ("5090054", 0, "213", 4000000, "6000000"),
+        ("4060023", 2, "220", "", ""),
+    ),
+    "8000110": (
+        ("5050017", 2, "203", 1500000, "2250000"),
+        ("4080015", 1, "206", 25000, "37500"),
+        ("5040019", 2, "245", 50000, "75000"),
+        ("300001", 0, "32", 200000, "300000"),
+    ),
+    "8000111": (
+        ("4080016", 2, "67", "", ""),
+        ("5080038", 1, "41", 15000, "22500"),
+        ("5090024", 2, "28", 300000, "450000"),
+        ("5090027", 0, "33", 300000, "450000"),
+    ),
+    "8000112": (
+        ("3020003", 0, "59", "", ""),
+        ("3020003", 1, "60", "", ""),
+        ("5010047", 0, "1", 200000, "300000"),
+        ("5050022", 1, "209", 10000, "15000"),
+        ("300001", 0, "32", 200000, "300000"),
+    ),
+    "8000113": (
+        ("300001", 5, "468", 100000, "100000"),
+        ("300002", 6, "16", "", ""),
+        ("5045000", 1, "61", "", ""),
+        ("5020024", 0, "34", 350000, "525000"),
+    ),
+    "8000114": (
+        ("3050010", 0, "211", 15000, "22500"),
+        ("3060003", 0, "156", 30000, "45000"),
+        ("5040033", 4, "56", 20000, "30000"),
+        ("5080029", 0, "205", 50000, "75000"),
+        ("3010035", 0, "35", 15000, "16000"),
+        ("3080008", 0, "36", 30000, "33000"),
+    ),
+    "8000115": (
+        ("3080002", 0, "68", "", ""),
+        ("3080002", 1, "69", "", ""),
+        ("5080029", 0, "205", 30000, "45000"),
+        ("300001", 0, "32", 200000, "300000"),
+        ("5090059", 0, "50", 200000, "300000"),
+        ("5090029", 0, "388", 200000, "300000"),
+    ),
+}
+
+EXPECTED_DURATION_OVERRIDES = {
+    ("8000105", 2): ("120000000", "120000000"),
+    ("8000111", 3): ("72000000", "72000000"),
+    ("8000112", 3): ("60000000", "60000000"),
+}
+
+# 8000112 slot 4 must keep the donor's HpHigh + skill-trigger shape while changing
+# the donor kind 32 into the audited self-damage kind 209.
+EXPECTED_5050022_OUTPUT_COLUMNS = {
+    3: "8",
+    4: "0",
+    6: "20000",
+    7: "20000",
+    24: "23",
+    25: "0",
+    27: "100000",
+    28: "100000",
+    31: "(None)",
+    32: "0",
+    44: "209",
+    45: "0",
+    46: "",
 }
 
 
-def template_row(effect_kind: str) -> list[str]:
+EXPECTED_CONQUEROR_SURVIVAL_COLUMNS = (
+    {
+        44: "468", 45: "5", 46: "(None)",
+        48: "100000", 49: "100000",
+        56: "300000", 57: "300000",
+        64: "1", 69: "false", 71: "1",
+    },
+    {
+        24: "25", 25: "5", 26: "(None)",
+        27: "1000", 28: "1000", 31: "3", 32: "0",
+        44: "16", 45: "7", 46: "",
+        56: "100000", 57: "100000",
+        64: "1", 69: "false",
+    },
+)
+
+
+DONOR_KIND_OVERRIDES = {("5050022", 1): "32"}
+DONOR_RUNTIME_COLUMNS = {
+    ("300001", 5): {
+        56: "100000", 57: "100000",
+        64: "1", 69: "false", 71: "1",
+    },
+    ("300002", 6): {
+        56: "100000", 57: "100000",
+        64: "1", 69: "false",
+    },
+}
+
+
+def donor_duration_sentinel(template_id: str, donor_line: int, column: int) -> str:
+    """Return a distinct numeric donor value for independent c54/c55 preservation checks."""
+    return f"{column}{int(template_id):07d}{donor_line:02d}"
+
+
+def template_row(
+    effect_kind: str, *, template_id: str = "9999999", donor_line: int = 0,
+) -> list[str]:
     row = [""] * 123
-    row[0], row[1], row[2] = "9", "9", "9"
-    row[44], row[45], row[46] = effect_kind, "1", "Donor"
+    row[0], row[1], row[2] = "9", "9", "0"
+    # Minimal client-legal instant row. c122 is outside every rewritten block and
+    # therefore acts as the independent donor-line marker.
+    row[3], row[10], row[17] = "0", "0", "0"
+    row[24], row[36], row[43] = "0", "(None)", "0"
+    row[44], row[45], row[46] = effect_kind, "1", ""
     row[48], row[49] = "100", "200"
+    row[54] = donor_duration_sentinel(template_id, donor_line, 54)
+    row[55] = donor_duration_sentinel(template_id, donor_line, 55)
+    row[122] = f"{template_id}#{donor_line}"
+    for column, value in DONOR_RUNTIME_COLUMNS.get(
+        (template_id, donor_line), {},
+    ).items():
+        row[column] = value
+    if (template_id, donor_line) == ("5050022", 1):
+        # Preserve the audited donor's HpHigh + skill-trigger shape. The output
+        # intentionally rewrites donor kind 32 to emitted kind 209.
+        row[3], row[4], row[6], row[7] = "8", "0", "50000", "50000"
+        row[24], row[25] = "23", "0"
+        row[27], row[28], row[31], row[32] = "100000", "100000", "1", "0"
     return row
 
 
+def build_template_fixtures(
+    effect_rows: list[tuple[str, int, str]] | tuple[tuple[str, int, str], ...],
+) -> dict[str, str]:
+    rows_by_template: dict[str, list[list[str]]] = {}
+    for template_id, donor_line, emitted_kind in effect_rows:
+        rows = rows_by_template.setdefault(template_id, [])
+        while len(rows) <= donor_line:
+            line = len(rows)
+            rows.append(template_row(
+                "999", template_id=template_id, donor_line=line,
+            ))
+        donor_kind = DONOR_KIND_OVERRIDES.get(
+            (template_id, donor_line), emitted_kind,
+        )
+        rows[donor_line] = template_row(
+            donor_kind, template_id=template_id, donor_line=donor_line,
+        )
+    return {
+        template_id: core.write_csv_lines(rows)
+        for template_id, rows in rows_by_template.items()
+    }
+
+
 def fake_templates() -> dict[str, str]:
-    templates = {}
-    for template_id, effect_kind in TEMPLATE_KINDS.items():
-        requested = template_row(effect_kind)
-        requested[3] = template_id
-        unwanted = template_row("999")
-        unwanted[3] = f"unwanted-{template_id}"
-        templates[template_id] = core.write_csv_lines([requested, unwanted])
-    return templates
+    return build_template_fixtures(tuple(
+        (template_id, donor_line, effect_kind)
+        for expected_rows in EXPECTED_EFFECT_ROWS.values()
+        for template_id, donor_line, effect_kind, _old, _new in expected_rows
+    ))
+
+
+def templates_for_spec(spec) -> dict[str, str]:
+    """Build exact donor-line fixtures for one canonical weapon spec."""
+    return build_template_fixtures(tuple(
+        (effect.template_id, effect.donor_line, effect.effect_kind)
+        for effect in spec.effects
+    ))
 
 
 def require_task2(name: str):
@@ -216,8 +399,8 @@ def fake_master_tables(*, placeholders: bool = False, binary: bool = False):
         donor[11] = "4"
         equipment[spec.donor] = leaf([donor])
         equipment_status[spec.donor] = {
-            "1": f"{spec.donor},100",
-            "5": {"normal": [spec.id, spec.donor]},
+            "1": "100,50",
+            "5": "500,250",
         }
         if placeholders:
             placeholder = list(donor)
@@ -1066,20 +1249,89 @@ class TestReleaseGate(unittest.TestCase):
 @unittest.skipUnless(not MISSING_API, "canonical builder API is not implemented yet")
 class TestWeaponContract(unittest.TestCase):
     def test_all_canonical_fields_are_fixed(self):
-        actual = [
+        actual_metadata = [
             (spec.id, spec.name, spec.donor, spec.element, spec.group,
-             f"{rewards.IMAGE_PREFIX}/{spec.image_slug}",
-             tuple((effect.template_id, effect.effect_kind, effect.strength)
-                   for effect in spec.effects))
+             f"{rewards.IMAGE_PREFIX}/{spec.image_slug}", spec.status_multiplier)
             for spec in rewards.WEAPONS
         ]
-        self.assertEqual(EXPECTED_WEAPONS, actual)
+        self.assertEqual(EXPECTED_WEAPON_METADATA, actual_metadata)
 
-    def test_specs_are_immutable(self):
+        actual_effect_rows = {
+            spec.id: tuple(
+                (effect.template_id, effect.donor_line, effect.effect_kind, effect.strength)
+                for effect in spec.effects
+            )
+            for spec in rewards.WEAPONS
+        }
+        expected_effect_rows = {
+            weapon_id: tuple(row[:4] for row in rows)
+            for weapon_id, rows in EXPECTED_EFFECT_ROWS.items()
+        }
+        self.assertEqual(expected_effect_rows, actual_effect_rows)
+
+    def test_specs_and_strength_rules_are_immutable_and_complete(self):
         with self.assertRaises(dataclasses.FrozenInstanceError):
             rewards.WEAPONS[0].name = "changed"
         with self.assertRaises(dataclasses.FrozenInstanceError):
             rewards.WEAPONS[0].effects[0].strength = 1
+
+        expected_rule_keys = {
+            (template_id, donor_line, effect_kind)
+            for expected_rows in EXPECTED_EFFECT_ROWS.values()
+            for template_id, donor_line, effect_kind, _old, _new in expected_rows
+        }
+        self.assertEqual(71, sum(map(len, EXPECTED_EFFECT_ROWS.values())))
+        self.assertEqual(45, len(expected_rule_keys))
+        self.assertEqual(expected_rule_keys, set(rewards.EFFECT_STRENGTH_RULES))
+        with self.assertRaises(TypeError):
+            rewards.EFFECT_STRENGTH_RULES[("x", 0, "0")] = object()
+
+        templates = fake_templates()
+        for spec in rewards.WEAPONS:
+            with self.subTest(weapon=spec.id):
+                rows = core.read_csv_lines(
+                    rewards.build_soul_leaf(templates, spec, validate=False)
+                )
+                expected_rows = EXPECTED_EFFECT_ROWS[spec.id]
+                expected_strengths = [expected[4] for expected in expected_rows]
+                self.assertEqual(expected_strengths, [row[48] for row in rows])
+                self.assertEqual([row[48] for row in rows], [row[49] for row in rows])
+                expected_durations = []
+                for slot, expected in enumerate(expected_rows, start=1):
+                    template_id, donor_line = expected[:2]
+                    expected_durations.append(EXPECTED_DURATION_OVERRIDES.get(
+                        (spec.id, slot),
+                        (
+                            donor_duration_sentinel(template_id, donor_line, 54),
+                            donor_duration_sentinel(template_id, donor_line, 55),
+                        ),
+                    ))
+                self.assertEqual(
+                    expected_durations,
+                    [(row[54], row[55]) for row in rows],
+                    "c54/c55 must preserve each donor sentinel except the three audited overrides",
+                )
+
+        legacy_effect = rewards.EffectSpec("3020006", "32", 1_200_000)
+        legacy_spec = dataclasses.replace(rewards.WEAPONS[0], effects=(legacy_effect,))
+        with self.assertRaisesRegex(ValueError, "no audited strength rule"):
+            rewards.resolve_effect_strength(legacy_spec, legacy_effect)
+
+        max_gauge_spec = next(spec for spec in rewards.WEAPONS if spec.id == "8000110")
+        max_gauge_probe = dataclasses.replace(
+            max_gauge_spec.effects[2], strength=80000
+        )
+        resolution = rewards.resolve_effect_strength(max_gauge_spec, max_gauge_probe)
+        self.assertEqual((100000, 120000, True), (
+            resolution.value, resolution.raw_scaled, resolution.capped,
+        ))
+
+        inherited_effect = dataclasses.replace(rewards.WEAPONS[0].effects[0], strength=None)
+        inherited_spec = dataclasses.replace(rewards.WEAPONS[0], effects=(inherited_effect,))
+        inherited_row = core.read_csv_lines(rewards.build_soul_leaf(
+            templates_for_spec(inherited_spec), inherited_spec, validate=False,
+        ))[0]
+        self.assertEqual(["100", "200"], inherited_row[48:50])
 
 
 @unittest.skipUnless(not MISSING_API, "canonical builder API is not implemented yet")
@@ -1093,7 +1345,10 @@ class TestEquipmentGeneration(unittest.TestCase):
         row = rows[0]
         self.assertEqual(16, len(row))
         self.assertEqual("mod_abyss_8000101", row[0])
-        self.assertEqual("灰烬巨剑", row[1])
+        # 2026-08-05:编成选装备页按 rarity↓ / numeric id↑ 排序
+        # (EquipmentSelectThumbnailListRepository.sortByRarity:81-88)。保留高 ID 的
+        # 方案 1 不改 APK,因此这里只锁定「深渊·」检索前缀与稳定 ID,不声明置顶。
+        self.assertEqual("深渊·灰烬巨剑", row[1])
         self.assertEqual(donor[2:6], row[2:6])
         self.assertEqual("item/equipment/mod/abyss/fire_01", row[6])
         self.assertEqual(rewards.MODE_DESCRIPTION, row[7])
@@ -1110,20 +1365,56 @@ class TestEquipmentGeneration(unittest.TestCase):
                 result = rewards.build_equipment_leaf(template_leaf, rewards.WEAPONS[0])
                 self.assertIs(type(template_leaf), type(result))
 
-    def test_equipment_status_copies_the_complete_donor_level_map(self):
-        donor_levels = {
-            "1": "100,200",
-            "5": {"normal": ["500", "900"], "awake": ["700", "1200"]},
-        }
-        status_table = {rewards.WEAPONS[0].donor: donor_levels}
+    def test_equipment_status_scales_every_effective_level_with_ceiling(self):
+        cases = (
+            (
+                rewards.WEAPONS[0],
+                {"1": "334,147", "5": "500,220"},
+                {
+                    "1": "501,221", "2": "564,249", "3": "626,276",
+                    "4": "689,303", "5": "750,330",
+                },
+            ),
+            (
+                rewards.WEAPONS[1],
+                {"1": "330,148", "5": "495,221"},
+                {
+                    "1": "495,222", "2": "558,251", "3": "620,278",
+                    "4": "681,305", "5": "743,332",
+                },
+            ),
+            (
+                rewards.WEAPONS[-1],
+                {"1": "544,85", "5": "815,127"},
+                {
+                    "1": "816,128", "2": "918,144", "3": "1020,159",
+                    "4": "1122,176", "5": "1223,191",
+                },
+            ),
+        )
+        for spec, donor_levels, expected in cases:
+            with self.subTest(weapon=spec.id):
+                status_table = {spec.donor: donor_levels}
+                result = rewards.build_equipment_status(status_table, spec)
+                self.assertEqual(expected, result)
+                self.assertEqual(donor_levels, status_table[spec.donor])
 
-        result = rewards.build_equipment_status(status_table, rewards.WEAPONS[0])
+        doubled = dataclasses.replace(rewards.WEAPONS[0], status_multiplier=(2, 1))
+        self.assertEqual(
+            {
+                "1": "668,294", "2": "752,332", "3": "834,368",
+                "4": "918,404", "5": "1000,440",
+            },
+            rewards.build_equipment_status(
+                {doubled.donor: {"1": "334,147", "5": "500,220"}}, doubled
+            ),
+        )
 
-        self.assertEqual(donor_levels, result)
-        self.assertIsNot(donor_levels, result)
-        self.assertIsNot(donor_levels["5"], result["5"])
-        result["5"]["normal"].append("changed")
-        self.assertEqual(["500", "900"], donor_levels["5"]["normal"])
+        descending = dataclasses.replace(rewards.WEAPONS[0], donor="descending")
+        with self.assertRaisesRegex(ValueError, "monotonic"):
+            rewards.build_equipment_status(
+                {"descending": {"1": "500,220", "5": "334,147"}}, descending
+            )
 
 
 @unittest.skipUnless(not MISSING_API, "canonical builder API is not implemented yet")
@@ -1148,13 +1439,17 @@ class TestTokenGeneration(unittest.TestCase):
 @unittest.skipUnless(not MISSING_API, "canonical builder API is not implemented yet")
 class TestSoulGeneration(unittest.TestCase):
     def test_fire_greatsword_uses_only_requested_template_lines(self):
-        leaf = rewards.build_soul_leaf(fake_templates(), rewards.WEAPONS[0])
+        templates = fake_templates()
+        donor_mismatch = core.read_csv_lines(templates["5050022"])[1]
+        self.assertEqual(["32", "5050022#1"], [donor_mismatch[44], donor_mismatch[122]])
+
+        leaf = rewards.build_soul_leaf(templates, rewards.WEAPONS[0])
         rows = core.read_csv_lines(leaf)
-        self.assertEqual(2, len(rows))
-        self.assertEqual(["32", "55"], [row[44] for row in rows])
-        self.assertEqual(["5", "5"], [row[45] for row in rows])
-        self.assertEqual(["Red", "Red"], [row[46] for row in rows])
-        self.assertEqual(["1200000", "2000000"], [row[48] for row in rows])
+        self.assertEqual(4, len(rows))
+        self.assertEqual(["51", "202", "32", "33"], [row[44] for row in rows])
+        self.assertEqual(["5", "0", "5", "5"], [row[45] for row in rows])
+        self.assertEqual(["(None)", "", "(None)", "(None)"], [row[46] for row in rows])
+        self.assertEqual(["225000", "75000", "300000", "300000"], [row[48] for row in rows])
         self.assertEqual([row[48] for row in rows], [row[49] for row in rows])
 
     def test_each_effect_uses_its_templates_first_line_and_fixed_columns(self):
@@ -1162,25 +1457,54 @@ class TestSoulGeneration(unittest.TestCase):
         for spec in rewards.WEAPONS:
             with self.subTest(weapon=spec.id):
                 rows = core.read_csv_lines(rewards.build_soul_leaf(templates, spec))
-                self.assertEqual(len(spec.effects), len(rows))
-                for slot, (row, effect) in enumerate(zip(rows, spec.effects), start=1):
+                expected_rows = EXPECTED_EFFECT_ROWS[spec.id]
+                self.assertEqual(len(expected_rows), len(rows))
+                for slot, (row, effect, expected) in enumerate(
+                    zip(rows, spec.effects, expected_rows), start=1,
+                ):
+                    template_id, donor_line, effect_kind, _old, uplift = expected
                     self.assertEqual(123, len(row))
                     self.assertEqual([str(slot), "1", "0"], row[:3])
-                    self.assertEqual(effect.template_id, row[3])
-                    self.assertEqual(effect.effect_kind, row[44])
-                    self.assertEqual("5", row[45])
-                    self.assertEqual(spec.group, row[46])
-                    self.assertEqual(str(effect.strength), row[48])
+                    self.assertEqual(f"{template_id}#{donor_line}", row[122])
+                    self.assertEqual(effect_kind, row[44])
+                    self.assertEqual(effect.target if effect.target is not None else "1", row[45])
+                    expected_group = (
+                        spec.group if effect.target_groups is rewards.WEAPON_GROUP
+                        else effect.target_groups if effect.target_groups is not None
+                        else ""
+                    )
+                    self.assertEqual(expected_group, row[46])
+                    self.assertEqual(uplift, row[48])
                     self.assertEqual(row[48], row[49])
-                    self.assertFalse(row[3].startswith("unwanted-"))
+                if spec.id == "8000112":
+                    self.assertEqual(
+                        EXPECTED_5050022_OUTPUT_COLUMNS,
+                        {
+                            column: rows[3][column]
+                            for column in EXPECTED_5050022_OUTPUT_COLUMNS
+                        },
+                        "5050022#1 must remain HpHigh + skill-triggered self damage",
+                    )
+                if spec.id == "8000113":
+                    actual = tuple(
+                        {column: row[column] for column in expected}
+                        for row, expected in zip(
+                            rows[:2], EXPECTED_CONQUEROR_SURVIVAL_COLUMNS,
+                        )
+                    )
+                    self.assertEqual(EXPECTED_CONQUEROR_SURVIVAL_COLUMNS, actual)
 
     def test_universal_effects_use_none_sentinel_for_unfiltered_party_target(self):
         templates = fake_templates()
-
+        expected_groups = {
+            "8000113": ["(None)", "", "", "(None)"],
+            "8000114": ["(None)", "(None)", "", "(None)", "(None)", ""],
+            "8000115": ["", "", "(None)", "(None)", "", "(None)"],
+        }
         for spec in rewards.WEAPONS[-3:]:
             with self.subTest(weapon=spec.id):
                 rows = core.read_csv_lines(rewards.build_soul_leaf(templates, spec))
-                self.assertEqual({"(None)"}, {row[46] for row in rows})
+                self.assertEqual(expected_groups[spec.id], [row[46] for row in rows])
 
 
 class TestMasterChanges(unittest.TestCase):
@@ -1293,7 +1617,10 @@ class TestMasterChanges(unittest.TestCase):
             self.assertEqual(f"mod_abyss_{spec.id}", row[0])
             self.assertEqual(spec.name, row[1])
             self.assertEqual(f"{rewards.IMAGE_PREFIX}/{spec.image_slug}", row[6])
-            self.assertEqual(tables.equipment_status[spec.donor], result.equipment_status[spec.id])
+            self.assertEqual(
+                rewards.build_equipment_status(tables.equipment_status, spec),
+                result.equipment_status[spec.id],
+            )
             self.assertNotEqual(tables.ability_soul[spec.id], result.ability_soul[spec.id])
 
     def test_token_and_rush_event_are_complete_canonical_clones(self):
