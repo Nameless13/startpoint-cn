@@ -964,6 +964,48 @@ class _TransactionFixtureMixin:
 
 
 class TestPackPreflight(_TransactionFixtureMixin, unittest.TestCase):
+    def test_canonical_character_claim_requires_matching_speech_claim(self):
+        self._finish_setup()
+        logical_path = "master/character/character.orderedmap"
+        live_payload = {
+            "outer": {"official": {"value": logical_path}},
+            "inner": {},
+            "semantics": {},
+        }
+        candidate_payload = copy.deepcopy(live_payload)
+        candidate_payload["outer"]["129999"] = {
+            "owner": "seris",
+            "key": "129999",
+        }
+        live_bytes = json.dumps(
+            live_payload, ensure_ascii=False, separators=(",", ":")
+        ).encode("utf-8")
+        candidate_bytes = json.dumps(
+            candidate_payload, ensure_ascii=False, separators=(",", ":")
+        ).encode("utf-8")
+        self._write_live("common", logical_path, live_bytes)
+        add_file(
+            self.package_dir,
+            self.manifest,
+            "common",
+            logical_path,
+            candidate_bytes,
+        )
+        self.manifest["tables"].append({
+            "root": "common",
+            "logical_path": logical_path,
+            "codec_id": "fixture_json",
+            "outer_keys": ["129999"],
+            "inner_keys": [],
+            "semantic_claims": [],
+        })
+
+        with self.assertRaisesRegex(
+            self.pack.PackPreflightError,
+            "character_speech",
+        ):
+            self._tx().preflight()
+
     def test_production_preflight_rejects_rehashed_standard_png(self):
         self._finish_setup()
         manifest = copy.deepcopy(self.manifest)
@@ -1222,6 +1264,36 @@ class TestPackPreflight(_TransactionFixtureMixin, unittest.TestCase):
         )
         with self.assertRaises(self.pack.PackPreflightError):
             self._tx(provider=_FakeReleaseBaseProvider(empty_active)).preflight()
+
+    def test_zero_release_owner_anchor_is_a_valid_present_base(self):
+        self._finish_setup()
+        active_raw = json.dumps(
+            {
+                "schema_version": 1,
+                "base_version": "1.4.54",
+                "base_package_owners": [["other_pkg", "a" * 64]],
+                "releases": [],
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        state = self.pack.ReleaseBaseState(
+            active_raw=active_raw,
+            active_sha256=hashlib.sha256(active_raw).hexdigest(),
+            current_release_id=None,
+            validated_chain_tail="1.4.54",
+            expected_from_version="1.4.54",
+            active_package_manifest_sha256=None,
+            package_owners=(("other_pkg", "a" * 64),),
+        )
+
+        report = self._tx(
+            provider=_FakeReleaseBaseProvider(state)
+        ).preflight()
+
+        self.assertTrue(report.can_prepare)
+        self.assertEqual((), report.conflicts)
 
     def test_provider_invariants_fail_closed(self):
         self._finish_setup()
