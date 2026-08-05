@@ -538,15 +538,23 @@ class _ActionSummary:
     positions: set[str]
     spawned_refs: set[SpawnedRef]
     nested_actions: Counter[str]
-    action_closure: set[str]
+    action_closure: list[str]
 
     @classmethod
     def empty(cls) -> "_ActionSummary":
-        return cls(Counter(), {}, set(), set(), Counter(), set())
+        return cls(Counter(), {}, set(), set(), Counter(), [])
 
     def has_runtime_requirements(self) -> bool:
         return bool(self.funnels or self.positions or self.spawned_refs
                     or self.nested_actions)
+
+
+def _extend_action_closure(target: list[str], values: list[str]) -> None:
+    seen = set(target)
+    for path in values:
+        if path not in seen:
+            target.append(path)
+            seen.add(path)
 
 
 def _summary_add(left: _ActionSummary, right: _ActionSummary) -> _ActionSummary:
@@ -555,7 +563,8 @@ def _summary_add(left: _ActionSummary, right: _ActionSummary) -> _ActionSummary:
     out.positions = set(left.positions) | set(right.positions)
     out.spawned_refs = set(left.spawned_refs) | set(right.spawned_refs)
     out.nested_actions = left.nested_actions + right.nested_actions
-    out.action_closure = set(left.action_closure) | set(right.action_closure)
+    _extend_action_closure(out.action_closure, left.action_closure)
+    _extend_action_closure(out.action_closure, right.action_closure)
     for source in (left.funnel_codes, right.funnel_codes):
         for group, values in source.items():
             out.funnel_codes.setdefault(group, set()).update(values)
@@ -582,7 +591,7 @@ def _summary_max(values: list[_ActionSummary]) -> _ActionSummary:
             out.nested_actions[path] = max(out.nested_actions[path], count)
         out.positions.update(value.positions)
         out.spawned_refs.update(value.spawned_refs)
-        out.action_closure.update(value.action_closure)
+        _extend_action_closure(out.action_closure, value.action_closure)
     return out
 
 
@@ -598,7 +607,7 @@ def _summary_scale(value: _ActionSummary, count: int) -> _ActionSummary:
     out.spawned_refs = set(value.spawned_refs)
     out.nested_actions = Counter({key: amount * count
                                   for key, amount in value.nested_actions.items()})
-    out.action_closure = set(value.action_closure)
+    out.action_closure = list(value.action_closure)
     return out
 
 
@@ -767,12 +776,12 @@ def _analyze_action_program(program: str, loader: Callable[[str], Any],
     visiting.add(clean)
     try:
         summary = _analyze_action_tree(loader(clean))
-        summary.action_closure.add(clean)
         nested = Counter(summary.nested_actions)
         summary.nested_actions.clear()
-        for path, count in nested.items():
+        for path, count in sorted(nested.items()):
             child = _analyze_action_program(path, loader, visiting)
             summary = _summary_add(summary, _summary_scale(child, count))
+        _extend_action_closure(summary.action_closure, [clean])
         return summary
     except (FileNotFoundError, KeyError, TypeError, ValueError, zlib.error) as exc:
         if isinstance(exc, _ClosureError):
@@ -1024,14 +1033,14 @@ def boss_terrain_requirements(bundle: NativeBossBundle, enemy_level: int,
                     summary.spawned_refs,
                     key=lambda item: (item.source_kind, item.code))),
             ))
-        action_closure = {
-            path for summary in layer_summaries.values()
-            for path in summary.action_closure
-        }
+        action_closure: list[str] = []
+        for layer in bundle.active_layers:
+            _extend_action_closure(
+                action_closure, layer_summaries[layer].action_closure)
         return RequirementResult(
             True, BossTerrainRequirements(
                 tuple(layers), tuple(sorted(all_roots)),
-                tuple(sorted(action_closure))))
+                tuple(action_closure)))
     except (TerrainGateError, _ClosureError, FileNotFoundError, KeyError,
             TypeError, ValueError, zlib.error) as exc:
         return RequirementResult(False, reason="ACTION_CLOSURE_UNAUDITED",

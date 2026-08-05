@@ -1628,15 +1628,15 @@ class EndlessRerollSafetyCase(unittest.TestCase):
     def test_real_fixture_catalog_carries_nested_actions_to_ordered_publish(self):
         general = [""] * 161
         general[42] = "routine"
-        general[109] = "battle/action/root"
+        general[109] = "battle/action/a_root"
         state = [""] * 53
         actions = {
-            "battle/action/root": [
+            "battle/action/a_root": [
                 "ActionDsl", 1, ["None"], False, False, False, False,
                 False, False, False, 0, ["Block", [["Command", [
                     "CreateTargetAttack", 0, 0, 0, ["None"],
-                    "battle/action/child"]]]]],
-            "battle/action/child": [
+                    "battle/action/z_child"]]]]],
+            "battle/action/z_child": [
                 "ActionDsl", 1, ["None"], False, False, False, False,
                 False, False, False, 0, ["Block", [["Command", [
                     "SpawnFunnel", ["Funnel", "safe_funnel"], 1,
@@ -1671,7 +1671,7 @@ class EndlessRerollSafetyCase(unittest.TestCase):
             display_names={"safe_boss": "安全首领"},
             identity_of=lambda _ref, _selected: {
                 "display": "安全首领", "model": "safe_model",
-                "actions": ("battle/action/root",)},
+                "actions": ("battle/action/a_root",)},
             hp_gate=lambda *_args: rbb.GateResult(True),
             reference_gate=lambda *_args: rbb.GateResult(True),
             zako_codes=set(),
@@ -1696,8 +1696,8 @@ class EndlessRerollSafetyCase(unittest.TestCase):
             rb.endless_bundle_publish_logicals(selected),
             (
                 "battle/field/safe.terrain.amf3.deflate",
-                "battle/action/child.action.dsl.amf3.deflate",
-                "battle/action/root.action.dsl.amf3.deflate",
+                "battle/action/z_child.action.dsl.amf3.deflate",
+                "battle/action/a_root.action.dsl.amf3.deflate",
                 "master/battle/boss/general_boss.orderedmap",
                 "master/battle/boss/boss_level.orderedmap",
                 "master/battle/zako/general_zako.orderedmap",
@@ -4164,9 +4164,9 @@ class SwapZoneBossesCase(unittest.TestCase):
             self.assertIn("action/pre", result.requirements.action_roots)
             self.assertEqual(
                 getattr(result.requirements, "action_closure", ()),
-                ("action/attack", "action/flow", "action/nested", "action/pre",
-                 "action/repeat", "battle/action/bomb",
-                 "battle/action/target", "battle/action/tornado"),
+                ("action/attack", "action/flow", "battle/action/bomb",
+                 "battle/action/target", "battle/action/tornado",
+                 "action/nested", "action/pre", "action/repeat"),
             )
 
             def target_bundle(*, caps, slots=None, layers=("0",)):
