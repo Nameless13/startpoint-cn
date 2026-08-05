@@ -112,7 +112,8 @@ def native_bundle(field: str, boss: str, *, family: str = "family",
                 "0",
                 funnels=(rbb.FunnelRequirement("1", 1, ("safe_funnel",)),),
                 spawned_refs=(rbb.SpawnedRef("AlterEgo", "safe_shadow"),)),),
-            action_roots=("battle/action/safe",)),
+            action_roots=("battle/action/safe",),
+            action_closure=("battle/action/safe",)),
     )
 
 
@@ -1624,6 +1625,93 @@ class EndlessRerollSafetyCase(unittest.TestCase):
 
         self.assertIs(selected, safe)
 
+    def test_real_fixture_catalog_carries_nested_actions_to_ordered_publish(self):
+        general = [""] * 161
+        general[42] = "routine"
+        general[109] = "battle/action/root"
+        state = [""] * 53
+        actions = {
+            "battle/action/root": [
+                "ActionDsl", 1, ["None"], False, False, False, False,
+                False, False, False, 0, ["Block", [["Command", [
+                    "CreateTargetAttack", 0, 0, 0, ["None"],
+                    "battle/action/child"]]]]],
+            "battle/action/child": [
+                "ActionDsl", 1, ["None"], False, False, False, False,
+                False, False, False, 0, ["Block", [["Command", [
+                    "SpawnFunnel", ["Funnel", "safe_funnel"], 1,
+                    ["FunnelGroup", 1], []]]]]],
+        }
+        validation = {
+            "general_boss": {"safe_boss": {
+                "100": rb.join(general, False)}},
+            "__level_validator__": lambda *_args: 100,
+            "__funnel_ok__": lambda *_args: True,
+        }
+
+        def portability(bundle):
+            return rbb.boss_terrain_requirements(bundle, 90, {
+                "general_boss": validation["general_boss"],
+                "general_boss_state": {
+                    "routine": {"1": {"start": rb.join(state, False)}}},
+                "action_loader": actions.__getitem__,
+                "spawned_ref_gate": lambda *_args: rbb.GateResult(True),
+            })
+
+        catalog = rbb.build_native_bundle_catalog(
+            {"safe_field": (
+                "safe_field,battle/field/safe.terrain.amf3.deflate,safe_zone")},
+            {"safe_zone": {"0": wave(bosses=("safe_boss",))}},
+            lambda _logical: {"layers": [{
+                "type": "objectgroup", "name": "0",
+                "objects": [{"type": "FUNNEL_SPAWN1"}],
+            }]},
+            enemy_level=90,
+            validation_tables=validation,
+            display_names={"safe_boss": "安全首领"},
+            identity_of=lambda _ref, _selected: {
+                "display": "安全首领", "model": "safe_model",
+                "actions": ("battle/action/root",)},
+            hp_gate=lambda *_args: rbb.GateResult(True),
+            reference_gate=lambda *_args: rbb.GateResult(True),
+            zako_codes=set(),
+            metadata_of=lambda _field: {
+                "bgm": "bgm_safe", "thumbnail": "thumb_safe",
+                "category": "rush"},
+            portability_gate=portability,
+        )
+
+        class FirstRng:
+            @staticmethod
+            def randrange(_size):
+                return 0
+
+        with mock.patch.object(rb, "build_native_bundle_catalog",
+                               return_value=catalog):
+            selected = rb.choose_endless_native_bundle(
+                FirstRng(), enemy_level=90)
+
+        self.assertTrue(selected.portable)
+        self.assertEqual(
+            rb.endless_bundle_publish_logicals(selected),
+            (
+                "battle/field/safe.terrain.amf3.deflate",
+                "battle/action/child.action.dsl.amf3.deflate",
+                "battle/action/root.action.dsl.amf3.deflate",
+                "master/battle/boss/general_boss.orderedmap",
+                "master/battle/boss/boss_level.orderedmap",
+                "master/battle/zako/general_zako.orderedmap",
+                "master/battle/zako/zako_level.orderedmap",
+                "master/battle/boss/general_boss_variable.orderedmap",
+                "master/battle/boss/general_boss_state.orderedmap",
+                "master/battle/boss/general_enemy_watch.orderedmap",
+                "master/battle/boss/funnel/general_funnel.orderedmap",
+                "master/battle/zone.orderedmap",
+                "master/battle/field_data.orderedmap",
+                "master/quest/event/rush_event_quest.orderedmap",
+            ),
+        )
+
     def test_endless_reroll_syncs_fields_and_publishes_bundle_dependencies(self):
         bundle = native_bundle("safe_field", "safe_boss", kind=2)
         target = ["700099099"] + [""] * 99
@@ -1633,40 +1721,142 @@ class EndlessRerollSafetyCase(unittest.TestCase):
         target[98] = "old_field"
         target[99] = "old_bgm"
         quest_table = {"700099": {"99": ",".join(target)}}
-        unsafe_pool = [("unsafe_field", "unsafe_field,bgm_unsafe", ["unsafe_boss"])]
 
-        with mock.patch.object(rb, "choose_endless_native_bundle",
-                               return_value=bundle, create=True) as selector, \
-             mock.patch.object(rb, "field_official_elem_map",
-                               return_value={"safe_field": 2}), \
-             mock.patch.object(rb, "boss_element_map", return_value={}), \
-             mock.patch("wf_chain_build.build_pool", return_value=unsafe_pool), \
-             mock.patch.object(q, "load_table", return_value=quest_table), \
-             mock.patch.object(q, "save_table", return_value=Path("fixture")), \
-             mock.patch.object(rsave.subprocess, "run",
-                               return_value=mock.Mock(returncode=0)) as publish:
-            rsave.reroll_endless_field("700099", "99", apply=True)
+        with tempfile.TemporaryDirectory() as tmp:
+            store = Path(tmp) / "store"
+            store.mkdir()
+            quest_path = store / q.hashed_rel(rsave.RUSH_QUEST_LOGICAL)
+            quest_path.parent.mkdir(parents=True)
+            quest_path.write_bytes(q.build_node(quest_table))
+            commands = []
 
-        selector.assert_called_once()
-        self.assertEqual(selector.call_args.kwargs["enemy_level"], 90)
-        written = next(csv.reader([quest_table["700099"]["99"]]))
-        self.assertEqual(
-            {index: written[index] for index in (5, 69, 95, 98, 99)},
-            {5: "thumb_safe", 69: "2", 95: "90",
-             98: "safe_field", 99: "bgm_safe"},
-        )
-        publish_items = set(publish.call_args.args[0][3].split(","))
-        self.assertTrue({
-            rsave.RUSH_QUEST_LOGICAL,
-            rb.FIELD_DATA_T,
-            rb.ZONE_T,
-            rbb.TABLE_LOGICALS["kraken"],
-            rb.GENERAL_BOSS,
-            "master/battle/boss/general_boss_variable.orderedmap",
-            "master/battle/boss/general_boss_state.orderedmap",
-            rb.GENERAL_FUNNEL,
-            rb.ENEMY_WATCH,
-        }.issubset(publish_items), publish_items)
+            def publish(command, **_kwargs):
+                commands.append(tuple(command))
+                return mock.Mock(returncode=0)
+
+            with mock.patch.object(q, "store_path", return_value=quest_path), \
+                 mock.patch.object(rb, "choose_endless_native_bundle",
+                                   return_value=bundle) as selector, \
+                 mock.patch.object(rb, "field_official_elem_map",
+                                   return_value={"safe_field": 2}), \
+                 mock.patch.object(rb, "boss_element_map", return_value={}), \
+                 mock.patch.object(rsave.subprocess, "run", side_effect=publish):
+                rsave.reroll_endless_field("700099", "99", apply=True)
+
+            selector.assert_called_once()
+            self.assertEqual(selector.call_args.kwargs["enemy_level"], 90)
+            written_tree = q.load_table(
+                rsave.RUSH_QUEST_LOGICAL, path=quest_path)
+            written = next(csv.reader([written_tree["700099"]["99"]]))
+            self.assertEqual(
+                {index: written[index] for index in (5, 69, 95, 98, 99)},
+                {5: "thumb_safe", 69: "2", 95: "90",
+                 98: "safe_field", 99: "bgm_safe"},
+            )
+            self.assertEqual(len(commands), 2)
+            self.assertEqual(commands[0][-1], "--list")
+            self.assertEqual(
+                commands[1][3].split(","),
+                [
+                    "battle/field/safe_field.terrain.amf3.deflate",
+                    "battle/action/safe.action.dsl.amf3.deflate",
+                    "master/battle/boss/kraken.orderedmap",
+                    "master/battle/boss/boss_level.orderedmap",
+                    "master/battle/zako/general_zako.orderedmap",
+                    "master/battle/zako/zako_level.orderedmap",
+                    "master/battle/boss/general_boss.orderedmap",
+                    "master/battle/boss/general_boss_variable.orderedmap",
+                    "master/battle/boss/general_boss_state.orderedmap",
+                    "master/battle/boss/general_enemy_watch.orderedmap",
+                    "master/battle/boss/funnel/general_funnel.orderedmap",
+                    "master/battle/zone.orderedmap",
+                    "master/battle/field_data.orderedmap",
+                    "master/quest/event/rush_event_quest.orderedmap",
+                ],
+            )
+
+    def test_publish_preflight_failure_happens_before_real_store_write(self):
+        bundle = native_bundle("safe_field", "safe_boss")
+        target = ["700099099"] + [""] * 99
+        target[5] = "old_thumb"
+        target[69] = "5"
+        target[95] = "90"
+        target[98] = "old_field"
+        target[99] = "old_bgm"
+        quest_table = {"700099": {"99": ",".join(target)}}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store = Path(tmp) / "store"
+            store.mkdir()
+            quest_path = store / q.hashed_rel(rsave.RUSH_QUEST_LOGICAL)
+            quest_path.parent.mkdir(parents=True)
+            original = q.build_node(quest_table)
+            quest_path.write_bytes(original)
+            observed_original = []
+            observed_store = []
+
+            def reject_preflight(_command, **kwargs):
+                observed_original.append(quest_path.read_bytes() == original)
+                observed_store.append(
+                    kwargs.get("env", {}).get("WF_TARGET_STORE"))
+                return mock.Mock(returncode=7)
+
+            with mock.patch.object(q, "store_path", return_value=quest_path), \
+                 mock.patch.object(rb, "choose_endless_native_bundle",
+                                   return_value=bundle), \
+                 mock.patch.object(rb, "field_official_elem_map",
+                                   return_value={"safe_field": 2}), \
+                 mock.patch.object(rb, "boss_element_map", return_value={}), \
+                 mock.patch.object(rsave.subprocess, "run",
+                                   side_effect=reject_preflight):
+                with self.assertRaisesRegex(RuntimeError, "preflight|预检|发布"):
+                    rsave.reroll_endless_field("700099", "99", apply=True)
+
+            self.assertEqual(observed_original, [True])
+            self.assertEqual(observed_store, [str(store.resolve())])
+            self.assertEqual(quest_path.read_bytes(), original)
+
+    def test_publish_failure_restores_real_store_file_to_original_bytes(self):
+        bundle = native_bundle("safe_field", "safe_boss")
+        target = ["700099099"] + [""] * 99
+        target[5] = "old_thumb"
+        target[69] = "5"
+        target[95] = "90"
+        target[98] = "old_field"
+        target[99] = "old_bgm"
+        quest_table = {"700099": {"99": ",".join(target)}}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store = Path(tmp) / "store"
+            store.mkdir()
+            quest_path = store / q.hashed_rel(rsave.RUSH_QUEST_LOGICAL)
+            quest_path.parent.mkdir(parents=True)
+            original = q.build_node(quest_table)
+            quest_path.write_bytes(original)
+            observed_bytes = []
+            commands = []
+
+            def publish(command, **_kwargs):
+                commands.append(tuple(command))
+                observed_bytes.append(quest_path.read_bytes())
+                return mock.Mock(returncode=0 if "--list" in command else 9)
+
+            with mock.patch.object(q, "store_path", return_value=quest_path), \
+                 mock.patch.object(rb, "choose_endless_native_bundle",
+                                   return_value=bundle), \
+                 mock.patch.object(rb, "field_official_elem_map",
+                                   return_value={"safe_field": 2}), \
+                 mock.patch.object(rb, "boss_element_map", return_value={}), \
+                 mock.patch.object(rsave.subprocess, "run", side_effect=publish):
+                with self.assertRaisesRegex(RuntimeError, "退出码 9"):
+                    rsave.reroll_endless_field("700099", "99", apply=True)
+
+            self.assertEqual(len(commands), 2)
+            self.assertEqual(commands[0][-1], "--list")
+            self.assertNotIn("--list", commands[1])
+            self.assertEqual(observed_bytes[0], original)
+            self.assertNotEqual(observed_bytes[1], original)
+            self.assertEqual(quest_path.read_bytes(), original)
 
     def test_random_boss_cli_defaults_to_700099_endless_99(self):
         db = mock.MagicMock()
@@ -1680,6 +1870,25 @@ class EndlessRerollSafetyCase(unittest.TestCase):
 
         self.assertEqual(code, 0)
         reroll.assert_called_once_with("700099", "99", False)
+
+    def test_random_boss_cli_rejects_invalid_target_before_any_side_effect(self):
+        for event, quest_no in (("700007", "8"), ("700099", "8")):
+            with self.subTest(event=event, quest_no=quest_no), \
+                 mock.patch.object(
+                     rsave.sys, "argv",
+                     ["wf_rogue_save.py", "--reset", "1", "--random-boss",
+                      "--restart-game", "--apply", "--event", event,
+                      "--quest-no", quest_no]), \
+                 mock.patch.object(rsave, "mumu_sh") as game, \
+                 mock.patch.object(rsave.sqlite3, "connect") as connect, \
+                 mock.patch.object(rsave, "reset_run") as reset:
+                reset.return_value = 0
+                with self.assertRaisesRegex(ValueError, "700099.*99"):
+                    rsave.main()
+
+                game.assert_not_called()
+                connect.assert_not_called()
+                reset.assert_not_called()
 
 
 class StandardBossHpCase(unittest.TestCase):
@@ -3953,6 +4162,12 @@ class SwapZoneBossesCase(unittest.TestCase):
                 [(item.group, item.max_commands) for item in layer.funnels],
                 [("1", 17)])
             self.assertIn("action/pre", result.requirements.action_roots)
+            self.assertEqual(
+                getattr(result.requirements, "action_closure", ()),
+                ("action/attack", "action/flow", "action/nested", "action/pre",
+                 "action/repeat", "battle/action/bomb",
+                 "battle/action/target", "battle/action/tornado"),
+            )
 
             def target_bundle(*, caps, slots=None, layers=("0",)):
                 return rbb.NativeBossBundle(

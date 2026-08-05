@@ -33,6 +33,7 @@ import random
 import sqlite3
 import subprocess
 import sys
+import tempfile
 import urllib.request
 from pathlib import Path
 
@@ -46,6 +47,14 @@ WF_ACTIVITY = "com.leiting.wf/com.leiting.sdk.activity.PrivacyActivity"
 RUSH_QUEST_LOGICAL = "master/quest/event/rush_event_quest.orderedmap"
 ENDLESS_EVENT = "700099"
 ENDLESS_QUEST_NO = "99"
+
+
+def validate_endless_target(event: str, quest_no: str) -> None:
+    """随机 boss 仅允许自制 700099 的无尽层 99。"""
+    if str(event) != ENDLESS_EVENT or str(quest_no) != ENDLESS_QUEST_NO:
+        raise ValueError(
+            f"无尽重摇只允许 {ENDLESS_EVENT}/{ENDLESS_QUEST_NO},"
+            f"拒绝目标 {event}/{quest_no}")
 
 
 def api_post(server: str, path: str, query: str = "", body: dict | None = None) -> dict:
@@ -75,18 +84,49 @@ def mumu_sh(cmd: str) -> None:
     subprocess.run([MUMU, "sh", "-v", "1", "-c", cmd], capture_output=True)
 
 
+def _publish_command(logicals: tuple[str, ...], *, list_only: bool = False) \
+        -> list[str]:
+    if not logicals or logicals[-1] != RUSH_QUEST_LOGICAL:
+        raise ValueError("无尽层发布闭包必须 dependency-first 且 rush quest 最后")
+    command = [
+        sys.executable, os.path.join(ROOT, "mod-tools", "wf_publish.py"),
+        "--tables", ",".join(logicals),
+    ]
+    if list_only:
+        command.append("--list")
+    return command
+
+
+def _restore_exact_bytes(path: Path, original: bytes) -> None:
+    """同目录原子恢复 store 原字节，并复读确认。"""
+    handle, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".reroll-rollback", dir=path.parent)
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(handle, "wb") as stream:
+            stream.write(original)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+        if path.read_bytes() != original:
+            raise RuntimeError(f"无尽层 store 回滚复读不一致:{path}")
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 def reroll_endless_field(event: str, quest_no: str, apply: bool) -> None:
     """把 700099/99 投影到正式构建器筛后的原生 boss bundle。"""
-    if str(event) != ENDLESS_EVENT or str(quest_no) != ENDLESS_QUEST_NO:
-        raise ValueError(
-            f"无尽重摇只允许 {ENDLESS_EVENT}/{ENDLESS_QUEST_NO},"
-            f"拒绝目标 {event}/{quest_no}")
+    validate_endless_target(event, quest_no)
 
     sys.path.insert(0, os.path.join(ROOT, "mod-tools"))
     import wf_quest_lib as q
     import wf_rogue_build as rb
 
-    tree = q.load_table(RUSH_QUEST_LOGICAL)
+    quest_path = q.store_path(RUSH_QUEST_LOGICAL)
+    original_bytes = quest_path.read_bytes()
+    tree = q.load_table(RUSH_QUEST_LOGICAL, path=quest_path)
+    if q.parse_node(original_bytes) != tree:
+        raise RuntimeError("rush quest 加载结果与写前原字节不一致")
     try:
         leaf = tree[ENDLESS_EVENT][ENDLESS_QUEST_NO]
     except (KeyError, TypeError) as exc:
@@ -127,14 +167,40 @@ def reroll_endless_field(event: str, quest_no: str, apply: bool) -> None:
     csv.writer(buf, lineterminator="").writerow(row)
     tree[ENDLESS_EVENT][ENDLESS_QUEST_NO] = (
         buf.getvalue().encode("utf-8") if was_bytes else buf.getvalue())
-    out = q.save_table(RUSH_QUEST_LOGICAL, tree)
-    print(f"[OK] 已写入 {out}")
     publish_items = rb.endless_bundle_publish_logicals(bundle)
-    r = subprocess.run([sys.executable, os.path.join(ROOT, "mod-tools", "wf_publish.py"),
-                        "--tables", ",".join(publish_items)], cwd=ROOT)
-    print(f"[PUBLISH] wf_publish 退出码 {r.returncode}")
-    if r.returncode != 0:
-        raise RuntimeError(f"无尽层发布失败:wf_publish 退出码 {r.returncode}")
+    intended_bytes = q.build_node(tree)
+    if q.parse_node(intended_bytes) != tree:
+        raise RuntimeError("rush quest 拟写字节 build→parse 不等价")
+
+    publish_env = dict(os.environ)
+    publish_env["WF_TARGET_STORE"] = str(quest_path.parent.parent.resolve())
+    preflight = subprocess.run(
+        _publish_command(publish_items, list_only=True), cwd=ROOT,
+        env=publish_env)
+    print(f"[PREFLIGHT] wf_publish --list 退出码 {preflight.returncode}")
+    if preflight.returncode != 0:
+        raise RuntimeError(
+            f"无尽层发布预检失败:wf_publish --list 退出码 {preflight.returncode}")
+
+    try:
+        out = q.save_table(RUSH_QUEST_LOGICAL, tree, path=quest_path)
+        if Path(out).read_bytes() != intended_bytes:
+            raise RuntimeError(f"rush quest 写后复读与拟写字节不一致:{out}")
+        print(f"[OK] 已写入 {out}")
+        published = subprocess.run(
+            _publish_command(publish_items), cwd=ROOT, env=publish_env)
+        print(f"[PUBLISH] wf_publish 退出码 {published.returncode}")
+        if published.returncode != 0:
+            raise RuntimeError(
+                f"无尽层发布失败:wf_publish 退出码 {published.returncode}")
+    except Exception as exc:
+        try:
+            _restore_exact_bytes(quest_path, original_bytes)
+        except Exception as rollback_exc:
+            raise RuntimeError(
+                f"无尽层写入/发布失败({exc});store 回滚失败:{rollback_exc}") \
+                from exc
+        raise
 
 
 def reset_run(db: sqlite3.Connection, player_id: int, apply: bool) -> int:
@@ -185,6 +251,9 @@ def main() -> int:
     ap.add_argument("--apply", action="store_true", help="真执行(默认 dry-run)")
     ap.add_argument("--keep-active", action="store_true", help="默认存档留在新档")
     args = ap.parse_args()
+
+    if args.random_boss:
+        validate_endless_target(args.event, args.quest_no)
 
     if args.reset is not None:
         if args.restart_game and args.apply:

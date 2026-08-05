@@ -2163,7 +2163,10 @@ def choose_endless_native_bundle(rng, enemy_level: int = 100) \
     for bundles in catalog.bundles.values():
         for bundle in bundles:
             bosses = list(native_bundle_bosses(bundle))
+            requirements = bundle.terrain_requirements
             if (bundle.portable and bundle.terrain_requirements is not None
+                    and set(requirements.action_roots).issubset(
+                        requirements.action_closure)
                     and not field_blocked(bundle.source_field)
                     and _pool_safe(bosses)):
                 gated.append(bundle)
@@ -2239,9 +2242,9 @@ def endless_bundle_publish_logicals(bundle: rbb.NativeBossBundle) -> tuple[str, 
     add(bundle.terrain_logical)
     requirements = bundle.terrain_requirements
     if requirements is not None:
-        for root in requirements.action_roots:
-            add(root if root.endswith(".action.dsl.amf3.deflate")
-                else root + ".action.dsl.amf3.deflate")
+        for action in requirements.action_closure:
+            add(action if action.endswith(".action.dsl.amf3.deflate")
+                else action + ".action.dsl.amf3.deflate")
 
     kinds = {slot.single.kind for slot in bundle.slots
              if slot.single is not None}
