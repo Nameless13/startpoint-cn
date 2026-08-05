@@ -3,6 +3,21 @@ title = "starpoint-cn gitleaks config"
 [extend]
 useDefault = true
 
+[[rules]]
+id = "generic-api-key"
+
+    [[rules.allowlists]]
+    description = "Ordered-key SHA-256 release-contract digests are not API keys"
+    condition = "AND"
+    regexTarget = "line"
+    paths = [
+        '''^docs/superpowers/plans/2026-08-06-abyss-v1-release-contract\.md$''',
+        '''^mod-tools/release-contracts/abyss_weapon_balance_v1\.json$''',
+    ]
+    regexes = [
+        '''^\s*"?(equipment|ability_soul)_key_sequence_sha256"?\s*[:=]\s*"?[0-9a-f]{64}"?,?\s*$''',
+    ]
+
 # 误报加白:抓包协议文档里的游戏侧参数(如 whiteKey)、游戏数据资源、stub token —— 均非本仓库持有的密钥。
 [allowlist]
 description = "Non-secrets: captured game-API params in route docs, game data assets, stub tokens"
