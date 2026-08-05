@@ -440,6 +440,17 @@ class FakeServices:
         raise AssertionError("offline release must never publish live data")
 
 
+@unittest.skipUnless(os.name == "nt", "Windows path conversion regression")
+class OfflineReleaseWindowsPathTests(unittest.TestCase):
+    def test_extended_path_converts_unc_share_to_extended_unc_form(self) -> None:
+        self.assertEqual(
+            module._windows_extended_path(
+                Path(r"\\server\share\release\device-preparation.json")
+            ),
+            r"\\?\UNC\server\share\release\device-preparation.json",
+        )
+
+
 class OfflineReleaseTestCase(unittest.TestCase):
     def setUp(self) -> None:
         self.test_temp_parent = module.DEFAULT_OUTPUT_ROOT / ".unit-test-temp"

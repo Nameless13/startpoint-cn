@@ -623,6 +623,8 @@ def _windows_extended_path(path: Path) -> str:
     rendered = os.path.abspath(path)
     if rendered.startswith("\\\\?\\"):
         return rendered
+    if rendered.startswith("\\\\"):
+        return "\\\\?\\UNC\\" + rendered[2:]
     return "\\\\?\\" + rendered
 
 
