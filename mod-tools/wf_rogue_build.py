@@ -158,8 +158,10 @@ FIELD_DATA_T = "master/battle/field_data.orderedmap"
 ZONE_T = "master/battle/zone.orderedmap"
 BOSS_LEVEL = "master/battle/boss/boss_level.orderedmap"
 GENERAL_BOSS_VARIABLE = "master/battle/boss/general_boss_variable.orderedmap"
+GENERAL_BOSS_STATE = "master/battle/boss/general_boss_state.orderedmap"
 ZAKO_LEVEL = "master/battle/zako/zako_level.orderedmap"
 OROCHI = "master/battle/boss/orochi.orderedmap"
+STANDARD_FUNNEL = "master/battle/boss/funnel/standard_funnel.orderedmap"
 
 # ---- 专用表 boss = 第四类合法来源(2026-07-29 八岐大蛇实验通过后放行)----
 # 少数官方大型 boss 不在 general/standard/zako 三表,而是各有一张专用表,
@@ -2148,6 +2150,129 @@ def build_native_bundle_catalog(
         metadata_of=metadata_provider,
         c8016_prefixes=C8016_BLOCKED_BOSS_PREFIXES,
     )
+
+
+def choose_endless_native_bundle(rng, enemy_level: int = 100) \
+        -> rbb.NativeBossBundle:
+    """从正式构建器的 fresh post-gate catalog 选一个原生安全 bundle。"""
+    level = int(enemy_level)
+    if level <= 0:
+        raise ValueError(f"无尽层敌等级非法:{enemy_level!r}")
+    catalog = build_native_bundle_catalog(enemy_level=level)
+    gated = []
+    for bundles in catalog.bundles.values():
+        for bundle in bundles:
+            bosses = list(native_bundle_bosses(bundle))
+            if (bundle.portable and bundle.terrain_requirements is not None
+                    and not field_blocked(bundle.source_field)
+                    and _pool_safe(bosses)):
+                gated.append(bundle)
+    safe_catalog = rbb.catalog_from_bundles(gated)
+    if not safe_catalog.family_ids:
+        raise RuntimeError(f"敌等级 {level} 没有通过完整门禁的原生 boss bundle")
+    selected = rbb.choose_family_variant_bundle(
+        safe_catalog, rng, policy=None).bundle
+    if selected.source_field not in safe_catalog.eligible_source_fields:
+        raise RuntimeError(
+            f"无尽层 selector 返回了非 post-gate 场地:{selected.source_field}")
+    return selected
+
+
+def native_bundle_bosses(bundle: rbb.NativeBossBundle) -> tuple[str, ...]:
+    """按 active slot 顺序返回单人侧实体代号，并保留真实重复实例。"""
+    return tuple(slot.single.code for slot in bundle.slots
+                 if slot.single is not None)
+
+
+def patch_quest_boss_fields(
+        row: list[str], *, field: str, bosses, thumbnail: str | None,
+        bgm: str | None, enemy_level: int, rng,
+        play_field: str | None = None,
+        field_elements: dict[str, int] | None = None,
+        boss_elements: dict[str, int | None] | None = None,
+        require_bgm: bool = False) -> tuple[int, str]:
+    """同步正式塔路径的 c5/c69/c95/c98/c99 boss 场地字段。"""
+    if len(row) <= 99:
+        raise ValueError(f"rush quest 行过短:{len(row)} < 100")
+    source_field = str(field)
+    target_field = str(play_field or source_field)
+    if not source_field or not target_field:
+        raise ValueError("无尽层 bundle 缺 field")
+    level = int(enemy_level)
+    if level <= 0:
+        raise ValueError(f"无尽层敌等级非法:{enemy_level!r}")
+    if require_bgm and bgm in (None, "", "(None)"):
+        raise ValueError(f"无尽层 bundle 缺 BGM:{source_field}")
+
+    fields = field_official_elem_map() if field_elements is None else field_elements
+    boss_map = boss_element_map() if boss_elements is None else boss_elements
+    official = fields.get(source_field)
+    fixed = next((boss_map[code] for code in bosses
+                  if boss_map.get(code) is not None), None)
+    if official is not None:
+        element, tag = int(official), "(官方)"
+    elif fixed is not None:
+        element, tag = int(fixed), ""
+    else:
+        element, tag = int(rng.randrange(6)), "(随机)"
+    if not 0 <= element < 6:
+        raise ValueError(f"无尽层推荐元素非法:{element}")
+
+    if thumbnail not in (None, "", "(None)"):
+        row[5] = str(thumbnail)
+    row[69] = str(element)
+    row[95] = str(level)
+    row[98] = target_field
+    if bgm not in (None, "", "(None)"):
+        row[99] = str(bgm)
+    return element, tag
+
+
+def endless_bundle_publish_logicals(bundle: rbb.NativeBossBundle) -> tuple[str, ...]:
+    """返回原生 bundle 与 quest 写回组成的 dependency-first 发布闭包。"""
+    logicals: list[str] = []
+
+    def add(logical: str | None) -> None:
+        if logical and logical not in logicals:
+            logicals.append(logical)
+
+    add(bundle.terrain_logical)
+    requirements = bundle.terrain_requirements
+    if requirements is not None:
+        for root in requirements.action_roots:
+            add(root if root.endswith(".action.dsl.amf3.deflate")
+                else root + ".action.dsl.amf3.deflate")
+
+    kinds = {slot.single.kind for slot in bundle.slots
+             if slot.single is not None}
+    for kind in sorted(kinds):
+        table_name = rbb.KIND_TABLES.get(kind)
+        add(rbb.TABLE_LOGICALS.get(table_name))
+    add(BOSS_LEVEL)
+    add(GENERAL_ZAKO)
+    add(ZAKO_LEVEL)
+
+    spawned_kinds = {
+        ref.source_kind
+        for layer in (() if requirements is None else requirements.layers)
+        for ref in layer.spawned_refs
+    }
+    has_funnels = bool(requirements and any(
+        layer.funnels for layer in requirements.layers))
+    if kinds & {1, 3, 8} or spawned_kinds & {"AlterEgo", "GeneralBoss"}:
+        add(GENERAL_BOSS)
+        add(GENERAL_BOSS_VARIABLE)
+        add(GENERAL_BOSS_STATE)
+        add(ENEMY_WATCH)
+    if has_funnels or "Funnel" in spawned_kinds:
+        add(GENERAL_FUNNEL)
+    if "StandardFunnel" in spawned_kinds:
+        add(STANDARD_FUNNEL)
+
+    add(ZONE_T)
+    add(FIELD_DATA_T)
+    add(Q_QUEST)
+    return tuple(logicals)
 
 
 def _zone_pick(fdid: str) -> tuple[list[str], list[str]]:
@@ -6213,34 +6338,29 @@ def main() -> int:
 
     def patch_common(row: list[str], name: str, pick: dict) -> str:
         row[4] = name
-        thumb = pick.get("thumb") or ""
-        if thumb:
-            row[5] = thumb                               # 来源副本的正规预览图
         row[7] = START
         row[8] = END
         row[67] = "0"                                    # 体力
-        # c69 优先=官方源 quest 推荐元素(kit 色替只在官方配置下自洽,C8016 根因);
-        # 次选=固定元素 boss 查表;都查不到才随机。拼接层带 elem_override
-        # (= boss 老家楼层元素),优先级最高。
-        official = pick.get("elem_override")
-        if official is None:
-            official = elem_map.get(pick["field"])
-        fixed = next((belem_map[c] for c in pick["bosses"] if belem_map.get(c) is not None), None)
-        if official is not None:
-            elem, tag = official, "(官方)"
-        elif fixed is not None:
-            elem, tag = fixed, ""
-        else:
-            elem, tag = rng.randrange(6), "(随机)"
-        row[69] = str(elem)
-        # 楼层等级在循环里按爬坡档已经算好(pick["level"]);无尽档等走老路
-        row[95] = str(pick.get("level")
-                      or resolve_level(pick["bosses"], args.enemy_level, sb_t, gv_t,
-                                       gb_t, prefer_max=want_max)
-                      or args.enemy_level)
-        row[98] = pick.get("play_field") or pick["field"]   # 乱流机关=克隆场
-        if pick.get("bgm"):
-            row[99] = pick["bgm"]                        # 塔层带专属 BGM;来源副本保持模板
+        # 楼层等级在循环里按爬坡档已经算好(pick["level"]);无尽档等走老路。
+        level = (pick.get("level")
+                 or resolve_level(pick["bosses"], args.enemy_level, sb_t, gv_t,
+                                  gb_t, prefer_max=want_max)
+                 or args.enemy_level)
+        source_elements = dict(elem_map)
+        if pick.get("elem_override") is not None:
+            source_elements[pick["field"]] = int(pick["elem_override"])
+        elem, tag = patch_quest_boss_fields(
+            row,
+            field=pick["field"],
+            play_field=pick.get("play_field"),
+            bosses=pick["bosses"],
+            thumbnail=pick.get("thumb"),
+            bgm=pick.get("bgm"),
+            enemy_level=int(level),
+            rng=rng,
+            field_elements=source_elements,
+            boss_elements=belem_map,
+        )
         return f" 属性:{ELEM_CN[elem] if elem < 6 else '无'}{tag}"
 
     _hp_fit_cache: dict[tuple[str, int, float], dict | None] = {}

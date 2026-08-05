@@ -10,8 +10,10 @@
 from __future__ import annotations
 
 import copy
+import csv
 import os
 import json
+import random
 import re
 import subprocess
 import sys
@@ -19,6 +21,7 @@ import tempfile
 import unittest
 import zipfile
 import zlib
+from dataclasses import replace
 from pathlib import Path
 from unittest import mock
 
@@ -27,6 +30,7 @@ import wf_quest_lib as q  # noqa: E402
 import wf_rogue_build as rb  # noqa: E402
 import wf_rogue_bundle as rbb  # noqa: E402
 import wf_rogue_reroll as rr  # noqa: E402
+import wf_rogue_save as rsave  # noqa: E402
 import wf_dsl  # noqa: E402
 
 
@@ -82,6 +86,34 @@ def quest_row(field: str) -> list[str]:
     row = ["700099001"] + [""] * 98
     row[98] = field
     return row
+
+
+def native_bundle(field: str, boss: str, *, family: str = "family",
+                  kind: int = 1, bgm: str = "bgm_safe",
+                  thumbnail: str = "thumb_safe") \
+        -> rbb.NativeBossBundle:
+    return rbb.NativeBossBundle(
+        family_id=family,
+        family_name=family,
+        variant_id=f"{family}-variant",
+        variant_name=f"{family}-variant",
+        source_field=field,
+        source_zone=f"zone-{field}",
+        terrain_logical=f"battle/field/{field}.terrain.amf3.deflate",
+        active_layers=("0",),
+        slots=(rbb.ActiveBossSlot(
+            "0", 1, 0, rbb.BossRef(kind, boss), rbb.BossRef(kind, boss)),),
+        bgm=bgm,
+        thumbnail=thumbnail,
+        source_category="rush",
+        selected_levels=(("0", 1, 100),),
+        terrain_requirements=rbb.BossTerrainRequirements(
+            layers=(rbb.LayerTerrainRequirements(
+                "0",
+                funnels=(rbb.FunnelRequirement("1", 1, ("safe_funnel",)),),
+                spawned_refs=(rbb.SpawnedRef("AlterEgo", "safe_shadow"),)),),
+            action_roots=("battle/action/safe",)),
+    )
 
 
 class FieldChainCase(unittest.TestCase):
@@ -1516,6 +1548,138 @@ class StatNormalizeCase(unittest.TestCase):
             self.skipTest("终始之龙不在 standard_boss")
         row = rb.cells(next(iter(node.values())))
         self.assertLessEqual(len(row), 3, f"standard_boss 行变长了:{row}")
+
+
+class EndlessRerollSafetyCase(unittest.TestCase):
+    def test_endless_reroll_rejects_every_non_700099_99_target_before_write(self):
+        """目标门禁若被移除，首个官方 700007/8 fixture 会被旧实现真实改写。"""
+        for event, quest_no in (("700007", "8"), ("700099", "8")):
+            with self.subTest(event=event, quest_no=quest_no):
+                target = [f"{event}{int(quest_no):03d}"] + [""] * 99
+                quest_table = {event: {quest_no: ",".join(target)}}
+                unsafe_pool = [
+                    ("unsafe_field", "unsafe_field,bgm_unsafe", ["unsafe_boss"])]
+
+                with mock.patch("wf_chain_build.build_pool",
+                                return_value=unsafe_pool), \
+                     mock.patch.object(q, "load_table", return_value=quest_table), \
+                     mock.patch.object(q, "save_table",
+                                       return_value=Path("fixture")) as save, \
+                     mock.patch.object(rsave.subprocess, "run",
+                                       return_value=mock.Mock(returncode=0)):
+                    with self.assertRaisesRegex(ValueError, "700099.*99"):
+                        rsave.reroll_endless_field(event, quest_no, apply=True)
+
+                save.assert_not_called()
+                self.assertEqual(quest_table[event][quest_no], ",".join(target))
+
+    def test_endless_selector_chooses_only_from_post_gate_catalog(self):
+        safe = native_bundle("safe_field", "safe_boss", family="safe")
+        blocked = native_bundle(
+            "treasure_cave_area", "blocked_boss", family="zz-blocked")
+        rejected = native_bundle("unsafe_field", "unsafe_boss", family="unsafe")
+        rejected = replace(
+            rejected, portable=False,
+            native_only_reason="ACTION_CLOSURE_UNAUDITED",
+            terrain_requirements=None)
+        catalog = rbb.BundleCatalog(
+            family_ids=(safe.family_id, blocked.family_id, rejected.family_id),
+            variants={safe.family_id: (safe.variant_id,),
+                      blocked.family_id: (blocked.variant_id,),
+                      rejected.family_id: (rejected.variant_id,)},
+            bundles={safe.variant_id: (safe,), blocked.variant_id: (blocked,),
+                     rejected.variant_id: (rejected,)},
+            family_names={safe.family_id: safe.family_name,
+                          blocked.family_id: blocked.family_name,
+                          rejected.family_id: rejected.family_name},
+            variant_names={safe.variant_id: safe.variant_name,
+                           blocked.variant_id: blocked.variant_name,
+                           rejected.variant_id: rejected.variant_name},
+            rejections=(rbb.BundleRejection(
+                rejected.source_field, rejected.source_zone,
+                "ACTION_CLOSURE_UNAUDITED", "GeneralBossAlive target invalid"),),
+            discovered_family_ids=(safe.family_id, blocked.family_id,
+                                   rejected.family_id),
+            discovered_variants={
+                safe.family_id: (safe.variant_id,),
+                blocked.family_id: (blocked.variant_id,),
+                rejected.family_id: (rejected.variant_id,),
+            },
+            discovered_bundles={
+                safe.variant_id: (safe,), blocked.variant_id: (blocked,),
+                rejected.variant_id: (rejected,),
+            },
+        )
+
+        class LastRng:
+            @staticmethod
+            def randrange(size):
+                return size - 1
+
+        selector = getattr(rb, "choose_endless_native_bundle", None)
+        self.assertIsNotNone(selector, "正式构建器尚未导出无尽层安全选择接口")
+        with mock.patch.object(rb, "build_native_bundle_catalog",
+                               return_value=catalog):
+            selected = selector(LastRng(), enemy_level=90)
+
+        self.assertIs(selected, safe)
+
+    def test_endless_reroll_syncs_fields_and_publishes_bundle_dependencies(self):
+        bundle = native_bundle("safe_field", "safe_boss", kind=2)
+        target = ["700099099"] + [""] * 99
+        target[5] = "old_thumb"
+        target[69] = "5"
+        target[95] = "90"
+        target[98] = "old_field"
+        target[99] = "old_bgm"
+        quest_table = {"700099": {"99": ",".join(target)}}
+        unsafe_pool = [("unsafe_field", "unsafe_field,bgm_unsafe", ["unsafe_boss"])]
+
+        with mock.patch.object(rb, "choose_endless_native_bundle",
+                               return_value=bundle, create=True) as selector, \
+             mock.patch.object(rb, "field_official_elem_map",
+                               return_value={"safe_field": 2}), \
+             mock.patch.object(rb, "boss_element_map", return_value={}), \
+             mock.patch("wf_chain_build.build_pool", return_value=unsafe_pool), \
+             mock.patch.object(q, "load_table", return_value=quest_table), \
+             mock.patch.object(q, "save_table", return_value=Path("fixture")), \
+             mock.patch.object(rsave.subprocess, "run",
+                               return_value=mock.Mock(returncode=0)) as publish:
+            rsave.reroll_endless_field("700099", "99", apply=True)
+
+        selector.assert_called_once()
+        self.assertEqual(selector.call_args.kwargs["enemy_level"], 90)
+        written = next(csv.reader([quest_table["700099"]["99"]]))
+        self.assertEqual(
+            {index: written[index] for index in (5, 69, 95, 98, 99)},
+            {5: "thumb_safe", 69: "2", 95: "90",
+             98: "safe_field", 99: "bgm_safe"},
+        )
+        publish_items = set(publish.call_args.args[0][3].split(","))
+        self.assertTrue({
+            rsave.RUSH_QUEST_LOGICAL,
+            rb.FIELD_DATA_T,
+            rb.ZONE_T,
+            rbb.TABLE_LOGICALS["kraken"],
+            rb.GENERAL_BOSS,
+            "master/battle/boss/general_boss_variable.orderedmap",
+            "master/battle/boss/general_boss_state.orderedmap",
+            rb.GENERAL_FUNNEL,
+            rb.ENEMY_WATCH,
+        }.issubset(publish_items), publish_items)
+
+    def test_random_boss_cli_defaults_to_700099_endless_99(self):
+        db = mock.MagicMock()
+        with mock.patch.object(
+                rsave.sys, "argv",
+                ["wf_rogue_save.py", "--reset", "1", "--random-boss"]), \
+             mock.patch.object(rsave.sqlite3, "connect", return_value=db), \
+             mock.patch.object(rsave, "reset_run", return_value=0), \
+             mock.patch.object(rsave, "reroll_endless_field") as reroll:
+            code = rsave.main()
+
+        self.assertEqual(code, 0)
+        reroll.assert_called_once_with("700099", "99", False)
 
 
 class StandardBossHpCase(unittest.TestCase):
