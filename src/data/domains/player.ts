@@ -1150,9 +1150,13 @@ export function updatePlayerSync(
         `).run([...values, id]);
 }
 
+function isRecord(value: unknown): value is Record<string, any> {
+    return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
 /**
  * Replaces a player's data with the provided MergedPlayerData object.
- * 
+ *
  * @param replaceWith The MergedPlayerData to replace.
  */
 export function replacePlayerDataSync(
@@ -1171,25 +1175,35 @@ export function replacePlayerDataSync(
     const account = getAccountFromPlayerIdSync(playerId)
     if (account === null) throw new Error("No account tied to player id.");
 
-    // Backward compatibility for snapshots exported before awake levels were included:
-    // preserve only levels whose character and node still exist in the imported snapshot.
-    if (replaceWith.characterManaNodeAwakeLevels === undefined) {
-        const retained: Record<string, Record<number, number>> = {}
-        const current = getPlayerCharactersManaNodeAwakeLevelsSync(playerId)
-        const importedNodes = replaceWith.characterManaNodeList
-        if (importedNodes && typeof importedNodes === "object" && !Array.isArray(importedNodes)) {
-            for (const [characterId, levels] of Object.entries(current)) {
-                const nodes = importedNodes[characterId]
-                if (!Array.isArray(nodes)) continue
-                const allowed = new Set(nodes)
-                for (const [nodeId, level] of Object.entries(levels)) {
-                    if (!allowed.has(Number(nodeId))) continue
-                    if (!retained[characterId]) retained[characterId] = {}
-                    retained[characterId][Number(nodeId)] = level
-                }
+    // A mana node row always has an awake level - an unrecorded one reads back as 0 - so
+    // the readback map is dense over the snapshot's mana nodes. Snapshots are not: exports
+    // predating awake levels omit the field entirely, and hand-written ones list only the
+    // nodes that are actually awakened. Fill the gaps to the shape the readback must take,
+    // or the count check below fails over a difference that exists only in the file.
+    // With the field absent, levels the target already holds for a node the snapshot also
+    // brings in are carried over, so re-importing an old export of a save keeps them.
+    // Entries naming a node the snapshot does not have are left alone for validation to reject.
+    const importedNodes = replaceWith.characterManaNodeList
+    const awakeLevels = replaceWith.characterManaNodeAwakeLevels
+    if (isRecord(importedNodes) && (awakeLevels === undefined || isRecord(awakeLevels))) {
+        const carryOver = awakeLevels === undefined
+            ? getPlayerCharactersManaNodeAwakeLevelsSync(playerId)
+            : {}
+        const filled: Record<string, Record<number, number>> = awakeLevels ?? {}
+        for (const [characterId, nodes] of Object.entries(importedNodes)) {
+            if (!Array.isArray(nodes) || nodes.length === 0) continue
+            const levels = filled[characterId] ?? {}
+            for (const nodeId of nodes) {
+                if (levels[nodeId] === undefined) levels[nodeId] = carryOver[characterId]?.[nodeId] ?? 0
             }
+            filled[characterId] = levels
         }
-        replaceWith.characterManaNodeAwakeLevels = retained
+        // A character with no levels cannot come back from the database, so it can only
+        // fail the count check.
+        for (const [characterId, levels] of Object.entries(filled)) {
+            if (isRecord(levels) && Object.keys(levels).length === 0) delete filled[characterId]
+        }
+        replaceWith.characterManaNodeAwakeLevels = filled
     }
 
     assertMergedPlayerData(replaceWith, playerId, account.id)

@@ -70,6 +70,16 @@ function assertOldSaveIntact(): void {
 }
 
 
+// For imports aimed at another player. The shared save carries whatever name the last
+// replacement gave it, so only its awake levels - the data under test - are compared.
+function assertOtherSaveUntouched(): void {
+    assert.deepEqual(
+        canonical(read().characterManaNodeAwakeLevels),
+        canonical(original.characterManaNodeAwakeLevels),
+    );
+}
+
+
 before(() => {
     const account = accountDomain.insertAccountSync({
         appId: "transaction-test",
@@ -235,6 +245,61 @@ test("legacy snapshot without awake levels preserves matching target nodes", () 
         canonical(read().characterManaNodeAwakeLevels),
         canonical(original.characterManaNodeAwakeLevels),
     );
+});
+
+
+test("legacy snapshot lands on a fresh player that owns no mana nodes", () => {
+    const target = playerDomain.insertDefaultPlayerSync(accountId);
+    getDb().prepare(`
+        DELETE FROM players_characters_mana_nodes WHERE player_id = ?
+    `).run(target.id);
+
+    const legacy = changed();
+    delete legacy.characterManaNodeAwakeLevels;
+    legacy.player.id = target.id;
+    assert.ok(Object.keys(legacy.characterManaNodeList).length > 0);
+
+    assert.deepEqual(
+        playerDomain.replacePlayerDataSync(legacy),
+        { playerId: target.id, accountId },
+    );
+
+    const imported = dataUtils.getMergedPlayerDataSync(target.id);
+    assert.ok(imported);
+    const allZero: Record<string, Record<number, number>> = {};
+    for (const [characterId, nodes] of Object.entries(legacy.characterManaNodeList)) {
+        allZero[characterId] = Object.fromEntries(nodes.map(node => [node, 0]));
+    }
+    assert.deepEqual(canonical(imported.characterManaNodeAwakeLevels), canonical(allZero));
+    assertOtherSaveUntouched();
+});
+
+
+test("sparse awake levels are completed instead of failing the count check", () => {
+    const target = playerDomain.insertDefaultPlayerSync(accountId);
+
+    const sparse = changed();
+    sparse.player.id = target.id;
+    const [firstCharacter] = Object.keys(sparse.characterManaNodeList);
+    assert.ok(firstCharacter);
+    // A second node the awake map stays silent about - the level it comes back with is 0
+    // either way, so the count check must not read the silence as a difference.
+    const nodes = sparse.characterManaNodeList[firstCharacter];
+    nodes.push(Math.max(...nodes) + 1);
+    sparse.characterManaNodeAwakeLevels = { [firstCharacter]: { [nodes[0]]: 3 } };
+
+    playerDomain.replacePlayerDataSync(sparse);
+
+    const imported = dataUtils.getMergedPlayerDataSync(target.id);
+    assert.ok(imported);
+    const levels = imported.characterManaNodeAwakeLevels?.[firstCharacter];
+    assert.ok(levels);
+    assert.equal(levels[sparse.characterManaNodeList[firstCharacter][0]], 3);
+    assert.equal(
+        Object.keys(levels).length,
+        sparse.characterManaNodeList[firstCharacter].length,
+    );
+    assertOtherSaveUntouched();
 });
 
 
