@@ -1482,6 +1482,37 @@ class OfflineReleaseTestCase(unittest.TestCase):
         self.assertTrue(guard.is_file())
         self.assertEqual(list(parent.glob("*.tmp-*")), [])
 
+    @unittest.skipUnless(os.name == "nt", "Windows long-path publication regression")
+    def test_sidecar_atomic_publish_supports_real_staging_path_over_max_path(self) -> None:
+        sidecar_name = "prepared.json"
+        staging_name = f".{sidecar_name}.tmp-{'0' * 32}"
+        staging_path_length = 267
+        parent_length = staging_path_length - len(staging_name) - 1
+        padding_length = parent_length - len(str(self.root)) - 1
+        self.assertGreater(padding_length, 0)
+        parent = self.root / ("x" * padding_length)
+        parent.mkdir()
+        sidecar = parent / sidecar_name
+        staging = sidecar.with_name(staging_name)
+        self.assertLess(len(str(sidecar)), 260)
+        self.assertEqual(len(str(staging)), staging_path_length)
+        payload = b'{"canonical":true}\n'
+        reserved = module._reserve_file(sidecar)
+        reserved.destructive_started = True
+
+        try:
+            with mock.patch.object(
+                module.uuid,
+                "uuid4",
+                return_value=module.uuid.UUID(int=0),
+            ):
+                module._finish_reserved_file(reserved, payload)
+        finally:
+            module._abort_reserved_file(reserved)
+
+        self.assertEqual(sidecar.read_bytes(), payload)
+        self.assertFalse(reserved.guard_path.exists())
+
     def test_prepared_probe_loader_rejects_reparse_parent_instead_of_following_it(self) -> None:
         import subprocess
 
