@@ -11,15 +11,21 @@ content because standard zlib and zlib-ng may choose different DEFLATE bytes.
 from __future__ import annotations
 
 import argparse
+import csv
 import hashlib
 import io
+import json
 import os
+import re
 import struct
 import sys
 import tempfile
 import zipfile
 import zlib
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
 from pathlib import Path
+from types import MappingProxyType
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -27,7 +33,6 @@ MOD_TOOLS = ROOT / "mod-tools"
 sys.path.insert(0, str(MOD_TOOLS))
 
 import wf_quest_lib as quest  # noqa: E402
-import wf_rogue_rewards as rewards  # noqa: E402
 
 
 BRIDGE_ARCHIVE = (
@@ -54,14 +59,191 @@ SOUL_CANONICAL_BASELINE_SHA256 = (
 WAB_BASELINE_SIZE = 3_640
 WAB_BASELINE_SHA256 = "b9aa82f7c7483af88f758bcdaeed6474178e57a076d86b660d0bab902996e0ae"
 
-ITEM_LOGICAL = rewards.ITEM_T
-EQUIPMENT_LOGICAL = rewards.EQUIP_T
-STATUS_LOGICAL = rewards.EQUIP_STATUS_T
-SOUL_LOGICAL = rewards.SOUL_T
-RUSH_LOGICAL = rewards.RUSH_EVENT_T
+EQUIPMENT_LOGICAL = "master/item/equipment.orderedmap"
+SOUL_LOGICAL = "master/ability/ability_soul.orderedmap"
 WAB_LOGICAL = (
     "master/equipment_enhancement/equipment_enhancement_ability.orderedmap"
 )
+ARCHIVE_SHA256 = "e9ec4451ac5b3101f060c74278fd8901b7c207c57f19e313084ff9f9639f7272"
+RELEASE_CONTRACT_PATH = (
+    MOD_TOOLS / "release-contracts" / "abyss_weapon_balance_v1.json"
+)
+EXPECTED_CUSTOM_IDS = tuple(str(value) for value in range(8000101, 8000116))
+
+
+@dataclass(frozen=True)
+class HistoricalReleaseContract:
+    custom_ids: tuple[str, ...]
+    equipment_rows: Mapping[str, str]
+    ability_soul_rows: Mapping[str, str]
+    equipment_canonical_sha256: str
+    equipment_key_sequence_sha256: str
+    ability_soul_canonical_sha256: str
+    ability_soul_key_sequence_sha256: str
+
+
+def _require_mapping(value: object, field: str) -> dict[str, object]:
+    if not isinstance(value, dict):
+        raise ValueError(f"{field} must be a JSON object")
+    return value
+
+
+def _require_exact_keys(
+    value: Mapping[str, object], expected: Iterable[str], field: str
+) -> None:
+    expected_keys = tuple(expected)
+    if tuple(value) != expected_keys:
+        raise ValueError(
+            f"{field} keys must exactly match the required order: {expected_keys}"
+        )
+
+
+def _require_sha256(value: object, field: str, *, expected: str | None = None) -> str:
+    if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None:
+        raise ValueError(f"{field} must be a lowercase 64-character SHA-256")
+    if expected is not None and value != expected:
+        raise ValueError(f"{field} does not match the pinned release value")
+    return value
+
+
+def _require_csv_leaf(value: object, field: str) -> str:
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"{field} must be a non-empty CSV string")
+    try:
+        rows = list(csv.reader(io.StringIO(value), strict=True))
+    except csv.Error as exc:
+        raise ValueError(f"{field} must be parseable CSV") from exc
+    if not rows or any(not row for row in rows):
+        raise ValueError(f"{field} must contain non-empty CSV rows")
+    return value
+
+
+def _reject_duplicate_json_keys(
+    pairs: list[tuple[str, object]],
+) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON key: {key}")
+        result[key] = value
+    return result
+
+
+def load_v1_contract(
+    path: Path = RELEASE_CONTRACT_PATH,
+) -> HistoricalReleaseContract:
+    try:
+        raw_document = json.loads(
+            path.read_text(encoding="utf-8"),
+            object_pairs_hook=_reject_duplicate_json_keys,
+        )
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"release contract could not be read: {path}") from exc
+
+    document = _require_mapping(raw_document, "contract")
+    _require_exact_keys(
+        document,
+        ("schema_version", "published", "custom_ids", "payload_rows"),
+        "contract",
+    )
+    schema_version = document["schema_version"]
+    if type(schema_version) is not int or schema_version != 1:
+        raise ValueError("schema_version must be the integer 1")
+
+    published = _require_mapping(document["published"], "published")
+    _require_exact_keys(
+        published,
+        (
+            "id",
+            "status",
+            "depends_on",
+            "version",
+            "archive",
+            "archive_sha256",
+            "equipment_canonical_sha256",
+            "equipment_key_sequence_sha256",
+            "ability_soul_canonical_sha256",
+            "ability_soul_key_sequence_sha256",
+        ),
+        "published",
+    )
+    expected_metadata = {
+        "id": "abyss-weapon-balance-v1",
+        "status": "published",
+        "depends_on": "1.4.105",
+        "version": "1.4.106",
+        "archive": "pinball-1.4.105-1.4.106-1-abyssbalance0718.zip",
+    }
+    for field, expected_value in expected_metadata.items():
+        if published[field] != expected_value:
+            raise ValueError(f"published.{field} does not match the v1 release")
+    _require_sha256(
+        published["archive_sha256"],
+        "archive_sha256",
+        expected=ARCHIVE_SHA256,
+    )
+    equipment_canonical_sha256 = _require_sha256(
+        published["equipment_canonical_sha256"],
+        "equipment_canonical_sha256",
+    )
+    equipment_key_sequence_sha256 = _require_sha256(
+        published["equipment_key_sequence_sha256"],
+        "equipment_key_sequence_sha256",
+    )
+    ability_soul_canonical_sha256 = _require_sha256(
+        published["ability_soul_canonical_sha256"],
+        "ability_soul_canonical_sha256",
+    )
+    ability_soul_key_sequence_sha256 = _require_sha256(
+        published["ability_soul_key_sequence_sha256"],
+        "ability_soul_key_sequence_sha256",
+    )
+
+    custom_ids_value = document["custom_ids"]
+    if not isinstance(custom_ids_value, list) or tuple(custom_ids_value) != EXPECTED_CUSTOM_IDS:
+        raise ValueError("custom_ids must exactly match 8000101 through 8000115")
+    custom_ids = tuple(custom_ids_value)
+
+    payload_rows = _require_mapping(document["payload_rows"], "payload_rows")
+    _require_exact_keys(payload_rows, ("equipment", "ability_soul"), "payload_rows")
+    equipment_value = _require_mapping(
+        payload_rows["equipment"], "payload_rows.equipment"
+    )
+    ability_soul_value = _require_mapping(
+        payload_rows["ability_soul"], "payload_rows.ability_soul"
+    )
+    _require_exact_keys(
+        equipment_value, custom_ids, "payload_rows.equipment"
+    )
+    _require_exact_keys(
+        ability_soul_value, custom_ids, "payload_rows.ability_soul"
+    )
+    equipment_rows = {
+        custom_id: _require_csv_leaf(
+            equipment_value[custom_id], f"payload_rows.equipment.{custom_id}"
+        )
+        for custom_id in custom_ids
+    }
+    ability_soul_rows = {
+        custom_id: _require_csv_leaf(
+            ability_soul_value[custom_id],
+            f"payload_rows.ability_soul.{custom_id}",
+        )
+        for custom_id in custom_ids
+    }
+
+    return HistoricalReleaseContract(
+        custom_ids=custom_ids,
+        equipment_rows=MappingProxyType(equipment_rows),
+        ability_soul_rows=MappingProxyType(ability_soul_rows),
+        equipment_canonical_sha256=equipment_canonical_sha256,
+        equipment_key_sequence_sha256=equipment_key_sequence_sha256,
+        ability_soul_canonical_sha256=ability_soul_canonical_sha256,
+        ability_soul_key_sequence_sha256=ability_soul_key_sequence_sha256,
+    )
+
+
+V1_CONTRACT = load_v1_contract()
 
 
 def archive_member(logical: str) -> str:
@@ -77,6 +259,15 @@ ZIP_TIMESTAMP = (2026, 7, 18, 0, 0, 0)
 
 def sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+def key_sequence_sha256(keys: Iterable[str]) -> str:
+    digest = hashlib.sha256()
+    for key in keys:
+        raw = key.encode("utf-8")
+        digest.update(struct.pack("<Q", len(raw)))
+        digest.update(raw)
+    return digest.hexdigest()
 
 
 def checked_read(path: Path, *, size: int, digest: str, label: str) -> bytes:
@@ -170,7 +361,7 @@ def build_official_orderedmap(node: object) -> bytes:
 
 def strip_custom_soul_rows(soul_bytes: bytes) -> bytes:
     table = parse_table(soul_bytes, SOUL_LOGICAL)
-    custom_ids = {spec.id for spec in rewards.WEAPONS}
+    custom_ids = set(V1_CONTRACT.custom_ids)
     stripped = {key: value for key, value in table.items() if key not in custom_ids}
     return build_official_orderedmap(stripped)
 
@@ -189,20 +380,35 @@ def build_payloads_from_soul_table(
         )
 
     bridge_equipment_bytes = read_bridge_member(bridge_bytes, EQUIPMENT_LOGICAL)
-    tables = rewards.MasterTables(
-        items=parse_table(read_bridge_member(bridge_bytes, ITEM_LOGICAL), ITEM_LOGICAL),
-        equipment=parse_table(bridge_equipment_bytes, EQUIPMENT_LOGICAL),
-        equipment_status=parse_table(
-            read_bridge_member(bridge_bytes, STATUS_LOGICAL), STATUS_LOGICAL
-        ),
-        ability_soul=soul_baseline,
-        rush_event=parse_table(read_bridge_member(bridge_bytes, RUSH_LOGICAL), RUSH_LOGICAL),
-    )
-    changes = rewards.build_master_changes(tables)
-    equipment_bytes = quest.build_node(changes.equipment)
-    soul_bytes = build_official_orderedmap(changes.ability_soul)
+    equipment = parse_table(bridge_equipment_bytes, EQUIPMENT_LOGICAL)
+    for custom_id in V1_CONTRACT.custom_ids:
+        if custom_id not in equipment:
+            raise ValueError(f"bridge equipment is missing historical id {custom_id}")
+        equipment[custom_id] = V1_CONTRACT.equipment_rows[custom_id]
 
-    custom_ids = {spec.id for spec in rewards.WEAPONS}
+    ability_soul = dict(soul_baseline)
+    for custom_id in V1_CONTRACT.custom_ids:
+        ability_soul[custom_id] = V1_CONTRACT.ability_soul_rows[custom_id]
+
+    if key_sequence_sha256(equipment) != V1_CONTRACT.equipment_key_sequence_sha256:
+        raise RuntimeError("historical equipment key order does not match v1 contract")
+    if canonical_node_sha256(equipment) != V1_CONTRACT.equipment_canonical_sha256:
+        raise RuntimeError("historical equipment content does not match v1 contract")
+    if (
+        key_sequence_sha256(ability_soul)
+        != V1_CONTRACT.ability_soul_key_sequence_sha256
+    ):
+        raise RuntimeError("historical ability_soul key order does not match v1 contract")
+    if (
+        canonical_node_sha256(ability_soul)
+        != V1_CONTRACT.ability_soul_canonical_sha256
+    ):
+        raise RuntimeError("historical ability_soul content does not match v1 contract")
+
+    equipment_bytes = quest.build_node(equipment)
+    soul_bytes = build_official_orderedmap(ability_soul)
+
+    custom_ids = set(V1_CONTRACT.custom_ids)
     bridge_equipment = parse_table(bridge_equipment_bytes, EQUIPMENT_LOGICAL)
     final_equipment = parse_table(equipment_bytes, EQUIPMENT_LOGICAL)
     bridge_noncustom = [
