@@ -47,13 +47,26 @@ def _leaf(rows: list[list[str]]) -> str:
     return core.write_csv_lines(rows)
 
 
-def _ability_template(effect_kind: str, template_id: str) -> str:
+def _ability_template(kinds_by_line: dict[int, str], template_id: str) -> str:
+    """按 donor_line 补齐模板行:3e5ae0d 起 build_soul_leaf 逐行取捐赠行,
+    同一模板键可被多个 effect 以不同 donor_line 引用,只造一行会越界。"""
+    return _leaf([
+        _ability_template_row(kinds_by_line.get(line, "999"), template_id)
+        for line in range(max(kinds_by_line) + 1)
+    ])
+
+
+def _ability_template_row(effect_kind: str, template_id: str) -> list[str]:
     row = [""] * 123
     row[0], row[1], row[2] = "9", "9", "9"
     row[3] = template_id
+    # 3e5ae0d 起 build_soul_leaf 会跑 _assert_soul_row_legal:枚举列留空 = 客户端
+    # 打开角色页即 C7050/C7101,故这些列必须给数字/哨兵(同 test_rogue_rewards.template_row)。
+    row[10], row[17] = "0", "0"
+    row[24], row[36], row[43] = "0", "(None)", "0"
     row[44], row[45], row[46] = effect_kind, "1", "Donor"
     row[48], row[49] = "100", "200"
-    return _leaf([row])
+    return row
 
 
 def _base_master_tables() -> rewards.MasterTables:
@@ -80,23 +93,21 @@ def _base_master_tables() -> rewards.MasterTables:
         donor[7] = f"供体描述 {spec.donor}"
         donor[8], donor[9], donor[10], donor[11] = "4", "true", spec.donor, "4"
         equipment[spec.donor] = _leaf([donor])
+        # 官方 equipment_status 的叶子是扁平 "HP,ATK" 字符串(桥接包实测:
+        # 5010060 = {"1": "334,147", "5": "500,220"}),不是 orderedmap 行结构。
         status[spec.donor] = {
-            "1": _leaf([[spec.donor, str(index + 100), str(index + 200)]]),
-            "100": {
-                "normal": _leaf(
-                    [[spec.donor, str(index + 1000), str(index + 2000)]]
-                )
-            },
+            "1": f"{index + 100},{index + 200}",
+            "100": f"{index + 1000},{index + 2000}",
         }
 
-    template_kinds = {
-        effect.template_id: effect.effect_kind
-        for spec in rewards.WEAPONS
-        for effect in spec.effects
-    }
+    template_kinds: dict[str, dict[int, str]] = {}
+    for spec in rewards.WEAPONS:
+        for effect in spec.effects:
+            template_kinds.setdefault(effect.template_id, {})[
+                effect.donor_line] = effect.effect_kind
     ability_soul = {
-        template_id: _ability_template(effect_kind, template_id)
-        for template_id, effect_kind in template_kinds.items()
+        template_id: _ability_template(kinds_by_line, template_id)
+        for template_id, kinds_by_line in template_kinds.items()
     }
     rush_row = [f"rush-{index}" for index in range(18)]
     rush_row[10] = rewards.TOKEN_TEMPLATE

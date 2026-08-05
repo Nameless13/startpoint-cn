@@ -30,6 +30,20 @@ import wf_rogue_reroll as rr  # noqa: E402
 import wf_dsl  # noqa: E402
 
 
+def _store_available() -> bool:
+    """本机/CI 是否装了数据包。没装时依赖 store 的用例只能跳过,不能算失败。"""
+    try:
+        q.store_path(rb.GENERAL_BOSS)
+    except FileNotFoundError:
+        return False
+    return True
+
+
+# 装饰器形式的守卫:比在用例体内 skipTest 更可靠 —— 后者若写在 subTest 里,
+# 只中止当前 subTest,平级 subTest 照跑并引用未赋值的局部变量。
+requires_store = unittest.skipUnless(_store_available(), "store 不可用")
+
+
 def wave(zakos: tuple = (), bosses: tuple = ()) -> str:
     """41 列 zone wave 行:zako 填 c2/4/…偶数列,boss 填 (c23,c24)/(c27,c28)/(c31,c32)。"""
     row = [""] * 41
@@ -1715,24 +1729,28 @@ class BossLevelHpScalingCase(unittest.TestCase):
         self.assertEqual(rb.cells(clone)[2:5], ["30", "2", "hit_hp_boss"])
         self.assertNotEqual(source, clone)
 
+        # 取数放在 subTest 之外:skipTest 若在 subTest 里抛出,只中止当前这个 subTest,
+        # 后面几个平级 subTest 照跑,再引用这里才赋值的 catalog/tables/sources_before
+        # 就是 UnboundLocalError(CI 无数据包时实测 11 条红)。
+        try:
+            catalog = rb.build_native_bundle_catalog(enemy_level=100)
+            tables = {
+                "orochi": q.load_table(rbb.TABLE_LOGICALS["orochi"]),
+                "general_boss": q.load_table(rb.GENERAL_BOSS),
+                "general_boss_variable": q.load_table(
+                    "master/battle/boss/general_boss_variable.orderedmap"),
+                "boss_level": q.load_table(
+                    "master/battle/boss/boss_level.orderedmap"),
+                "general_enemy_watch": q.load_table(rb.ENEMY_WATCH),
+                "__code_references__": {
+                    "hard": frozenset(), "soft": frozenset(),
+                    "degraded": False,
+                },
+            }
+        except FileNotFoundError:
+            self.skipTest("store 不可用")
+
         with self.subTest("Orochi clone stages and commits all nine entities together"):
-            try:
-                catalog = rb.build_native_bundle_catalog(enemy_level=100)
-                tables = {
-                    "orochi": q.load_table(rbb.TABLE_LOGICALS["orochi"]),
-                    "general_boss": q.load_table(rb.GENERAL_BOSS),
-                    "general_boss_variable": q.load_table(
-                        "master/battle/boss/general_boss_variable.orderedmap"),
-                    "boss_level": q.load_table(
-                        "master/battle/boss/boss_level.orderedmap"),
-                    "general_enemy_watch": q.load_table(rb.ENEMY_WATCH),
-                    "__code_references__": {
-                        "hard": frozenset(), "soft": frozenset(),
-                        "degraded": False,
-                    },
-                }
-            except FileNotFoundError:
-                self.skipTest("store 不可用")
             family_id = next(
                 family_id for family_id, name in catalog.family_names.items()
                 if name == "八岐大蛇")
@@ -2253,6 +2271,7 @@ class TowerHpTargetCase(unittest.TestCase):
         self.assertIn("第10战", errors[0])
 
 
+@requires_store
 class TaskCDryRunCase(unittest.TestCase):
     """主编排路径回归：纯函数单测不能代替 30 层随机/重抽/克隆整链。"""
 
@@ -2809,6 +2828,7 @@ class HighMobilityCase(unittest.TestCase):
                 with self.assertRaises((ValueError, TypeError), msg=bad):
                     rb.load_high_threat_rules(path)
 
+    @requires_store
     def test_guardian_golem_family_matches_after_hp_pick_before_clone(self):
         prefixes = ("guardian_golem",)
         exact = frozenset({"lich_wind_expert_100"})
@@ -3183,6 +3203,7 @@ class GeneralBossElementResistanceCase(unittest.TestCase):
             self.assertIsNotNone(rb.general_boss_element_immunity_block({code: node}, code))
         self.assertIsNotNone(rb.general_boss_element_immunity_block({}, "missing"))
 
+    @requires_store
     def test_known_official_prototypes_are_blocked_before_cloning(self):
         gb = q.load_table(rb.GENERAL_BOSS)
         gv = q.load_table("master/battle/boss/general_boss_variable.orderedmap")
