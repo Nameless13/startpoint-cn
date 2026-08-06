@@ -69,9 +69,13 @@ scan_sizes() {
 scan_ip_matches() {
     local path hits
     while IFS= read -r -d '' path; do
-        # 这些文件使用私网地址验证拒绝逻辑；只豁免 IP 规则，不豁免其他检查。
+        # 只豁免 IP 规则，不豁免其他检查。名单必须随内容收缩：曾经因为这三个测试
+        # 文件长期挂着豁免，作者真实的 192.168.0.130 在里面躺了三周没人发现。
+        # 它们现在用 TEST-NET-1（192.0.2.x，本就不匹配 IP_RE），豁免已无作用，
+        # 留着只会让同一个地址再次悄悄回来。计划文档仍需豁免——它记录的正是
+        # test-hygiene.sh 里那两个 192.168.99.99 反例。
         case "$path" in
-            docs/superpowers/plans/2026-07-15-engineering-hardening.md|mod-tools/tests/test_remediation_baseline.py|mod-tools/tests/test_server_auth.py|src/tests/admin-auth.test.ts) continue ;;
+            docs/superpowers/plans/2026-07-15-engineering-hardening.md) continue ;;
         esac
         hits=$(grep -nE "$IP_RE" "$path" 2>/dev/null || true)
         hits=$(printf '%s\n' "$hits" | grep -vE "$IP_ALLOW" || true)
