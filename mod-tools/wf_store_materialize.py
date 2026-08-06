@@ -347,6 +347,9 @@ def _build_plan(
     )
 
 
+build_read_only_plan = _build_plan
+
+
 def _write_plan(plan: MaterializePlan, destination: Path, workers: int) -> None:
     roots = {
         root: destination / "production" / directory

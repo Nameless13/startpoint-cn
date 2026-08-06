@@ -178,6 +178,9 @@ def _merge_claimed_rows(
     return keys, rows
 
 
+merge_claimed_rows = _merge_claimed_rows
+
+
 def _merge_claimed_table_bytes(
     claim: character_pack.TableClaim,
     candidate_raw: bytes,
@@ -280,12 +283,15 @@ def _merge_claimed_table_bytes(
                 if key not in candidate:
                     raise ReleaseError(f"candidate lacks claimed JSON row: {logical}:{key}")
                 live[key] = candidate[key]
-            return _canonical(live)
+            return _ordered_json(live)
     except ReleaseError:
         raise
     except Exception as exc:
         raise ReleaseError(f"cannot rebase claimed table {logical}: {exc}") from exc
     raise ReleaseError(f"unsupported runtime rebase codec: {claim.codec_id}")
+
+
+merge_claimed_table_bytes = _merge_claimed_table_bytes
 
 
 def release_payload_from_records(
@@ -451,6 +457,14 @@ def close_prepared_runtime_release(
 def _canonical(value: object) -> bytes:
     return json.dumps(
         value, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+
+
+def _ordered_json(value: object) -> bytes:
+    """Canonical whitespace without reordering an existing object's keys."""
+    return json.dumps(
+        value, ensure_ascii=False, sort_keys=False, separators=(",", ":"),
         allow_nan=False,
     ).encode("utf-8")
 
