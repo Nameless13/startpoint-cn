@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Callable
 
 import wf_local_scoped_release as adapter
-import wf_release
+import wf_local_server_status as server_status
 import wf_scoped_release as scoped
 import wf_scoped_release_archive as archive
 import wf_scoped_release_transaction as transaction
@@ -20,6 +20,9 @@ import wf_scoped_release_validation as validation
 
 CONFIRMATION = "PUBLISH_LOCAL_CDN_1_4_312"
 LOCK_NAME = ".wf-local-1.4.312.lock"
+COMPATIBILITY_EDGE_DIGEST = (
+    "28131158c75402a7df59a2e0df4b882a451d406c6cbb9eb6476d6efcad9b3983"
+)
 ROOT_DIRS = {
     "common": "archive-common-diff",
     "medium": "archive-medium-diff",
@@ -79,7 +82,7 @@ def _directories(cdn_root: Path) -> tuple[Path, dict[str, Path]]:
 
 def _preflight(
     plan: scoped.EdgePlan, directories: dict[str, Path]
-) -> tuple[archive.ArchivePart, ...]:
+) -> tuple[tuple[archive.ArchivePart, ...], str]:
     if plan.spec != adapter.COMPATIBILITY_SPEC:
         raise LocalCdnPublishError(
             "local CDN publisher only accepts the fixed 1.4.311->1.4.312 edge"
@@ -91,21 +94,71 @@ def _preflight(
         parts = validation.parts((plan,))
     except (archive.ArchiveError, validation.TransactionError) as error:
         raise LocalCdnPublishError(str(error)) from error
-    for directory in directories.values():
-        existing_edge = tuple(
-            directory.glob("pinball-1.4.311-1.4.312-*.zip")
+    digest = _edge_digest(plan)
+    if digest != COMPATIBILITY_EDGE_DIGEST:
+        raise LocalCdnPublishError(
+            "local compatibility edge digest differs from the frozen real edge: "
+            f"{digest}"
         )
-        if existing_edge:
+    return parts, digest
+
+
+def _edge_archives(directories: dict[str, Path]) -> tuple[Path, ...]:
+    prefix = "pinball-1.4.311-1.4.312-"
+    return tuple(sorted(
+        (
+            candidate
+            for directory in directories.values()
+            for candidate in directory.iterdir()
+            if candidate.name.casefold().startswith(prefix)
+            and candidate.name.casefold().endswith(".zip")
+        ),
+        key=lambda path: str(path),
+    ))
+
+
+def _existing_edge_complete(
+    parts: tuple[archive.ArchivePart, ...],
+    targets: tuple[Path, ...],
+    directories: dict[str, Path],
+) -> bool:
+    found = _edge_archives(directories)
+    if not found:
+        return False
+    if len(found) != len(targets) or set(found) != set(targets):
+        raise LocalCdnPublishError(
+            "existing local edge is partial, mismatched, or in the wrong root: "
+            + ", ".join(str(path) for path in found)
+        )
+    for part, target in zip(parts, targets, strict=True):
+        raw, _identity = transaction._read_stable(
+            target, f"existing local CDN archive {part.name}"
+        )
+        if raw != part.blob:
             raise LocalCdnPublishError(
-                f"311->312 archive already exists: {existing_edge[0]}"
+                f"existing local CDN archive bytes mismatch: {part.name}"
             )
-        for part in parts:
-            candidate = directory / part.name
-            if candidate.exists() or candidate.is_symlink():
-                raise LocalCdnPublishError(
-                    f"archive name collision across CDN roots: {candidate}"
-                )
-    return parts
+        validation.validate_blob(part, raw)
+    return True
+
+
+def _require_stopped(probe: Callable[[], bool]) -> None:
+    try:
+        running = probe()
+    except LocalCdnPublishError:
+        raise
+    except Exception as error:
+        raise LocalCdnPublishError(
+            f"server stopped state cannot be verified: {error}"
+        ) from error
+    if running is True:
+        raise LocalCdnPublishError(
+            "CN server must be stopped before local CDN publication"
+        )
+    if running is not False:
+        raise LocalCdnPublishError(
+            "server stopped probe returned an invalid result"
+        )
 
 
 def _verify(
@@ -146,19 +199,11 @@ def publish_local_311_edge(
         raise LocalCdnPublishError(f"publication requires {CONFIRMATION}")
     try:
         root, directories = _directories(Path(cdn_root))
-        probe = server_probe or (
-            lambda: wf_release._server_running(root.parent.parent)
-        )
-        if probe():
-            raise LocalCdnPublishError(
-                "CN server must be stopped before local CDN publication"
-            )
+        parts, digest = _preflight(plan, directories)
     except LocalCdnPublishError:
         raise
     except (OSError, transaction.TransactionError) as error:
         raise LocalCdnPublishError(str(error)) from error
-    parts = _preflight(plan, directories)
-    digest = _edge_digest(plan)
     targets = tuple(directories[part.root] / part.name for part in parts)
     token = uuid.uuid4().hex
     pending = tuple(
@@ -175,6 +220,22 @@ def publish_local_311_edge(
             lock, bytes.fromhex(digest), lock_owned
         )
         transaction._fsync_directory(root)
+        if _existing_edge_complete(parts, targets, directories):
+            lock_cleanup = transaction._remove_owned(lock_owned)
+            if lock_cleanup:
+                raise LocalCdnPublishError(
+                    "existing local CDN edge is valid but lock cleanup failed: "
+                    + "; ".join(lock_cleanup)
+                )
+            transaction._fsync_directory(root)
+            return LocalCdnPublishResult(digest, targets)
+
+        probe = (
+            server_probe
+            if server_probe is not None
+            else lambda: server_status.server_running(root.parent.parent)
+        )
+        _require_stopped(probe)
         for part, private in zip(parts, pending, strict=True):
             transaction._write_exclusive(private, part.blob, private_owned)
         _sync(directories, parts)
@@ -193,6 +254,7 @@ def publish_local_311_edge(
         _verify(parts, targets, tuple(final_owned))
         callback("before_commit")
         _verify(parts, targets, tuple(final_owned))
+        _require_stopped(probe)
     except BaseException as error:
         cleanup = transaction._remove_owned(private_owned)
         cleanup.extend(transaction._remove_owned(final_owned))

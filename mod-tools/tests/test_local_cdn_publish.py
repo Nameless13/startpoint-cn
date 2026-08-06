@@ -2,11 +2,14 @@
 """Temporary-root tests for stopped-server multi-root local CDN publication."""
 from __future__ import annotations
 
+import errno
 import hashlib
+import socket
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -60,13 +63,31 @@ class LocalCdnPublishTest(InventoryCase):
         )
 
     def publish(self, **kwargs):
-        return publisher.publish_local_311_edge(
-            self.edge,
-            self.cdn,
-            confirmation=publisher.CONFIRMATION,
-            server_probe=lambda: False,
-            **kwargs,
-        )
+        kwargs.setdefault("server_probe", lambda: False)
+        with mock.patch.object(
+            publisher,
+            "COMPATIBILITY_EDGE_DIGEST",
+            publisher._edge_digest(self.edge),
+        ):
+            return publisher.publish_local_311_edge(
+                self.edge,
+                self.cdn,
+                confirmation=publisher.CONFIRMATION,
+                **kwargs,
+            )
+
+    def test_fixture_edge_is_rejected_without_the_frozen_real_digest(self):
+        with self.assertRaisesRegex(
+            publisher.LocalCdnPublishError, "digest"
+        ):
+            publisher.publish_local_311_edge(
+                self.edge,
+                self.cdn,
+                confirmation=publisher.CONFIRMATION,
+                server_probe=lambda: False,
+            )
+        self.assertEqual([], list(self.cdn.rglob("*.zip")))
+        self.assertFalse((self.cdn / publisher.LOCK_NAME).exists())
 
     def test_global_sequences_are_not_renumbered_and_parts_use_declared_roots(self):
         result = self.publish()
@@ -80,6 +101,108 @@ class LocalCdnPublishTest(InventoryCase):
             self.assertEqual(part.blob, path.read_bytes())
         self.assertFalse((self.cdn / publisher.LOCK_NAME).exists())
         self.assertEqual([], list(self.cdn.rglob("*.pending")))
+
+    def test_stopped_probe_runs_under_lock_before_write_and_before_commit(self):
+        calls = 0
+
+        def stopped() -> bool:
+            nonlocal calls
+            calls += 1
+            self.assertTrue((self.cdn / publisher.LOCK_NAME).is_file())
+            self.assertEqual(
+                calls > 1,
+                bool(list(self.cdn.rglob("*.zip"))),
+            )
+            return False
+
+        self.publish(server_probe=stopped)
+        self.assertEqual(2, calls)
+
+    def test_server_start_before_commit_rolls_back_archives(self):
+        results = iter((False, True))
+        with self.assertRaisesRegex(
+            publisher.LocalCdnPublishError, "stopped"
+        ):
+            self.publish(server_probe=lambda: next(results))
+        self.assertEqual([], list(self.cdn.rglob("*.zip")))
+        self.assertEqual([], list(self.cdn.rglob("*.pending")))
+        self.assertFalse((self.cdn / publisher.LOCK_NAME).exists())
+
+    def test_existing_lock_is_refused_before_the_stopped_probe(self):
+        lock = self.cdn / publisher.LOCK_NAME
+        lock.write_bytes(b"foreign")
+        probed = False
+
+        def stopped() -> bool:
+            nonlocal probed
+            probed = True
+            return False
+
+        with self.assertRaises(publisher.LocalCdnPublishError):
+            self.publish(server_probe=stopped)
+        self.assertFalse(probed)
+        self.assertEqual(b"foreign", lock.read_bytes())
+
+    def test_default_probe_only_accepts_explicit_connection_refusal(self):
+        refused = ConnectionRefusedError(errno.ECONNREFUSED, "refused")
+        with mock.patch.object(
+            publisher.server_status.socket,
+            "create_connection",
+            side_effect=refused,
+        ) as connect:
+            published = self.publish(server_probe=None)
+        self.assertEqual(2, connect.call_count)
+        for path in published.paths:
+            path.unlink()
+
+        timeout_edge = self.plan()
+        with mock.patch.object(
+            publisher,
+            "COMPATIBILITY_EDGE_DIGEST",
+            publisher._edge_digest(timeout_edge),
+        ), mock.patch.object(
+            publisher.server_status.socket,
+            "create_connection",
+            side_effect=socket.timeout("timed out"),
+        ):
+            with self.assertRaisesRegex(
+                publisher.LocalCdnPublishError, "verify|probe|timed out"
+            ):
+                publisher.publish_local_311_edge(
+                    timeout_edge,
+                    self.cdn,
+                    confirmation=publisher.CONFIRMATION,
+                )
+        self.assertFalse((self.cdn / publisher.LOCK_NAME).exists())
+
+    def test_identical_retry_is_success_but_partial_or_mismatch_is_refused(self):
+        first = self.publish()
+        second = self.publish(
+            server_probe=lambda: (_ for _ in ()).throw(
+                AssertionError("idempotent retry must not require a stopped server")
+            )
+        )
+        self.assertEqual(first, second)
+
+        first.paths[0].write_bytes(b"mismatch")
+        with self.assertRaisesRegex(
+            publisher.LocalCdnPublishError, "mismatch|partial|canonical"
+        ):
+            self.publish()
+        self.assertEqual(b"mismatch", first.paths[0].read_bytes())
+        self.assertFalse((self.cdn / publisher.LOCK_NAME).exists())
+
+    def test_partial_existing_edge_is_refused_without_overwrite(self):
+        part = self.edge.parts[0]
+        target = self.directories[part.root] / part.name
+        target.write_bytes(part.blob)
+        with self.assertRaisesRegex(
+            publisher.LocalCdnPublishError, "partial|mismatch"
+        ):
+            self.publish()
+        self.assertEqual(part.blob, target.read_bytes())
+        self.assertEqual([target], list(self.cdn.rglob("*.zip")))
+        self.assertFalse((self.cdn / publisher.LOCK_NAME).exists())
 
     def test_failure_after_first_visible_archive_rolls_back_every_root(self):
         count = 0
@@ -103,7 +226,8 @@ class LocalCdnPublishTest(InventoryCase):
         foreign = self.directories["medium"] / self.edge.parts[0].name
         foreign.write_bytes(b"foreign")
         with self.assertRaisesRegex(
-            publisher.LocalCdnPublishError, "already exists|collision"
+            publisher.LocalCdnPublishError,
+            "already exists|collision|partial|wrong root",
         ):
             self.publish()
         self.assertEqual(b"foreign", foreign.read_bytes())
@@ -129,6 +253,38 @@ class LocalCdnPublishTest(InventoryCase):
         target.unlink()
         (self.cdn / publisher.LOCK_NAME).unlink()
 
+    def test_foreign_lock_swap_during_cleanup_is_recoverable_and_retained(self):
+        lock = self.cdn / publisher.LOCK_NAME
+        foreign = b"foreign lock replacement"
+        real_rename = publisher.transaction.os.rename
+        injected = False
+
+        def replace_then_rename(source, destination):
+            nonlocal injected
+            if Path(source) == lock and not injected:
+                injected = True
+                lock.unlink()
+                lock.write_bytes(foreign)
+            return real_rename(source, destination)
+
+        with mock.patch.object(
+            publisher.transaction.os,
+            "rename",
+            side_effect=replace_then_rename,
+        ):
+            with self.assertRaisesRegex(
+                publisher.LocalCdnPublishError, "lock|quarantine|identity"
+            ):
+                self.publish()
+
+        self.assertTrue(injected)
+        self.assertEqual(foreign, lock.read_bytes())
+        quarantined = tuple(
+            self.cdn.glob(f".{publisher.LOCK_NAME}.wf-quarantine-*")
+        )
+        self.assertEqual(1, len(quarantined))
+        self.assertEqual(foreign, quarantined[0].read_bytes())
+
     def test_confirmation_and_stopped_server_are_mandatory(self):
         with self.assertRaisesRegex(publisher.LocalCdnPublishError, "requires"):
             publisher.publish_local_311_edge(
@@ -138,12 +294,7 @@ class LocalCdnPublishTest(InventoryCase):
                 server_probe=lambda: False,
             )
         with self.assertRaisesRegex(publisher.LocalCdnPublishError, "stopped"):
-            publisher.publish_local_311_edge(
-                self.edge,
-                self.cdn,
-                confirmation=publisher.CONFIRMATION,
-                server_probe=lambda: True,
-            )
+            self.publish(server_probe=lambda: True)
         self.assertEqual([], list(self.cdn.rglob("*.zip")))
 
 
