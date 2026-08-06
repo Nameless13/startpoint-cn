@@ -173,6 +173,66 @@ class ScopedReleaseSafetyTest(InventoryCase):
         with self.assertRaisesRegex(scoped.ScopedReleaseError, "manifest edge"):
             scoped.render_manifest(json.dumps(duplicate_existing).encode(), (primary,))
 
+    def test_manifest_rejects_scoped_edge_inside_existing_aggregate_chain(self):
+        seed = self.small_plan()
+        spec = replace(
+            seed.spec,
+            from_version="1.4.91",
+            to_version="1.4.92",
+            patch_id="aggregate-inner-duplicate",
+        )
+        inner = scoped.EdgePlan(
+            spec,
+            seed.entries,
+            tuple(
+                replace(
+                    part,
+                    name=(
+                        f"pinball-{spec.from_version}-{spec.to_version}-"
+                        f"{part.sequence}-{spec.tag}.zip"
+                    ),
+                )
+                for part in seed.parts
+            ),
+        )
+        aggregate = {
+            "cdn_version": "1.4.54",
+            "patches": [{
+                "id": "historical-aggregate",
+                "type": "patch",
+                "enabled": True,
+                "depends_on": "1.4.90",
+                "version": "1.4.93",
+                "chain": [
+                    "pinball-1.4.90-1.4.91-1-old.zip",
+                    "pinball-1.4.91-1.4.92-1-old.zip",
+                    "pinball-1.4.92-1.4.93-1-old.zip",
+                ],
+            }],
+        }
+        with self.assertRaisesRegex(
+            scoped.ScopedReleaseError,
+            r"duplicate (?:manifest|scoped) edge.*1\.4\.91->1\.4\.92",
+        ):
+            scoped.render_manifest(json.dumps(aggregate).encode(), (inner,))
+
+        aggregate["patches"].append({
+            "id": "overlapping-aggregate",
+            "type": "patch",
+            "enabled": True,
+            "depends_on": "1.4.80",
+            "version": "1.4.92",
+            "chain": [
+                "pinball-1.4.80-1.4.91-1-other.zip",
+                "pinball-1.4.91-1.4.92-1-other.zip",
+            ],
+        })
+        with self.assertRaisesRegex(
+            scoped.ScopedReleaseError,
+            r"duplicate manifest edge.*1\.4\.91->1\.4\.92",
+        ):
+            scoped.render_manifest(json.dumps(aggregate).encode(), (seed,))
+
     def test_existing_lock_is_preserved_without_archive_or_manifest_writes(self):
         plan = self.small_plan()
         with tempfile.TemporaryDirectory() as td:

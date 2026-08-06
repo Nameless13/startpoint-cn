@@ -246,6 +246,20 @@ class ScopedReleaseTest(InventoryCase):
             [[part.name for part in plan.parts] for plan in plans],
             [item["chain"] for item in value["patches"]],
         )
+        self.assertEqual(
+            [
+                [
+                    {
+                        "name": part.name,
+                        "size": len(part.blob),
+                        "sha256": hashlib.sha256(part.blob).hexdigest(),
+                    }
+                    for part in plan.parts
+                ]
+                for plan in plans
+            ],
+            [item["archive_integrity"] for item in value["patches"]],
+        )
 
     def test_stage_is_exact_and_repository_publish_is_manifest_last(self):
         plans = self.two_small_plans()

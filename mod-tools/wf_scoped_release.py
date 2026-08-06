@@ -31,6 +31,10 @@ VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
 TOKEN_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+PATCH_ARCHIVE_RE = re.compile(
+    r"^pinball-(\d+\.\d+\.\d+)-(\d+\.\d+\.\d+)-([1-9]\d*)-([^/\\]+)\.zip$"
+)
+MAX_ARCHIVE_SEQUENCE = (1 << 53) - 1
 
 
 class ScopedReleaseError(RuntimeError):
@@ -271,8 +275,73 @@ def _patch_entry(plan: EdgePlan) -> dict[str, object]:
         "depends_on": plan.spec.from_version,
         "enabled": True,
         "chain": expected_names,
+        "archive_integrity": [
+            {
+                "name": part.name,
+                "size": len(part.blob),
+                "sha256": hashlib.sha256(part.blob).hexdigest(),
+            }
+            for part in plan.parts
+        ],
         "created_at": plan.spec.created_at,
     }
+
+
+def _enabled_manifest_chain_edges(
+    item: dict[str, object],
+    patch_id: str,
+    depends_on: str,
+    version: str,
+) -> tuple[tuple[str, str], ...]:
+    chain = item.get("chain")
+    if not isinstance(chain, list) or not chain:
+        raise ScopedReleaseError(f"manifest patch {patch_id} has invalid chain")
+    names: set[str] = set()
+    edge_order: list[tuple[str, str]] = []
+    sequences: dict[tuple[str, str], list[int]] = {}
+    for raw_name in chain:
+        if not isinstance(raw_name, str) or raw_name in names:
+            raise ScopedReleaseError(
+                f"manifest patch {patch_id} has invalid archive names"
+            )
+        match = PATCH_ARCHIVE_RE.fullmatch(raw_name)
+        if match is None:
+            raise ScopedReleaseError(
+                f"manifest patch {patch_id} has invalid archive name: {raw_name!r}"
+            )
+        archive_from, archive_to = match.group(1), match.group(2)
+        sequence = int(match.group(3))
+        if (
+            sequence > MAX_ARCHIVE_SEQUENCE
+            or _version(archive_to) <= _version(archive_from)
+        ):
+            raise ScopedReleaseError(
+                f"manifest patch {patch_id} has invalid archive edge or sequence"
+            )
+        names.add(raw_name)
+        edge = archive_from, archive_to
+        if edge not in sequences:
+            edge_order.append(edge)
+            sequences[edge] = []
+        sequences[edge].append(sequence)
+    for edge, values in sequences.items():
+        if sorted(values) != list(range(1, len(values) + 1)):
+            raise ScopedReleaseError(
+                f"manifest patch {patch_id} archive sequence is not contiguous: "
+                f"{edge[0]}->{edge[1]}"
+            )
+    if (
+        edge_order[0][0] != depends_on
+        or edge_order[-1][1] != version
+        or any(
+            edge_order[index - 1][1] != edge_order[index][0]
+            for index in range(1, len(edge_order))
+        )
+    ):
+        raise ScopedReleaseError(
+            f"manifest patch {patch_id} chain is disconnected from its edge"
+        )
+    return tuple(edge_order)
 
 
 def render_manifest(original: bytes, plans: Iterable[EdgePlan]) -> bytes:
@@ -282,7 +351,7 @@ def render_manifest(original: bytes, plans: Iterable[EdgePlan]) -> bytes:
         raise ScopedReleaseError("at least one scoped edge is required")
     existing = cast(list[object], value["patches"])
     existing_ids: set[str] = set()
-    existing_edges: set[tuple[str, str]] = set()
+    existing_edge_owners: dict[tuple[str, str], str] = {}
     for index, item in enumerate(existing):
         if not isinstance(item, dict):
             raise ScopedReleaseError(f"manifest patch {index} must be an object")
@@ -300,13 +369,23 @@ def render_manifest(original: bytes, plans: Iterable[EdgePlan]) -> bytes:
             or _version(version) <= _version(depends_on)
         ):
             raise ScopedReleaseError(f"manifest patch {patch_id} has invalid edge")
-        edge = depends_on, version
-        if edge in existing_edges:
-            raise ScopedReleaseError(
-                f"duplicate manifest edge: {depends_on}->{version}"
+        outer_edge = depends_on, version
+        item_edges = {outer_edge}
+        if item.get("enabled") is True:
+            if item.get("type") != "patch":
+                raise ScopedReleaseError(f"manifest patch {patch_id} has invalid type")
+            item_edges.update(
+                _enabled_manifest_chain_edges(item, patch_id, depends_on, version)
             )
+        for edge in item_edges:
+            owner = existing_edge_owners.get(edge)
+            if owner is not None:
+                raise ScopedReleaseError(
+                    f"duplicate manifest edge: {edge[0]}->{edge[1]} "
+                    f"({owner}, {patch_id})"
+                )
+            existing_edge_owners[edge] = patch_id
         existing_ids.add(patch_id)
-        existing_edges.add(edge)
     seen_ids: set[str] = set()
     seen_edges: set[tuple[str, str]] = set()
     additions: list[dict[str, object]] = []
@@ -314,7 +393,7 @@ def render_manifest(original: bytes, plans: Iterable[EdgePlan]) -> bytes:
         edge = (plan.spec.from_version, plan.spec.to_version)
         if plan.spec.patch_id in existing_ids or plan.spec.patch_id in seen_ids:
             raise ScopedReleaseError(f"duplicate manifest patch id: {plan.spec.patch_id}")
-        if edge in existing_edges or edge in seen_edges:
+        if edge in existing_edge_owners or edge in seen_edges:
             raise ScopedReleaseError(f"duplicate scoped edge: {edge[0]}->{edge[1]}")
         seen_ids.add(plan.spec.patch_id)
         seen_edges.add(edge)
