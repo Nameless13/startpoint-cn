@@ -379,14 +379,10 @@ class LocalReleaseReceiptTest(unittest.TestCase):
             manifest_preimage=fx.preimage, manifest_output=fx.manifest,
             server_files=fx.server_files,
         )
-        blobs = fx.archive_blobs()
-        self.assertNotEqual(
-            blobs, ReceiptFixture(compresslevel=9).archive_blobs()
-        )
 
         report = receipt.verify_receipt(
             fx.context, fx.policy, raw,
-            archive_blobs=blobs, manifest_raw=fx.manifest,
+            archive_blobs=fx.archive_blobs(), manifest_raw=fx.manifest,
             server_files=fx.server_files,
         )
 
@@ -395,6 +391,16 @@ class LocalReleaseReceiptTest(unittest.TestCase):
             report.path_count_per_edge,
             report.claim_count_per_edge,
         ))
+        # Asserting that two compression levels produce different bytes would
+        # itself be zlib-dependent -- small payloads come out identical at every
+        # level on some builds, which is exactly how this test first failed on
+        # CI.  Assert the property directly instead: the verifier compresses
+        # nothing, so it has no opinion to disagree with.
+        source = (MOD_TOOLS / "wf_local_release_verify.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn("compresslevel", source)
+        self.assertNotIn("writestr", source)
 
     def test_verifier_rejects_bytes_hidden_outside_the_declared_members(self):
         fx = ReceiptFixture()
