@@ -1,12 +1,13 @@
 import { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { generateDataHeaders } from "../../utils";
-import { readdirSync, statSync, existsSync } from "fs";
+import { existsSync, lstatSync, readdirSync, statSync } from "fs";
 import path from "path";
 import { resolveCnCdnDir } from "../../lib/cn-character-release";
 import type { DiffGroup } from "../../lib/cn-character-release";
 import {
     findReleasePath,
     getCnReleaseGraphSnapshot,
+    MAX_ARCHIVE_SEQ,
 } from "../../lib/cn-asset-graph";
 import type { ReleaseGraphSnapshot, ReleasePathResult } from "../../lib/cn-asset-graph";
 import { computeAssetTarget } from "../../lib/version";
@@ -38,19 +39,63 @@ function getVersionInfo(baseUrl: string) {
     };
 }
 
-function buildArchiveList(baseUrl: string, cdnDir: string, subdir: string): { location: string; size: number; sha256: string }[] {
-    const dir = path.join(cdnDir, subdir);
+const FULL_ARCHIVE_RE = /^pinball-1\.4\.0-([1-9]\d*)-(.+)\.zip$/;
+const FULL_ARCHIVE_SUBDIRS = new Set([
+    "archive-common-full",
+    "archive-medium-full",
+    "archive-android-full",
+]);
+
+export function buildArchiveList(baseUrl: string, cdnDir: string, subdir: string): { location: string; size: number; sha256: string }[] {
+    if (!FULL_ARCHIVE_SUBDIRS.has(subdir)) {
+        console.error(`[CDN] rejecting full archive subdirectory: ${subdir}`);
+        return [];
+    }
+    const resolvedCdnDir = path.resolve(cdnDir);
+    const dir = path.resolve(resolvedCdnDir, subdir);
+    if (path.dirname(dir) !== resolvedCdnDir) {
+        console.error(`[CDN] rejecting full archive path outside CDN root: ${dir}`);
+        return [];
+    }
     try {
+        const directoryStats = lstatSync(dir);
+        if (directoryStats.isSymbolicLink() || !directoryStats.isDirectory()) {
+            console.error(`[CDN] rejecting unsafe full archive directory: ${dir}`);
+            return [];
+        }
         return readdirSync(dir)
-            .filter(f => f.endsWith(".zip"))
-            .map(f => {
-                const stats = statSync(path.join(dir, f));
+            .filter(name => name.endsWith(".zip"))
+            .flatMap(name => {
+                const match = FULL_ARCHIVE_RE.exec(name);
+                if (match === null) {
+                    console.error(`[CDN] skipping noncanonical full archive: ${path.join(dir, name)}`);
+                    return [];
+                }
+                const seq = Number(match[1]);
+                if (!Number.isSafeInteger(seq) || seq < 1 || seq > MAX_ARCHIVE_SEQ) {
+                    console.error(
+                        `[CDN] skipping full archive sequence outside 1..${MAX_ARCHIVE_SEQ}: ${path.join(dir, name)}`,
+                    );
+                    return [];
+                }
+                const archivePath = path.join(dir, name);
+                const stats = lstatSync(archivePath);
+                if (stats.isSymbolicLink() || !stats.isFile()) {
+                    console.error(`[CDN] skipping unsafe full archive path: ${archivePath}`);
+                    return [];
+                }
                 return {
-                    location: `${baseUrl}/${subdir}/${f}`,
-                    size: stats.size,
-                    sha256: ""
+                    name,
+                    seq,
+                    archive: {
+                        location: `${baseUrl}/${subdir}/${name}`,
+                        size: stats.size,
+                        sha256: ""
+                    },
                 };
-            });
+            })
+            .sort((left, right) => left.seq - right.seq || left.name.localeCompare(right.name))
+            .map(({ archive }) => archive);
     } catch (e) {
         console.error(`[CDN] buildArchiveList failed for ${subdir}:`, (e as Error).message);
         return [];

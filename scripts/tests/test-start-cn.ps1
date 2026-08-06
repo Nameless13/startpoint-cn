@@ -157,6 +157,49 @@ try {
     $environmentRoot = Join-Path $testRoot 'missing-env'
     $null = New-Item -ItemType Directory -Path $environmentRoot
     Assert-Throws { Assert-Environment -RepoRoot $environmentRoot } 'missing .env has an actionable error' '.env is missing'
+
+    $launcherText = Get-Content -LiteralPath $launcher -Raw -Encoding utf8
+    $lockCheckCount = [regex]::Matches(
+        $launcherText,
+        '(?m)^\s+Assert-NoLocalCdnPublishLock -RepoRoot \$repoRoot\s*$'
+    ).Count
+    Assert-True ($lockCheckCount -ge 2) 'launcher checks the publication lock before preflight and immediately before spawn'
+
+    $lockRoot = Join-Path $testRoot 'lock-repo'
+    $lockEnv = Join-Path $lockRoot '.env'
+    Write-TextFile -Path $lockEnv -Content '# default CDN_DIR'
+    $hadCdnDir = Test-Path Env:CDN_DIR
+    $previousCdnDir = $env:CDN_DIR
+    try {
+        Remove-Item Env:CDN_DIR -ErrorAction SilentlyContinue
+        $defaultLock = Resolve-LocalCdnPublishLock -RepoRoot $lockRoot
+        $expectedDefaultLock = [IO.Path]::GetFullPath((Join-Path $lockRoot '.cdn\cn\.wf-local-1.4.312.lock'))
+        Assert-True ($defaultLock -eq $expectedDefaultLock) 'default CDN_DIR resolves the shared publication lock'
+
+        Write-TextFile -Path $lockEnv -Content 'CDN_DIR="custom-cdn"'
+        $customLock = Resolve-LocalCdnPublishLock -RepoRoot $lockRoot
+        $expectedCustomLock = [IO.Path]::GetFullPath((Join-Path $lockRoot 'custom-cdn\cn\.wf-local-1.4.312.lock'))
+        Assert-True ($customLock -eq $expectedCustomLock) '.env CDN_DIR resolves the shared publication lock'
+
+        $absoluteCdn = Join-Path $testRoot 'environment-cdn'
+        $env:CDN_DIR = $absoluteCdn
+        $environmentLock = Resolve-LocalCdnPublishLock -RepoRoot $lockRoot
+        $expectedEnvironmentLock = [IO.Path]::GetFullPath((Join-Path $absoluteCdn 'cn\.wf-local-1.4.312.lock'))
+        Assert-True ($environmentLock -eq $expectedEnvironmentLock) 'process CDN_DIR overrides the .env publication lock root'
+
+        Remove-Item Env:CDN_DIR -ErrorAction SilentlyContinue
+        $null = New-Item -ItemType Directory -Path (Split-Path -Parent $customLock) -Force
+        Write-TextFile -Path $customLock -Content 'publishing'
+        Assert-Throws {
+            Assert-NoLocalCdnPublishLock -RepoRoot $lockRoot
+        } 'active local CDN publication lock blocks launcher startup' 'publication lock'
+    } finally {
+        if ($hadCdnDir) {
+            $env:CDN_DIR = $previousCdnDir
+        } else {
+            Remove-Item Env:CDN_DIR -ErrorAction SilentlyContinue
+        }
+    }
 } finally {
     foreach ($process in $processes) {
         if ($process -and -not $process.HasExited) {

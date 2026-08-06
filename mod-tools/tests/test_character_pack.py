@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import ctypes
 import dataclasses
 import hashlib
 import importlib
@@ -1966,6 +1967,46 @@ class TestOwnedFilesystemPlatformContract(unittest.TestCase):
         self.assertFalse(
             self.pack._OwnedFilesystem.POSIX_EXACT_NAMED_STAGING_SUPPORTED
         )
+
+    @unittest.skipUnless(os.name == "nt", "Windows owned-handle access contract")
+    def test_owned_root_never_requests_delete_child(self):
+        # Modify grants DELETE on a child but not FILE_DELETE_CHILD on its
+        # parent; that bit comes with Full Control.  Requesting it made
+        # open_root fail with ERROR_ACCESS_DENIED on any ordinary repository
+        # directory, which took the whole publication transaction down --
+        # including its own rollback -- while every test passed because the
+        # temp directory the tests use does grant Full Control.
+        api = self.pack._WIN_OWNED_API
+        self.assertIsNotNone(api)
+        access = api.root_access()
+        self.assertFalse(access & api.FILE_DELETE_CHILD)
+        for required in (
+            api.FILE_LIST_DIRECTORY,
+            api.FILE_ADD_FILE,
+            api.FILE_ADD_SUBDIRECTORY,
+            api.FILE_READ_ATTRIBUTES,
+            api.FILE_WRITE_ATTRIBUTES,
+            api.FILE_TRAVERSE,
+            api.SYNCHRONIZE,
+        ):
+            self.assertTrue(access & required)
+
+    @unittest.skipUnless(os.name == "nt", "Windows owned-handle access contract")
+    def test_owned_root_open_passes_exactly_the_declared_access(self):
+        api = self.pack._WIN_OWNED_API
+        self.assertIsNotNone(api)
+        recorded: list[int] = []
+
+        def record(path, access, share, security, disposition, flags, template):
+            recorded.append(access)
+            return ctypes.c_void_p(-1).value
+
+        with tempfile.TemporaryDirectory() as td:
+            with mock.patch.object(api, "CreateFileW", side_effect=record):
+                with self.assertRaises(OSError):
+                    api.open_root(Path(td))
+
+        self.assertEqual([api.root_access()], recorded)
 
     def test_posix_cleanup_closes_authority_and_never_deletes_a_name(self):
         owned = mock.Mock()

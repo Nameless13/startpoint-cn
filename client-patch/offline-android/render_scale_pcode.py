@@ -359,6 +359,8 @@ RENDER_SITES = (
     ),
 )
 
+RENDER_SITE_IDS = tuple(site.site_id for site in RENDER_SITES)
+
 
 def canonical_pcode(text: str) -> str:
     """Normalize only FFDec offset-label renumbering, preserving topology."""
@@ -947,3 +949,97 @@ def verify_render_scale(
         after_hashes=MappingProxyType(after),
         verified=True,
     )
+
+
+def site_fingerprints(
+    swf: Path,
+    *,
+    ffdec: Path,
+    java: Path,
+    profile_dir: Path,
+    work_dir: Path,
+    sites: Sequence[RenderSite] = RENDER_SITES,
+    runner=_subprocess_runner,
+    timeout: int = 240,
+) -> dict[str, dict[str, str]]:
+    """Verify every render site in ``swf`` and fingerprint each method body.
+
+    Returns ``{site_id: {"pcode_sha256": ..., "abc_sha256": ...}}``.  Unlike
+    ``verify_render_scale`` this needs no build-time lock, so a downstream
+    repackager that starts from an already-patched base APK can fingerprint it
+    before and after its own rewrite and prove nothing moved.  The P-code digest
+    is canonical and therefore blind to FFDec's offset-label renumbering; the
+    raw ABC digest is not, so the pair distinguishes a harmless reserialization
+    from an actual code change.  ``site.verify`` still runs on every site, so a
+    base that never carried a fix is rejected instead of silently fingerprinted.
+    """
+    ordered = tuple(sites)
+    if not ordered:
+        raise RenderScaleError("render fingerprint requires at least one site")
+    target = Path(swf).resolve()
+    ffdec_path = Path(ffdec).resolve()
+    java_path = Path(java).resolve()
+    work = Path(work_dir).resolve()
+    profile = Path(profile_dir).resolve()
+    if not target.is_file() or not ffdec_path.is_file() or not java_path.is_file():
+        raise RenderScaleError("render fingerprint input or tool is missing")
+    if work.exists() and not work.is_dir():
+        raise RenderScaleError("render fingerprint work path is not a directory")
+    if profile.exists() and not profile.is_dir():
+        raise RenderScaleError("render fingerprint profile path is not a directory")
+    work.mkdir(parents=True, exist_ok=True)
+    profile.mkdir(parents=True, exist_ok=True)
+    index = ABC_METHODS.index_swf_methods(target)
+    refs = {site.site_id: index.require_ref(site.method_name) for site in ordered}
+    fingerprints: dict[str, dict[str, str]] = {}
+    with tempfile.TemporaryDirectory(prefix=".render-fingerprint-", dir=work) as raw:
+        export_root = Path(raw) / "fingerprint-export"
+        _export_classes(
+            target,
+            export_root,
+            [site.class_name for site in ordered],
+            ffdec=ffdec_path,
+            java=java_path,
+            profile_dir=profile,
+            cwd=Path(raw),
+            runner=runner,
+            timeout=timeout,
+        )
+        for site in ordered:
+            block = _read_exported_method(export_root, site)
+            site.verify(block)
+            fingerprints[site.site_id] = {
+                "pcode_sha256": _sha256_pcode(block),
+                "abc_sha256": _sha256_abc(refs[site.site_id].code),
+            }
+    return fingerprints
+
+
+def assert_fingerprints_unchanged(
+    before: Mapping[str, Mapping[str, str]],
+    after: Mapping[str, Mapping[str, str]],
+    *,
+    site_ids: Sequence[str] = RENDER_SITE_IDS,
+) -> None:
+    """Fail unless both fingerprints cover ``site_ids`` with identical digests."""
+    expected = set(site_ids)
+    for label, value in (("before", before), ("after", after)):
+        missing = sorted(expected - set(value))
+        if missing:
+            raise RenderScaleError(
+                f"{label} render fingerprint is missing sites: {missing}"
+            )
+        extra = sorted(set(value) - expected)
+        if extra:
+            raise RenderScaleError(
+                f"{label} render fingerprint has unexpected sites: {extra}"
+            )
+    for site_id in site_ids:
+        for field in ("pcode_sha256", "abc_sha256"):
+            original = before[site_id].get(field)
+            current = after[site_id].get(field)
+            if original != current:
+                raise RenderScaleError(
+                    f"render site {site_id} changed: {field} "
+                    f"{original} -> {current}"
+                )

@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "id": "abyss-weapons-v3.3",
+  "status": "pending",
+  "source": "mod-tools/wf_rogue_rewards.py",
+  "source_revision": "3e5ae0d532ce5179f5e8254afb900e5b61c55869",
+  "semantic_sha256": "fe00411013e578151c44e81d93c9d2faf81f1d9bfa59a399ed34150596d5f07d",
+  "artifact": null
+}

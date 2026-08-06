@@ -440,6 +440,17 @@ class FakeServices:
         raise AssertionError("offline release must never publish live data")
 
 
+@unittest.skipUnless(os.name == "nt", "Windows path conversion regression")
+class OfflineReleaseWindowsPathTests(unittest.TestCase):
+    def test_extended_path_converts_unc_share_to_extended_unc_form(self) -> None:
+        self.assertEqual(
+            module._windows_extended_path(
+                Path(r"\\server\share\release\device-preparation.json")
+            ),
+            r"\\?\UNC\server\share\release\device-preparation.json",
+        )
+
+
 class OfflineReleaseTestCase(unittest.TestCase):
     def setUp(self) -> None:
         self.test_temp_parent = module.DEFAULT_OUTPUT_ROOT / ".unit-test-temp"
@@ -1481,6 +1492,37 @@ class OfflineReleaseTestCase(unittest.TestCase):
         self.assertFalse(sidecar.exists())
         self.assertTrue(guard.is_file())
         self.assertEqual(list(parent.glob("*.tmp-*")), [])
+
+    @unittest.skipUnless(os.name == "nt", "Windows long-path publication regression")
+    def test_sidecar_atomic_publish_supports_real_staging_path_over_max_path(self) -> None:
+        sidecar_name = "prepared.json"
+        staging_name = f".{sidecar_name}.tmp-{'0' * 32}"
+        staging_path_length = 267
+        parent_length = staging_path_length - len(staging_name) - 1
+        padding_length = parent_length - len(str(self.root)) - 1
+        self.assertGreater(padding_length, 0)
+        parent = self.root / ("x" * padding_length)
+        parent.mkdir()
+        sidecar = parent / sidecar_name
+        staging = sidecar.with_name(staging_name)
+        self.assertLess(len(str(sidecar)), 260)
+        self.assertEqual(len(str(staging)), staging_path_length)
+        payload = b'{"canonical":true}\n'
+        reserved = module._reserve_file(sidecar)
+        reserved.destructive_started = True
+
+        try:
+            with mock.patch.object(
+                module.uuid,
+                "uuid4",
+                return_value=module.uuid.UUID(int=0),
+            ):
+                module._finish_reserved_file(reserved, payload)
+        finally:
+            module._abort_reserved_file(reserved)
+
+        self.assertEqual(sidecar.read_bytes(), payload)
+        self.assertFalse(reserved.guard_path.exists())
 
     def test_prepared_probe_loader_rejects_reparse_parent_instead_of_following_it(self) -> None:
         import subprocess

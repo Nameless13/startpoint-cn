@@ -1,6 +1,9 @@
+import copy
 import json
 import re
+import subprocess
 import sys
+import tempfile
 import unittest
 import zipfile
 import zlib
@@ -13,7 +16,6 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "mod-tools"))
 
 import build_abyss_weapon_balance_patch as builder  # noqa: E402
-import wf_mod_tool as core  # noqa: E402
 import wf_rogue_rewards as rewards  # noqa: E402
 
 
@@ -21,6 +23,9 @@ MANIFEST = ROOT / "assets" / "asset-patch" / "manifest.json"
 ARCHIVE_NAME = "pinball-1.4.105-1.4.106-1-abyssbalance0718.zip"
 ARCHIVE = ROOT / "assets" / "asset-patch" / "active" / ARCHIVE_NAME
 ARCHIVE_SHA256 = "e9ec4451ac5b3101f060c74278fd8901b7c207c57f19e313084ff9f9639f7272"
+CURRENT_STATUS = (
+    ROOT / "mod-tools" / "release-contracts" / "abyss_weapon_current.json"
+)
 EDGE_RE = re.compile(r"^pinball-(1\.4\.\d+)-(1\.4\.\d+)-\d+-.+\.zip$")
 
 
@@ -35,6 +40,17 @@ class AbyssWeaponReleasePatchTests(unittest.TestCase):
             cls.member_bytes = {name: archive.read(name) for name in cls.members}
             cls.infos = archive.infolist()
             cls.archive_comment = archive.comment
+
+    def historical_inputs(self) -> tuple[bytes, dict[str, object], bytes]:
+        soul_bytes = self.member_bytes[builder.SOUL_MEMBER]
+        official_soul = builder.parse_table(
+            builder.strip_custom_soul_rows(soul_bytes), builder.SOUL_LOGICAL
+        )
+        return (
+            builder.checked_bridge(builder.BRIDGE_ARCHIVE),
+            official_soul,
+            self.member_bytes[builder.WAB_MEMBER],
+        )
 
     def test_enabled_tail_edge_is_published(self) -> None:
         matches = [
@@ -100,7 +116,7 @@ class AbyssWeaponReleasePatchTests(unittest.TestCase):
         self.assertEqual(115_915, len(self.archive_bytes))
         self.assertEqual(ARCHIVE_SHA256, builder.sha256(self.archive_bytes))
 
-    def test_payloads_match_current_generator_and_official_baselines(self) -> None:
+    def test_payloads_match_frozen_v1_contract_and_official_baselines(self) -> None:
         equipment_bytes = self.member_bytes[builder.EQUIPMENT_MEMBER]
         soul_bytes = self.member_bytes[builder.SOUL_MEMBER]
         wab_bytes = self.member_bytes[builder.WAB_MEMBER]
@@ -130,29 +146,269 @@ class AbyssWeaponReleasePatchTests(unittest.TestCase):
             official_soul,
             wab_bytes,
         )
-        self.assertEqual(
-            builder.parse_table(expected_payloads[0], builder.EQUIPMENT_LOGICAL),
-            builder.parse_table(equipment_bytes, builder.EQUIPMENT_LOGICAL),
-        )
-        self.assertEqual(
-            builder.parse_table(expected_payloads[1], builder.SOUL_LOGICAL),
-            builder.parse_table(soul_bytes, builder.SOUL_LOGICAL),
-        )
+        for rebuilt, archived, logical in (
+            (expected_payloads[0], equipment_bytes, builder.EQUIPMENT_LOGICAL),
+            (expected_payloads[1], soul_bytes, builder.SOUL_LOGICAL),
+        ):
+            expected = builder.parse_table(archived, logical)
+            actual = builder.parse_table(rebuilt, logical)
+            self.assertEqual(list(expected), list(actual))
+            self.assertEqual(
+                builder.key_sequence_sha256(expected),
+                builder.key_sequence_sha256(actual),
+            )
+            self.assertEqual(
+                builder.canonical_node_sha256(expected),
+                builder.canonical_node_sha256(actual),
+            )
         self.assertEqual(expected_payloads[2], wab_bytes)
 
         equipment = builder.parse_table(equipment_bytes, builder.EQUIPMENT_LOGICAL)
         souls = builder.parse_table(soul_bytes, builder.SOUL_LOGICAL)
-        for spec in rewards.WEAPONS:
-            equipment_row = core.read_csv_lines(equipment[spec.id])[0]
-            self.assertEqual(rewards.MODE_DESCRIPTION, equipment_row[7], spec.id)
-            self.assertEqual(f"mod_abyss_{spec.id}", equipment_row[0], spec.id)
+        for custom_id in builder.V1_CONTRACT.custom_ids:
+            self.assertEqual(
+                builder.V1_CONTRACT.equipment_rows[custom_id],
+                equipment[custom_id],
+            )
+            self.assertEqual(
+                builder.V1_CONTRACT.ability_soul_rows[custom_id],
+                souls[custom_id],
+            )
 
-            soul_rows = core.read_csv_lines(souls[spec.id])
-            self.assertEqual(len(spec.effects), len(soul_rows), spec.id)
-            for row, effect in zip(soul_rows, spec.effects, strict=True):
-                self.assertEqual(effect.effect_kind, row[44], spec.id)
-                self.assertEqual(str(effect.strength), row[48], spec.id)
-                self.assertEqual(str(effect.strength), row[49], spec.id)
+    def test_v1_contract_loader_rejects_corruption(self) -> None:
+        valid = json.loads(
+            builder.RELEASE_CONTRACT_PATH.read_text(encoding="utf-8")
+        )
+        mutations = {
+            "schema": (
+                "schema_version",
+                lambda doc: doc.__setitem__("schema_version", 2),
+            ),
+            "schema_bool": (
+                "schema_version",
+                lambda doc: doc.__setitem__("schema_version", True),
+            ),
+            "schema_float": (
+                "schema_version",
+                lambda doc: doc.__setitem__("schema_version", 1.0),
+            ),
+            "archive_sha": (
+                "archive_sha256",
+                lambda doc: doc["published"].__setitem__(
+                    "archive_sha256", "0" * 64
+                ),
+            ),
+            "missing_equipment": (
+                "payload_rows.equipment",
+                lambda doc: doc["payload_rows"]["equipment"].pop("8000101"),
+            ),
+            "reordered_soul": (
+                "payload_rows.ability_soul",
+                lambda doc: doc["payload_rows"].__setitem__(
+                    "ability_soul",
+                    dict(reversed(doc["payload_rows"]["ability_soul"].items())),
+                ),
+            ),
+            "empty_leaf": (
+                "payload_rows.equipment.8000101",
+                lambda doc: doc["payload_rows"]["equipment"].__setitem__(
+                    "8000101", ""
+                ),
+            ),
+            "bad_digest": (
+                "equipment_canonical_sha256",
+                lambda doc: doc["published"].__setitem__(
+                    "equipment_canonical_sha256", "ABC"
+                ),
+            ),
+        }
+
+        for name, (expected_field, mutate) in mutations.items():
+            with self.subTest(name=name):
+                document = copy.deepcopy(valid)
+                mutate(document)
+                with tempfile.TemporaryDirectory() as temp:
+                    path = Path(temp) / "contract.json"
+                    path.write_text(
+                        json.dumps(document, ensure_ascii=False),
+                        encoding="utf-8",
+                    )
+                    with self.assertRaisesRegex(
+                        ValueError, re.escape(expected_field)
+                    ):
+                        builder.load_v1_contract(path)
+
+    def test_v1_contract_loader_rejects_duplicate_json_keys(self) -> None:
+        raw = builder.RELEASE_CONTRACT_PATH.read_text(encoding="utf-8")
+        document = json.loads(raw)
+        archive_line = (
+            f'    "archive_sha256": "{builder.ARCHIVE_SHA256}",'
+        )
+        equipment_leaf = json.dumps(
+            document["payload_rows"]["equipment"]["8000101"],
+            ensure_ascii=False,
+        )
+        equipment_line = f'      "8000101": {equipment_leaf},'
+        corruptions = {
+            "duplicate_schema_version": (
+                "schema_version",
+                raw.replace(
+                    '  "schema_version": 1,',
+                    '  "schema_version": 1,\n  "schema_version": 1,',
+                    1,
+                ),
+            ),
+            "duplicate_published_metadata": (
+                "archive_sha256",
+                raw.replace(archive_line, f"{archive_line}\n{archive_line}", 1),
+            ),
+            "duplicate_payload_row": (
+                "8000101",
+                raw.replace(
+                    equipment_line,
+                    f"{equipment_line}\n{equipment_line}",
+                    1,
+                ),
+            ),
+        }
+
+        for name, (expected_field, content) in corruptions.items():
+            with self.subTest(name=name):
+                self.assertNotEqual(raw, content)
+                with tempfile.TemporaryDirectory() as temp:
+                    path = Path(temp) / "contract.json"
+                    path.write_text(content, encoding="utf-8")
+                    with self.assertRaisesRegex(
+                        ValueError, re.escape(expected_field)
+                    ):
+                        builder.load_v1_contract(path)
+
+    def test_current_v3_3_is_pending_and_matches_generator_semantics(self) -> None:
+        self.assertTrue(CURRENT_STATUS.is_file(), CURRENT_STATUS)
+        status = json.loads(CURRENT_STATUS.read_text(encoding="utf-8"))
+        self.assertEqual(1, status["schema_version"])
+        self.assertEqual("abyss-weapons-v3.3", status["id"])
+        self.assertEqual("pending", status["status"])
+        self.assertEqual("mod-tools/wf_rogue_rewards.py", status["source"])
+        self.assertEqual(
+            "3e5ae0d532ce5179f5e8254afb900e5b61c55869",
+            status["source_revision"],
+        )
+        self.assertIsNone(status["artifact"])
+
+        bridge, official_soul, _ = self.historical_inputs()
+        tables = rewards.MasterTables(
+            items=builder.parse_table(
+                builder.read_bridge_member(bridge, rewards.ITEM_T),
+                rewards.ITEM_T,
+            ),
+            equipment=builder.parse_table(
+                builder.read_bridge_member(bridge, rewards.EQUIP_T),
+                rewards.EQUIP_T,
+            ),
+            equipment_status=builder.parse_table(
+                builder.read_bridge_member(bridge, rewards.EQUIP_STATUS_T),
+                rewards.EQUIP_STATUS_T,
+            ),
+            ability_soul=official_soul,
+            rush_event=builder.parse_table(
+                builder.read_bridge_member(bridge, rewards.RUSH_EVENT_T),
+                rewards.RUSH_EVENT_T,
+            ),
+        )
+        changes = rewards.build_master_changes(tables)
+        semantic_node = {
+            "equipment": {
+                key: changes.equipment[key]
+                for key in builder.V1_CONTRACT.custom_ids
+            },
+            "equipment_status": {
+                key: changes.equipment_status[key]
+                for key in builder.V1_CONTRACT.custom_ids
+            },
+            "ability_soul": {
+                key: changes.ability_soul[key]
+                for key in builder.V1_CONTRACT.custom_ids
+            },
+        }
+        self.assertEqual(
+            status["semantic_sha256"],
+            builder.canonical_node_sha256(semantic_node),
+        )
+
+    def test_historical_rebuild_ignores_current_weapon_inventory(self) -> None:
+        bridge, official_soul, wab = self.historical_inputs()
+        original = rewards.WEAPONS
+        try:
+            rewards.WEAPONS = ()
+            rebuilt = builder.build_payloads_from_soul_table(
+                bridge, official_soul, wab
+            )
+        finally:
+            rewards.WEAPONS = original
+
+        for payload, member, logical in (
+            (rebuilt[0], builder.EQUIPMENT_MEMBER, builder.EQUIPMENT_LOGICAL),
+            (rebuilt[1], builder.SOUL_MEMBER, builder.SOUL_LOGICAL),
+        ):
+            expected = builder.parse_table(self.member_bytes[member], logical)
+            actual = builder.parse_table(payload, logical)
+            self.assertEqual(list(expected), list(actual))
+            self.assertEqual(
+                builder.canonical_node_sha256(expected),
+                builder.canonical_node_sha256(actual),
+            )
+
+    def test_historical_builder_rebuilds_without_current_generator_module(self) -> None:
+        script = f"""
+import sys
+import zipfile
+from pathlib import Path
+root = Path({str(ROOT)!r})
+sys.path.insert(0, str(root / 'mod-tools'))
+sys.modules['wf_rogue_rewards'] = None
+import build_abyss_weapon_balance_patch as historical
+with zipfile.ZipFile(historical.OUTPUT_ARCHIVE) as archive:
+    soul_bytes = archive.read(historical.SOUL_MEMBER)
+    wab_bytes = archive.read(historical.WAB_MEMBER)
+official = historical.parse_table(
+    historical.strip_custom_soul_rows(soul_bytes), historical.SOUL_LOGICAL
+)
+payloads = historical.build_payloads_from_soul_table(
+    historical.checked_bridge(historical.BRIDGE_ARCHIVE), official, wab_bytes
+)
+assert len(payloads) == 3
+"""
+        completed = subprocess.run(
+            [sys.executable, "-c", script],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(0, completed.returncode, completed.stderr)
+
+    def test_historical_rebuild_does_not_read_committed_archive(self) -> None:
+        bridge, official_soul, wab = self.historical_inputs()
+        original = builder.OUTPUT_ARCHIVE
+        builder.OUTPUT_ARCHIVE = ROOT / "missing-historical-archive.zip"
+        try:
+            rebuilt = builder.build_payloads_from_soul_table(
+                bridge, official_soul, wab
+            )
+        finally:
+            builder.OUTPUT_ARCHIVE = original
+
+        rebuilt_equipment = builder.parse_table(
+            rebuilt[0], builder.EQUIPMENT_LOGICAL
+        )
+        archived_equipment = builder.parse_table(
+            self.member_bytes[builder.EQUIPMENT_MEMBER], builder.EQUIPMENT_LOGICAL
+        )
+        self.assertEqual(
+            builder.canonical_node_sha256(archived_equipment),
+            builder.canonical_node_sha256(rebuilt_equipment),
+        )
 
     def test_equipment_preserves_every_noncustom_bridge_row_and_order(self) -> None:
         bridge = builder.checked_bridge(builder.BRIDGE_ARCHIVE)
@@ -163,7 +419,7 @@ class AbyssWeaponReleasePatchTests(unittest.TestCase):
         final_equipment = builder.parse_table(
             self.member_bytes[builder.EQUIPMENT_MEMBER], builder.EQUIPMENT_LOGICAL
         )
-        custom_ids = {spec.id for spec in rewards.WEAPONS}
+        custom_ids = set(builder.V1_CONTRACT.custom_ids)
         bridge_noncustom = [
             (key, value)
             for key, value in bridge_equipment.items()

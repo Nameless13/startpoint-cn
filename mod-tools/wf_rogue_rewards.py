@@ -696,8 +696,10 @@ def _assert_soul_row_legal(spec: WeaponSpec, slot: int, row: list[str]) -> None:
     """写盘前的客户端合法性门禁:枚举列空串 = 打开角色页即 C7050/C7101。"""
     if len(row) != SOUL_ROW_WIDTH:
         raise ValueError(f"{spec.id} 槽{slot}: 列数 {len(row)} != {SOUL_ROW_WIDTH}")
-    import wf_gui  # 延迟导入:仅校验时需要,避免模块级拖入整套 GUI 依赖
-    problems = list(wf_gui._client_legality_problems("ability_soul", row))
+    # 只导入纯校验模块:wf_gui 在模块级解析 TARGET_STORE,导入即要求本机装好数据包,
+    # 会让 CI/干净克隆里的纯 fixture 单元测试直接 SystemExit。
+    import wf_client_legality
+    problems = list(wf_client_legality.client_legality_problems("ability_soul", row))
     # wf_gui 的检查器不看 c25 —— 补上这条,2026-07-30 真机实锤过一次 C7050
     trig = row[SOUL_TRIGGER_KIND_COL].strip()
     puller = row[SOUL_PULLER_COL].strip()

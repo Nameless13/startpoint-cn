@@ -7,6 +7,38 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+$script:LocalCdnLockResolver = Join-Path $PSScriptRoot 'resolve-local-cdn-publish-lock.mjs'
+
+function Resolve-LocalCdnPublishLock {
+    param([Parameter(Mandatory = $true)][string]$RepoRoot)
+
+    $envFile = Join-Path $RepoRoot '.env'
+    $output = @(& node "--env-file=$envFile" $script:LocalCdnLockResolver $RepoRoot)
+    if ($LASTEXITCODE -ne 0 -or $output.Count -ne 1) {
+        throw "Unable to resolve local CDN publication lock from CDN_DIR"
+    }
+    $lock = [string]$output[0]
+    if ([string]::IsNullOrWhiteSpace($lock) -or -not [IO.Path]::IsPathRooted($lock)) {
+        throw "Invalid local CDN publication lock path: $lock"
+    }
+    return [IO.Path]::GetFullPath($lock)
+}
+
+function Assert-NoLocalCdnPublishLock {
+    param([Parameter(Mandatory = $true)][string]$RepoRoot)
+
+    $lock = Resolve-LocalCdnPublishLock -RepoRoot $RepoRoot
+    try {
+        $item = Get-Item -LiteralPath $lock -Force -ErrorAction Stop
+    } catch [System.Management.Automation.ItemNotFoundException] {
+        return
+    } catch {
+        throw "Unable to inspect local CDN publication lock $lock`: $($_.Exception.Message)"
+    }
+    if ($null -ne $item) {
+        throw "Local CDN publication lock is active: $lock"
+    }
+}
 
 function Get-ListeningProcess {
     param([Parameter(Mandatory = $true)][int]$Port)
@@ -193,6 +225,7 @@ $pidFile = [IO.Path]::GetFullPath((Join-Path $repoRoot 'work\run\cn-server.pid.j
 
 try {
     Assert-Environment -RepoRoot $repoRoot
+    Assert-NoLocalCdnPublishLock -RepoRoot $repoRoot
     $listener = Get-ListeningProcess -Port $Port
     if ($listener) {
         Assert-OwnedListener -ProcessId $listener.Id -RepoRoot $repoRoot -PidFile $pidFile
@@ -240,6 +273,7 @@ try {
     $previousListenPort = $env:CN_LISTEN_PORT
     try {
         $env:CN_LISTEN_PORT = [string]$Port
+        Assert-NoLocalCdnPublishLock -RepoRoot $repoRoot
         $server = Start-Process -FilePath $node.Source -ArgumentList $arguments -WorkingDirectory $repoRoot -NoNewWindow -PassThru
     } finally {
         if ($hadListenPort) {

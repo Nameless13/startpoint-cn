@@ -619,6 +619,15 @@ def _windows_regular_handle_info(raw: int) -> _WindowsFileInfo:
     )
 
 
+def _windows_extended_path(path: Path) -> str:
+    rendered = os.path.abspath(path)
+    if rendered.startswith("\\\\?\\"):
+        return rendered
+    if rendered.startswith("\\\\"):
+        return "\\\\?\\UNC\\" + rendered[2:]
+    return "\\\\?\\" + rendered
+
+
 def _windows_regular_path_info(path: Path) -> _WindowsFileInfo:
     from ctypes import wintypes
 
@@ -634,7 +643,7 @@ def _windows_regular_path_info(path: Path) -> _WindowsFileInfo:
     )
     kernel32.CreateFileW.restype = wintypes.HANDLE
     raw = kernel32.CreateFileW(
-        str(path),
+        _windows_extended_path(path),
         0x0080,
         0x1 | 0x2 | 0x4,
         None,

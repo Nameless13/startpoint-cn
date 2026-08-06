@@ -8,8 +8,12 @@
 
 - DevConfig_gf_android：旧 host 全部出现处恰被替换为新 host，旧值零残留；
 - DevConfig(core)：sdkDummy=true 仍在（①免登录未丢）；
-- PixelArtCharacterView：站点 1 缩放标记仍在（⑤render-scale 未丢）；
-- MemberView pcode：SCALE_RENDERER 计数与基座一致（⑤站点 2 未被重序列化破坏）。
+- ⑤render-scale 的**三个**站点（pixel-art / member-view / character-cell）：
+  用 render_scale_pcode 的权威校验器逐个复核，并比对重指向前后的
+  canonical P-code 与原始 ABC 摘要，证明单类替换没有把任何一个站点重序列化坏。
+
+单类 -replace 会让 FFDec 重写整份 ABC，所以“只动了一个类”不等于“别的类没变”；
+站点清单必须与 render_scale_pcode.RENDER_SITES 同源，否则以后加了站点这里会漏。
 
 keystore 口令只经 --ks-pass-env 指定的环境变量传给 apksigner，不落盘不进命令行。
 """
@@ -28,21 +32,29 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 ABYSS = HERE.parent / "abyss-mode-equipment" / "build_apk.py"
+RENDER_SCALE = HERE.parent / "offline-android" / "render_scale_pcode.py"
 
-_spec = importlib.util.spec_from_file_location("abyss_build_apk_for_repoint", ABYSS)
-abyss = importlib.util.module_from_spec(_spec)
-sys.modules[_spec.name] = abyss
-_spec.loader.exec_module(abyss)
+
+def _load(name: str, path: Path):
+    existing = sys.modules.get(name)
+    if existing is not None:
+        return existing
+    spec = importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None:
+        raise SystemExit(f"无法加载依赖模块: {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+abyss = _load("abyss_build_apk_for_repoint", ABYSS)
+RENDER = _load("render_scale_pcode_for_repoint", RENDER_SCALE)
 
 GF_CLASS = "pinball.config.gbits.DevConfig_gf_android"
 CORE_CLASS = "pinball.config.core.DevConfig"
-SITE1_CLASS = "pinball.ui.component.pixelArtCharacter.PixelArtCharacterView"
-MEMBERVIEW_CLASS = "pinball.scene.battle.battle.squad.member.MemberView"
-MEMBERVIEW_PCODE_REL = Path(
-    "scripts/pinball/scene/battle/battle/squad/member/MemberView.pcode"
-)
+RENDER_SITE_IDS = RENDER.RENDER_SITE_IDS
 HOST_RE = re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}:\d{2,5}\b")
-SITE1_MARKERS = ("_loc12_.scale = _loc12_.scale / 6;", "_loc12_.scale /= 6;")
 
 
 def run(cmd) -> None:
@@ -60,13 +72,11 @@ def export_scripts(java, ffdec, swf: Path, dest: Path, classes: str) -> None:
          "-selectclass", classes, "-export", "script", dest, swf])
 
 
-def export_pcode(java, ffdec, swf: Path, dest: Path, cls: str) -> Path:
-    dest.mkdir(parents=True, exist_ok=True)
-    run([java, "-Xmx4g", "-jar", ffdec, "-air", "-format", "script:pcode",
-         "-selectclass", cls, "-export", "script", dest, swf])
-    out = dest / MEMBERVIEW_PCODE_REL
-    assert out.is_file(), f"pcode 导出缺文件: {out}"
-    return out
+def render_fingerprints(java, ffdec, swf: Path, work: Path, profile: Path) -> dict:
+    """三个 render-scale 站点的权威复核 + 摘要（校验器在 render_scale_pcode）。"""
+    return RENDER.site_fingerprints(
+        swf, ffdec=ffdec, java=java, profile_dir=profile, work_dir=work
+    )
 
 
 def find_as(dest: Path, cls: str) -> Path:
@@ -111,19 +121,19 @@ def main() -> int:
 
     abyss._extract_original_swf(a.base, original)
 
-    # 1) 导出三类 + MemberView pcode 基线
+    profile = tx / "ffdec_profile"
+
+    # 1) 基线：host/免登录来自 AS3 导出，render-scale 三站点走权威校验器
     pre = tx / "pre_export"
-    export_scripts(a.java, a.ffdec, original, pre,
-                   f"{GF_CLASS},{CORE_CLASS},{SITE1_CLASS}")
+    export_scripts(a.java, a.ffdec, original, pre, f"{GF_CLASS},{CORE_CLASS}")
     gf_as = find_as(pre, GF_CLASS)
     core_text = read_text(find_as(pre, CORE_CLASS))
-    site1_text = read_text(find_as(pre, SITE1_CLASS))
     assert "sdkDummy:Boolean = true" in core_text.replace("  ", " "), \
         "基座缺①免登录(sdkDummy=true)"
-    assert any(m in site1_text for m in SITE1_MARKERS), "基座缺⑤站点1标记"
-    base_pcode = export_pcode(a.java, a.ffdec, original, tx / "pre_pcode",
-                              MEMBERVIEW_CLASS)
-    base_sr_count = read_text(base_pcode).count("SCALE_RENDERER")
+    base_sites = render_fingerprints(
+        a.java, a.ffdec, original, tx / "pre_render", profile
+    )
+    print(f"[RENDER] 基座站点复核通过: {', '.join(RENDER_SITE_IDS)}")
 
     # 2) 改 host（要求基座内恰一个既有 host 值，全部出现处统一替换）
     gf_text = read_text(gf_as)
@@ -144,20 +154,17 @@ def main() -> int:
 
     # 4) 回读校验
     post = tx / "post_export"
-    export_scripts(a.java, a.ffdec, repointed, post,
-                   f"{GF_CLASS},{CORE_CLASS},{SITE1_CLASS}")
+    export_scripts(a.java, a.ffdec, repointed, post, f"{GF_CLASS},{CORE_CLASS}")
     gf_after = read_text(find_as(post, GF_CLASS))
     assert a.host in gf_after, "回读未见新 host"
     assert old_host not in gf_after, "回读仍有旧 host 残留"
     assert "sdkDummy:Boolean = true" in read_text(find_as(post, CORE_CLASS)).replace("  ", " "), \
         "①免登录在替换后丢失"
-    assert any(m in read_text(find_as(post, SITE1_CLASS)) for m in SITE1_MARKERS), \
-        "⑤站点1标记在替换后丢失"
-    post_pcode = export_pcode(a.java, a.ffdec, repointed, tx / "post_pcode",
-                              MEMBERVIEW_CLASS)
-    post_sr_count = read_text(post_pcode).count("SCALE_RENDERER")
-    assert post_sr_count == base_sr_count, \
-        f"⑤站点2疑似被破坏: SCALE_RENDERER {base_sr_count} -> {post_sr_count}"
+    post_sites = render_fingerprints(
+        a.java, a.ffdec, repointed, tx / "post_render", profile
+    )
+    RENDER.assert_fingerprints_unchanged(base_sites, post_sites)
+    print(f"[RENDER] 重指向后三站点等同: {', '.join(RENDER_SITE_IDS)}")
 
     # 5) 回封 + 对齐 + 签名 + 验签
     abyss.rewrite_apk(a.base, unsigned, repointed)
@@ -169,14 +176,17 @@ def main() -> int:
     a.out.parent.mkdir(parents=True, exist_ok=True)
     os.replace(signed, a.out)
     report = {
-        "schema_version": 1,
+        # v2: 站点 1/2 的启发式探针换成三站点权威指纹（含 character-cell）。
+        "schema_version": 2,
         "base_apk": {"path": str(a.base), "sha256": sha(a.base)},
         "output_apk": {"path": str(a.out), "sha256": sha(a.out)},
         "host_old": old_host,
         "host_new": a.host,
         "host_occurrences": n,
-        "memberview_scale_renderer_count": post_sr_count,
-        "checks": ["sdkDummy", "site1_marker", "site2_count", "host_swap"],
+        "render_site_ids": list(RENDER_SITE_IDS),
+        "render_sites_before": base_sites,
+        "render_sites_after": post_sites,
+        "checks": ["sdkDummy", "host_swap", *(f"render:{s}" for s in RENDER_SITE_IDS)],
     }
     report_path = a.out.with_suffix(".build-report.json")
     report_path.write_text(json.dumps(report, indent=2, ensure_ascii=False),
