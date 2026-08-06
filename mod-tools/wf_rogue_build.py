@@ -5754,11 +5754,30 @@ def main() -> int:
 
     def name_keys(bosses) -> set[str]:
         """**全塔去重**用系列键。系列有**配额**(见 SERIES_CAPS/series_cap),
-        普通 boss 配额恒 1。"""
-        return {_series_key(str(b)) for b in bosses}
+        普通 boss 配额恒 1。
+
+        系列成员额外再挂一个**变体键**(配额恒 1)。系列配额 >1 的本意是
+        「同塔可以来两只**不同**的元素变体」(雷龟 + 暗凤、苍机兵 + 闪机兵),
+        但光有系列键拦不住**同一只**来两遍:`discarded_dragon_dark_tower`
+        (塔层版)与 `discarded_dragon_dark`(降临版)是两个代号、同一个模型,
+        各占系列名额 1 个 ⇒ 一座塔出两次暗荒龙伊尔昂斯拉,零配额告警。
+        (1.4.316 真机实测:第12战 + 第14战。)
+
+        变体键取 `_model_and_progs` 的模型族;模型读不到时它回退成显示名,
+        而显示名本来就逐元素不同(闪机兵/苍机兵),两种情况都能把元素分开。
+        **只给系列成员挂**——非系列 boss 的 `_family` 配额本来就是 1,再挂一层
+        会把八岐大蛇各头(靠攻击程序签名共存)压成一个,那是刻意要保留的。"""
+        out: set[str] = set()
+        for boss in bosses:
+            code = str(boss)
+            out.add(_series_key(code))
+            model, _progs = _model_and_progs(code)
+            if boss_series_of(code, model):
+                out.add(f"变体:{model}")
+        return out
 
     def key_cap(key: str) -> int:
-        """该去重键在本塔的出场配额:系列按层数缩放,其余恒 1。"""
+        """该去重键在本塔的出场配额:系列按层数缩放,其余(含变体键)恒 1。"""
         return series_cap(key[3:], args.rounds) if key.startswith("系列:") else 1
 
     def grade_keys(bosses) -> set[str]:
