@@ -143,18 +143,23 @@ class LocalCdnPublishTest(InventoryCase):
         self.assertFalse(probed)
         self.assertEqual(b"foreign", lock.read_bytes())
 
-    def test_default_probe_only_accepts_explicit_connection_refusal(self):
+    def test_default_probe_accepts_refusal_or_an_empty_listener_table(self):
         refused = ConnectionRefusedError(errno.ECONNREFUSED, "refused")
         with mock.patch.object(
             publisher.server_status.socket,
             "create_connection",
             side_effect=refused,
-        ) as connect:
+        ) as connect, mock.patch.object(
+            publisher.server_status, "listening_ports"
+        ) as ports:
             published = self.publish(server_probe=None)
         self.assertEqual(2, connect.call_count)
+        ports.assert_not_called()
         for path in published.paths:
             path.unlink()
 
+        # A dropped SYN is not evidence either way, so the local listener table
+        # settles it.  Nothing listening on the configured port means stopped.
         timeout_edge = self.plan()
         with mock.patch.object(
             publisher,
@@ -164,16 +169,47 @@ class LocalCdnPublishTest(InventoryCase):
             publisher.server_status.socket,
             "create_connection",
             side_effect=socket.timeout("timed out"),
+        ), mock.patch.object(
+            publisher.server_status, "listening_ports", return_value={22, 443}
         ):
-            with self.assertRaisesRegex(
-                publisher.LocalCdnPublishError, "verify|probe|timed out"
-            ):
-                publisher.publish_local_311_edge(
-                    timeout_edge,
-                    self.cdn,
-                    confirmation=publisher.CONFIRMATION,
-                )
+            published = publisher.publish_local_311_edge(
+                timeout_edge, self.cdn, confirmation=publisher.CONFIRMATION,
+            )
+        for path in published.paths:
+            path.unlink()
         self.assertFalse((self.cdn / publisher.LOCK_NAME).exists())
+
+    def test_default_probe_refuses_a_listening_port_or_an_unreadable_table(self):
+        for label, table in (
+            ("listening", {"return_value": {8001}}),
+            (
+                "unreadable",
+                {"side_effect": publisher.server_status.ServerStatusError("no table")},
+            ),
+        ):
+            with self.subTest(table=label):
+                edge = self.plan()
+                with mock.patch.object(
+                    publisher,
+                    "COMPATIBILITY_EDGE_DIGEST",
+                    publisher._edge_digest(edge),
+                ), mock.patch.object(
+                    publisher.server_status.socket,
+                    "create_connection",
+                    side_effect=socket.timeout("timed out"),
+                ), mock.patch.object(
+                    publisher.server_status, "listening_ports", **table
+                ):
+                    with self.assertRaisesRegex(
+                        publisher.LocalCdnPublishError,
+                        "stopped|verify|probe|table",
+                    ):
+                        publisher.publish_local_311_edge(
+                            edge, self.cdn, confirmation=publisher.CONFIRMATION,
+                        )
+                self.assertFalse((self.cdn / publisher.LOCK_NAME).exists())
+                for directory in self.directories.values():
+                    self.assertEqual([], list(directory.iterdir()))
 
     def test_identical_retry_is_success_but_partial_or_mismatch_is_refused(self):
         first = self.publish()
