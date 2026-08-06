@@ -1380,13 +1380,27 @@ class _WindowsOwnedApi:
         if handle and not self.CloseHandle(wintypes.HANDLE(handle)):
             self._raise_last("CloseHandle")
 
-    def open_root(self, path: Path) -> int:
-        access = (
+    def root_access(self) -> int:
+        """Access mask for an owned parent-directory handle.
+
+        FILE_DELETE_CHILD is deliberately absent.  Nothing here deletes through
+        the parent: removal always reopens the child relative to this handle
+        with DELETE access and commits it with FileDispositionInfo, which is
+        governed by the child's own DACL.  Requesting it anyway made the whole
+        open fail with ERROR_ACCESS_DENIED on any directory granting only
+        Modify -- Modify carries DELETE but not FILE_DELETE_CHILD, which comes
+        with Full Control -- so a repository on a second drive could not be
+        published into at all.
+        """
+        return (
             self.FILE_LIST_DIRECTORY | self.FILE_ADD_FILE
-            | self.FILE_ADD_SUBDIRECTORY | self.FILE_DELETE_CHILD
+            | self.FILE_ADD_SUBDIRECTORY
             | self.FILE_READ_ATTRIBUTES | self.FILE_WRITE_ATTRIBUTES
             | self.FILE_TRAVERSE | self.SYNCHRONIZE
         )
+
+    def open_root(self, path: Path) -> int:
+        access = self.root_access()
         handle = self.CreateFileW(
             str(path), access, self.FILE_SHARE_READ | self.FILE_SHARE_WRITE,
             None, self.OPEN_EXISTING,
