@@ -3,7 +3,7 @@ import path from "node:path";
 
 import {
     declaredPatchEdgeKey,
-    readDeclaredPatchEdges,
+    readDeclaredPatchManifest,
 } from "./cn-asset-patch-manifest";
 import type { DeclaredPatchEdges } from "./cn-asset-patch-manifest";
 import { readActiveCharacterReleases, resolveCnCdnDir } from "./cn-character-release";
@@ -155,6 +155,17 @@ export function findReleasePath(
         }
     }
     return { startVersion, targetVersion, edges };
+}
+
+
+export function isEligibleReleaseStart(
+    graph: Pick<ReleaseGraphSnapshot, "fullBase" | "outgoing" | "supported">,
+    startVersion: string,
+): boolean {
+    if (reachablePaths(graph, graph.fullBase).has(startVersion)) return true;
+    return graph.supported.some(item => (
+        item.baseVersion === startVersion && item.reachable
+    ));
 }
 
 
@@ -455,13 +466,71 @@ export function buildReleaseGraph(input: ReleaseGraphInput): ReleaseGraphSnapsho
             true,
         );
     }
-    scan(
-        path.join(assetPatchRoot, "active"),
-        "patch",
-        "asset-patch/active",
-        "asset-patch:active",
-        false,
+    const declaredPatchManifest = readDeclaredPatchManifest(assetPatchRoot);
+    issues.push(...declaredPatchManifest.issues);
+    const declaredPatchEdges = new Map<string, Set<string>>();
+    const activeDirectory = path.join(assetPatchRoot, "active");
+    let activeNames: string[] = [];
+    if (!existsSync(activeDirectory)) {
+        issues.push(`release archive directory is missing: ${activeDirectory}`);
+    } else {
+        try {
+            activeNames = readdirSync(activeDirectory).filter(name => name.endsWith(".zip")).sort();
+        } catch (error) {
+            issues.push(
+                `release archive directory unreadable: ${activeDirectory}: ${(error as Error).message}`,
+            );
+        }
+    }
+    const declaredNames = new Set(
+        declaredPatchManifest.entries.flatMap(entry => entry.archives.map(archive => archive.name)),
     );
+    for (const name of activeNames) {
+        if (!declaredNames.has(name)) {
+            const match = ARCHIVE_RE.exec(name);
+            const edge = match === null ? name : `${match[1]}->${match[2]} (${name})`;
+            issues.push(`undeclared asset-patch archive ignored: ${edge}`);
+        }
+    }
+    for (const entry of declaredPatchManifest.entries) {
+        const pending: Array<{
+            from: string;
+            to: string;
+            name: string;
+            archive: ReleaseArchive;
+        }> = [];
+        for (const declared of entry.archives) {
+            const archive = archiveFromDisk(
+                path.join(activeDirectory, declared.name),
+                "patch",
+                `asset-patch/active/${declared.name}`,
+                "asset-patch:active",
+                declared.seq,
+            );
+            if (archive === null) {
+                issues.push(
+                    `asset-patch manifest entry ${entry.id} is incomplete: `
+                    + `missing or empty archive ${declared.name}`,
+                );
+                pending.length = 0;
+                break;
+            }
+            pending.push({
+                from: declared.from,
+                to: declared.to,
+                name: declared.name,
+                archive,
+            });
+        }
+        if (pending.length !== entry.archives.length) continue;
+        for (const item of pending) {
+            addArchive(item.from, item.to, item.archive, "asset-patch:active");
+            const key = declaredPatchEdgeKey(item.from, item.to);
+            const names = declaredPatchEdges.get(key) ?? new Set<string>();
+            names.add(item.name);
+            declaredPatchEdges.set(key, names);
+        }
+    }
 
     const characterChain = input.characterChain ?? readActiveCharacterReleases(cdnDir);
     if (characterChain.error) issues.push(`character release: ${characterChain.error}`);
@@ -515,7 +584,6 @@ export function buildReleaseGraph(input: ReleaseGraphInput): ReleaseGraphSnapsho
     const fullPath = findReleasePath(partial, fullBase);
     partial.tailVersion = fullPath.targetVersion;
 
-    const declaredPatchEdges = readDeclaredPatchEdges(assetPatchRoot);
     const compatibilityBases: string[] = [];
     for (const edge of edges) {
         if (

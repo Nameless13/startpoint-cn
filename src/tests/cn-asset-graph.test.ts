@@ -118,11 +118,16 @@ function fixture(): GraphFixture {
     }
     mkdirSync(path.join(cdnDir, "character-releases"), { recursive: true });
     mkdirSync(path.join(assetPatchRoot, "active"), { recursive: true });
+    const patchManifest = path.join(assetPatchRoot, "manifest.json");
+    writeFileSync(patchManifest, JSON.stringify({
+        cdn_version: "1.4.54",
+        patches: [],
+    }));
     return {
         root,
         cdnDir,
         assetPatchRoot,
-        patchManifest: path.join(assetPatchRoot, "manifest.json"),
+        patchManifest,
         activeManifest: path.join(cdnDir, "character-releases", "active.json"),
         cleanup() {
             const resolved = path.resolve(root);
@@ -188,6 +193,22 @@ async function replayLegacyArchives(
 function writePatch(f: GraphFixture, from: string, to: string, label = "patch"): string {
     const name = `pinball-${from}-${to}-1-${label}.zip`;
     writeFileSync(path.join(f.assetPatchRoot, "active", name), Buffer.from(`patch:${from}:${to}:${label}`));
+    return name;
+}
+
+
+function writeSequencedPatch(
+    f: GraphFixture,
+    from: string,
+    to: string,
+    seq: number,
+    label: string,
+): string {
+    const name = `pinball-${from}-${to}-${seq}-${label}.zip`;
+    writeFileSync(
+        path.join(f.assetPatchRoot, "active", name),
+        Buffer.from(`patch:${from}:${to}:${seq}:${label}`),
+    );
     return name;
 }
 
@@ -403,7 +424,15 @@ test("character chain may attach at a reachable earlier node and merge four root
     try {
         writeLegacy(f, "1.4.102", "1.4.133");
         writeLegacy(f, "1.4.138", "1.4.139");
-        writePatch(f, "1.4.138", "1.4.139");
+        const patch = writePatch(f, "1.4.138", "1.4.139");
+        writePatchManifest(f, [{
+            id: "fixture-merge",
+            type: "patch",
+            enabled: true,
+            depends_on: "1.4.138",
+            version: "1.4.139",
+            chain: [patch],
+        }]);
         writeCharacterChain(f, 133, 140);
         const graph = build(f, "1.4.102", ["1.4.102", "1.4.133"]);
         const result = findReleasePath(graph, "1.4.102");
@@ -548,6 +577,114 @@ test("undeclared or disconnected compatibility ingress remains isolated", () => 
         const issues = graph.issues.join("\n");
         assert.match(issues, /1\.4\.311->1\.4\.312/);
         assert.match(issues, /9\.0\.0->9\.0\.1/);
+        assert.equal(computeAssetTarget("1.4.311", graph).targetVersion, "1.4.311");
+    } finally {
+        f.cleanup();
+    }
+});
+
+
+test("asset-patch entry is invisible until every declared archive exists", () => {
+    const f = fixture();
+    try {
+        writeLegacy(f, "1.4.54", "1.4.277", "common", "public-main");
+        const first = writeSequencedPatch(
+            f, "1.4.277", "1.4.312", 1, "atomic-entry",
+        );
+        const second = `pinball-1.4.277-1.4.312-2-atomic-entry.zip`;
+        writePatchManifest(f, [{
+            id: "atomic-entry",
+            type: "patch",
+            enabled: true,
+            depends_on: "1.4.277",
+            version: "1.4.312",
+            chain: [first, second],
+        }]);
+
+        const partial = build(f, "1.4.54");
+        assert.equal(partial.tailVersion, "1.4.277");
+        assert.equal(computeAssetTarget("1.4.277", partial).targetVersion, "1.4.277");
+        assert.equal(partial.edges.some(edge => edge.to === "1.4.312"), false);
+        assert.match(partial.issues.join("\n"), /incomplete|missing|undeclared/);
+
+        writeSequencedPatch(f, "1.4.277", "1.4.312", 2, "atomic-entry");
+        const committed = build(f, "1.4.54");
+        assert.equal(committed.tailVersion, "1.4.312");
+        const edge = committed.edges.find(item => item.to === "1.4.312");
+        assert.ok(edge);
+        assert.deepEqual(edge.archives.map(item => item.seq), [1, 2]);
+    } finally {
+        f.cleanup();
+    }
+});
+
+
+test("one aggregate manifest entry activates each historical filename edge", () => {
+    const f = fixture();
+    try {
+        writeLegacy(f, "1.4.54", "1.4.90", "common", "public-main");
+        const first = writePatch(f, "1.4.90", "1.4.91", "aggregate-a");
+        const second = writePatch(f, "1.4.91", "1.4.92", "aggregate-b");
+        writePatchManifest(f, [{
+            id: "historical-aggregate",
+            type: "patch",
+            enabled: true,
+            depends_on: "1.4.90",
+            version: "1.4.92",
+            chain: [first, second],
+        }]);
+        const graph = build(f, "1.4.54");
+        assert.equal(graph.tailVersion, "1.4.92");
+        assert.deepEqual(
+            findReleasePath(graph, "1.4.90").edges.map(edge => `${edge.from}->${edge.to}`),
+            ["1.4.90->1.4.91", "1.4.91->1.4.92"],
+        );
+    } finally {
+        f.cleanup();
+    }
+});
+
+
+test("duplicate manifest ids or edges and non-contiguous seq fail closed", () => {
+    const f = fixture();
+    try {
+        const one = writePatch(f, "1.4.0", "1.4.1", "duplicate-a");
+        const two = writePatch(f, "1.4.1", "1.4.2", "duplicate-b");
+        writePatchManifest(f, [
+            {
+                id: "duplicate",
+                type: "patch",
+                enabled: true,
+                depends_on: "1.4.0",
+                version: "1.4.1",
+                chain: [one],
+            },
+            {
+                id: "duplicate",
+                type: "patch",
+                enabled: true,
+                depends_on: "1.4.1",
+                version: "1.4.2",
+                chain: [two],
+            },
+        ]);
+        const duplicateId = build(f, "1.4.0");
+        assert.equal(duplicateId.tailVersion, "1.4.0");
+        assert.match(duplicateId.issues.join("\n"), /duplicate.*id/i);
+
+        const seq1 = writeSequencedPatch(f, "1.4.0", "1.4.3", 1, "gap");
+        const seq3 = writeSequencedPatch(f, "1.4.0", "1.4.3", 3, "gap");
+        writePatchManifest(f, [{
+            id: "sequence-gap",
+            type: "patch",
+            enabled: true,
+            depends_on: "1.4.0",
+            version: "1.4.3",
+            chain: [seq1, seq3],
+        }]);
+        const gap = build(f, "1.4.0");
+        assert.equal(gap.tailVersion, "1.4.0");
+        assert.match(gap.issues.join("\n"), /sequence|contiguous/i);
     } finally {
         f.cleanup();
     }
@@ -605,7 +742,15 @@ test("load and get_path choose the same reachable target from an injected snapsh
     const f = fixture();
     try {
         writeLegacy(f, "1.4.102", "1.4.133");
-        writePatch(f, "1.4.138", "1.4.139", "fixture-active");
+        const patch = writePatch(f, "1.4.138", "1.4.139", "fixture-active");
+        writePatchManifest(f, [{
+            id: "fixture-active",
+            type: "patch",
+            enabled: true,
+            depends_on: "1.4.138",
+            version: "1.4.139",
+            chain: [patch],
+        }]);
         writeCharacterChain(f, 133, 140);
         const graph = build(f, "1.4.102", ["1.4.102", "1.4.133"]);
 

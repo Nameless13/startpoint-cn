@@ -8,6 +8,7 @@ import {
     compareReleaseVersions,
     findReleasePath,
     getCnReleaseGraphSnapshot,
+    isEligibleReleaseStart,
 } from "./cn-asset-graph";
 import type { ReleaseGraphSnapshot, ReleasePathResult } from "./cn-asset-graph";
 
@@ -68,7 +69,9 @@ export function computeAssetTarget(
 ): AssetTarget {
     const first = isFirstTime(resVer, snapshot.fullBase);
     const startVersion = first ? snapshot.fullBase : resVer!;
-    const releasePath = findReleasePath(snapshot, startVersion);
+    const releasePath = isEligibleReleaseStart(snapshot, startVersion)
+        ? findReleasePath(snapshot, startVersion)
+        : { startVersion, targetVersion: startVersion, edges: [] };
     return {
         targetVersion: releasePath.targetVersion,
         isFirstTime: first,

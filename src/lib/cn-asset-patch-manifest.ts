@@ -3,8 +3,26 @@ import path from "node:path";
 
 
 const VERSION_RE = /^\d+\.\d+\.\d+$/;
+const TOKEN_RE = /^[a-z0-9][a-z0-9_-]*$/;
 const ARCHIVE_RE = /^pinball-(\d+\.\d+\.\d+)-(\d+\.\d+\.\d+)-([1-9]\d*)-(.+)\.zip$/;
 
+
+export interface DeclaredPatchArchive {
+    name: string;
+    from: string;
+    to: string;
+    seq: number;
+}
+
+export interface DeclaredPatchEntry {
+    id: string;
+    archives: readonly DeclaredPatchArchive[];
+}
+
+export interface DeclaredPatchManifest {
+    entries: readonly DeclaredPatchEntry[];
+    issues: readonly string[];
+}
 
 export type DeclaredPatchEdges = ReadonlyMap<string, ReadonlySet<string>>;
 
@@ -29,24 +47,57 @@ function isIncreasingEdge(from: string, to: string): boolean {
 }
 
 
-export function readDeclaredPatchEdges(assetPatchRoot: string): DeclaredPatchEdges {
-    const declared = new Map<string, Set<string>>();
+function issue(message: string): DeclaredPatchManifest {
+    return { entries: [], issues: [message] };
+}
+
+
+export function readDeclaredPatchManifest(assetPatchRoot: string): DeclaredPatchManifest {
     let value: unknown;
     try {
         value = JSON.parse(readFileSync(path.join(assetPatchRoot, "manifest.json"), "utf8"));
-    } catch {
-        return declared;
+    } catch (error) {
+        return issue(`asset-patch manifest is unreadable or invalid JSON: ${(error as Error).message}`);
     }
-    if (typeof value !== "object" || value === null || Array.isArray(value)) return declared;
-    const patches = (value as { patches?: unknown }).patches;
-    if (!Array.isArray(patches)) return declared;
-    for (const patch of patches) {
-        if (typeof patch !== "object" || patch === null || Array.isArray(patch)) continue;
-        const item = patch as Record<string, unknown>;
-        if (item.enabled !== true || item.type !== "patch") continue;
-        const from = item.depends_on;
-        const to = item.version;
-        const chain = item.chain;
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+        return issue("asset-patch manifest must be an object");
+    }
+    const manifest = value as Record<string, unknown>;
+    if (typeof manifest.cdn_version !== "string" || !VERSION_RE.test(manifest.cdn_version)) {
+        return issue("asset-patch manifest cdn_version is invalid");
+    }
+    if (!Array.isArray(manifest.patches)) {
+        return issue("asset-patch manifest patches must be an array");
+    }
+
+    const entries: DeclaredPatchEntry[] = [];
+    const issues: string[] = [];
+    const ids = new Set<string>();
+    const edgeOwners = new Map<string, string>();
+    for (const [index, rawPatch] of manifest.patches.entries()) {
+        if (typeof rawPatch !== "object" || rawPatch === null || Array.isArray(rawPatch)) {
+            issues.push(`asset-patch manifest patch ${index} must be an object`);
+            continue;
+        }
+        const patch = rawPatch as Record<string, unknown>;
+        if (patch.enabled !== true) continue;
+        const id = patch.id;
+        if (typeof id !== "string" || !TOKEN_RE.test(id)) {
+            issues.push(`asset-patch manifest patch ${index} has invalid id`);
+            continue;
+        }
+        if (ids.has(id)) {
+            issues.push(`asset-patch manifest has duplicate patch id: ${id}`);
+            continue;
+        }
+        ids.add(id);
+        if (patch.type !== "patch") {
+            issues.push(`asset-patch manifest patch ${id} has invalid type`);
+            continue;
+        }
+        const from = patch.depends_on;
+        const to = patch.version;
+        const chain = patch.chain;
         if (
             typeof from !== "string"
             || typeof to !== "string"
@@ -55,30 +106,89 @@ export function readDeclaredPatchEdges(assetPatchRoot: string): DeclaredPatchEdg
             || !isIncreasingEdge(from, to)
             || !Array.isArray(chain)
             || chain.length === 0
-        ) continue;
-        const names = new Set<string>();
-        let valid = true;
-        for (const raw of chain) {
-            if (
-                typeof raw !== "string"
-                || path.posix.basename(raw) !== raw
-                || path.win32.basename(raw) !== raw
-            ) {
-                valid = false;
-                break;
-            }
-            const match = ARCHIVE_RE.exec(raw);
-            if (match === null || match[1] !== from || match[2] !== to) {
-                valid = false;
-                break;
-            }
-            names.add(raw);
+        ) {
+            issues.push(`asset-patch manifest patch ${id} has invalid edge or chain`);
+            continue;
         }
-        if (!valid || names.size !== chain.length) continue;
-        const key = declaredPatchEdgeKey(from, to);
-        const existing = declared.get(key) ?? new Set<string>();
-        for (const name of names) existing.add(name);
-        declared.set(key, existing);
+
+        const archives: DeclaredPatchArchive[] = [];
+        const names = new Set<string>();
+        let malformed = false;
+        for (const rawName of chain) {
+            if (
+                typeof rawName !== "string"
+                || path.posix.basename(rawName) !== rawName
+                || path.win32.basename(rawName) !== rawName
+                || names.has(rawName)
+            ) {
+                malformed = true;
+                break;
+            }
+            const match = ARCHIVE_RE.exec(rawName);
+            const seq = match === null ? NaN : Number(match[3]);
+            if (match === null || !Number.isSafeInteger(seq)) {
+                malformed = true;
+                break;
+            }
+            names.add(rawName);
+            archives.push({ name: rawName, from: match[1], to: match[2], seq });
+        }
+        if (malformed) {
+            issues.push(`asset-patch manifest patch ${id} has invalid archive names`);
+            continue;
+        }
+
+        const edgeOrder: string[] = [];
+        const byEdge = new Map<string, DeclaredPatchArchive[]>();
+        for (const archive of archives) {
+            if (!isIncreasingEdge(archive.from, archive.to)) {
+                malformed = true;
+                break;
+            }
+            const key = declaredPatchEdgeKey(archive.from, archive.to);
+            if (!byEdge.has(key)) edgeOrder.push(key);
+            const grouped = byEdge.get(key) ?? [];
+            grouped.push(archive);
+            byEdge.set(key, grouped);
+        }
+        for (const grouped of byEdge.values()) {
+            const sequences = grouped.map(archive => archive.seq).sort((left, right) => left - right);
+            if (sequences.some((sequence, sequenceIndex) => sequence !== sequenceIndex + 1)) {
+                malformed = true;
+                issues.push(`asset-patch manifest patch ${id} archive sequence is not contiguous`);
+                break;
+            }
+        }
+        const orderedEdges = edgeOrder.map(key => byEdge.get(key)![0]);
+        if (
+            malformed
+            || orderedEdges.length === 0
+            || orderedEdges[0].from !== from
+            || orderedEdges[orderedEdges.length - 1].to !== to
+            || orderedEdges.some((edge, edgeIndex) => (
+                edgeIndex > 0 && orderedEdges[edgeIndex - 1].to !== edge.from
+            ))
+        ) {
+            if (!issues.some(item => item.includes(`patch ${id} archive sequence`))) {
+                issues.push(`asset-patch manifest patch ${id} chain is disconnected from its edge`);
+            }
+            continue;
+        }
+        for (const edge of orderedEdges) {
+            const key = declaredPatchEdgeKey(edge.from, edge.to);
+            const owner = edgeOwners.get(key);
+            if (owner !== undefined) {
+                issues.push(
+                    `asset-patch manifest has duplicate edge ${edge.from}->${edge.to}: ${owner}, ${id}`,
+                );
+            } else {
+                edgeOwners.set(key, id);
+            }
+        }
+        entries.push({ id, archives });
     }
-    return declared;
+
+    return issues.length > 0
+        ? { entries: [], issues: [...new Set(issues)] }
+        : { entries, issues: [] };
 }
