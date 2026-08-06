@@ -49,6 +49,23 @@ PACKS = ROOT / "work" / "character_packs"
 
 _EDGE = re.compile(r"^pinball-(\d+\.\d+\.\d+)-(\d+\.\d+\.\d+)-(\d+)-")
 
+# 每次重摇整批重建的**临时命名空间**,不是"内容"。
+#
+# 深渊连战塔每建一次就把上一座塔的 mod_rogue_f* / mod_rogue_z* / mod_rogue_boss*
+# 全部删掉重写(wf_rogue_build 开头的 stale 清理),键集合本来就随塔形变化。
+# 2026-08-07 之前每层都强制克隆一个法阵/HP 载体,键数只增不减,所以从没撞过这道闸;
+# 改成"血量按不动就保留原 boss、不强行克隆"之后,一座塔少 12 个克隆是**正常结果**。
+#
+# 放行它安全的理由:这些键只被同一批一起发布的 quest→field_data→zone 链引用,
+# 而那条链有更强也更具体的门禁(wf_rogue_build 的「31 关解析链复核」逐关验证
+# quest→field→zone→boss/zako 全可解析),漏发会在那里就被拦住,轮不到这里。
+# 角色包 claims 检查不受影响(没有任何角色包 claim 过 mod_rogue_* 键)。
+EPHEMERAL_KEY_PREFIXES = ("mod_rogue_",)
+
+
+def _is_ephemeral(key: str) -> bool:
+    return str(key).startswith(EPHEMERAL_KEY_PREFIXES)
+
 
 def _vkey(version: str) -> tuple[int, ...]:
     return tuple(int(part) for part in version.split("."))
@@ -141,8 +158,15 @@ def check(entries: list[tuple[str, bytes]], *, verbose: bool = True) -> list[str
                 print(f"  [资产] {label} (非 orderedmap,整文件替换链上 {version})")
             continue
 
-        lost = [k for k in old_keys if k not in set(new_keys)]
+        lost_all = [k for k in old_keys if k not in set(new_keys)]
+        lost = [k for k in lost_all if not _is_ephemeral(k)]
+        ephemeral_lost = [k for k in lost_all if _is_ephemeral(k)]
         added = [k for k in new_keys if k not in set(old_keys)]
+        if ephemeral_lost and verbose:
+            # 放行但必须留痕:这是"这座塔比上座塔少几个克隆",不是删内容。
+            print(f"  [临时] {label} 少了 {len(ephemeral_lost)} 个重摇临时键"
+                  f"(整批重建,放行) -> {ephemeral_lost[:6]}"
+                  + (" ..." if len(ephemeral_lost) > 6 else ""))
         if lost:
             problems.append(
                 f"{label}: 相对链上 {version} 丢了 {len(lost)} 个键 -> {lost[:12]}"
