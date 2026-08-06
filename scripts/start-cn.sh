@@ -5,8 +5,25 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 ENV_FILE="$ROOT/.env"
 ENTRY="$ROOT/out/cn-server.js"
 BUILD_STAMP="$ROOT/out/.cn-server-build-stamp"
+LOCK_RESOLVER="$ROOT/scripts/resolve-local-cdn-publish-lock.mjs"
 CHECK_ONLY=false
 NO_BUILD=false
+
+resolve_local_cdn_publish_lock() {
+    node --env-file="$ENV_FILE" "$LOCK_RESOLVER" "$ROOT"
+}
+
+assert_no_local_cdn_publish_lock() {
+    local lock
+    if ! lock="$(resolve_local_cdn_publish_lock)"; then
+        printf 'Unable to resolve local CDN publication lock from CDN_DIR\n' >&2
+        exit 1
+    fi
+    if [[ -e "$lock" || -L "$lock" ]]; then
+        printf 'Local CDN publication lock is active: %s\n' "$lock" >&2
+        exit 1
+    fi
+}
 
 usage() {
     cat <<'EOF'
@@ -42,6 +59,8 @@ for (let i = 0; i < required.length; i++) {
   }
 }
 '
+
+assert_no_local_cdn_publish_lock
 
 HOST="$(node --env-file="$ENV_FILE" -p 'process.env.CN_LISTEN_HOST || "127.0.0.1"')"
 PORT="$(node --env-file="$ENV_FILE" -p 'process.env.CN_LISTEN_PORT || "8001"')"
@@ -103,4 +122,5 @@ if [[ "$build_required" == true ]]; then
 fi
 
 printf '[START] StarPoint CN http://%s:%s (foreground; Ctrl-C to stop)\n' "$HOST" "$PORT"
+assert_no_local_cdn_publish_lock
 exec node --env-file="$ENV_FILE" "$ENTRY"
