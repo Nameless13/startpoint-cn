@@ -501,15 +501,25 @@ def _read_archives(edge: EdgeEvidence) -> tuple[list[dict[str, object]], dict[tu
 def _baseline_terminal_equivalent(
     terminal_members: tuple[InventoryMember, ...], baseline: InventoryContract
 ) -> bool:
-    by_identity = {(member.owner, member.key): member for member in baseline.members}
+    by_key: dict[MemberKey, list[InventoryMember]] = {}
+    for member in baseline.members:
+        by_key.setdefault(member.key, []).append(member)
     for member in terminal_members:
-        other = by_identity.get((member.owner, member.key))
-        if other is None or other.kind != member.kind:
-            return False
+        candidates = tuple(
+            other for other in by_key.get(member.key, ())
+            if other.kind == member.kind
+        )
         if member.kind == "file":
-            if (other.size, other.sha256) != (member.size, member.sha256):
+            if not any(
+                (other.size, other.sha256) == (member.size, member.sha256)
+                for other in candidates
+            ):
                 return False
-        elif other.projection_sha256 != member.projection_sha256 or other.claim != member.claim:
+        elif not any(
+            other.projection_sha256 == member.projection_sha256
+            and other.claim == member.claim
+            for other in candidates
+        ):
             return False
     return True
 

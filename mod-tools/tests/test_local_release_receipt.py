@@ -357,6 +357,46 @@ class LocalReleaseReceiptTest(unittest.TestCase):
         )
         self.assertEqual((2, 3, 3), (report.edge_count, report.path_count_per_edge, report.claim_count_per_edge))
 
+    def test_noop_omission_uses_content_claim_not_baseline_owner_label(self):
+        fx = ReceiptFixture()
+        baseline = fx.context.baselines["1.4.311"]
+        renamed = InventoryContract(
+            baseline.contract_id,
+            tuple(
+                replace(member, owner="baseline-1-4-311")
+                if member.key in {fx.key_a, fx.key_table}
+                else member
+                for member in baseline.members
+            ),
+        )
+        context = replace(
+            fx.context,
+            baselines={**fx.context.baselines, "1.4.311": renamed},
+        )
+
+        raw = receipt.build_receipt(
+            context,
+            fx.policy,
+            terminal_sources=fx.terminal_sources,
+            edges=fx.edges,
+            manifest_preimage=fx.preimage,
+            manifest_output=fx.manifest,
+            server_files=fx.server_files,
+        )
+        report = receipt.verify_receipt(
+            context,
+            fx.policy,
+            raw,
+            archive_blobs=fx.archive_blobs(),
+            manifest_raw=fx.manifest,
+            server_files=fx.server_files,
+        )
+        self.assertEqual((2, 3, 3), (
+            report.edge_count,
+            report.path_count_per_edge,
+            report.claim_count_per_edge,
+        ))
+
     def test_writer_rejects_table_output_that_overwrites_unclaimed_rows(self):
         fx = ReceiptFixture()
         bad_edge = replace(
