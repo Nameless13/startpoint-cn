@@ -9,6 +9,14 @@ import { resolveSafeLeaf } from "../lib/safe-root-file";
 import { patchFileRoutes } from "../routes/cn/patch-files";
 
 
+// 这些用例真的把 zip 流出去过。POSIX 允许 unlink 仍被打开的文件,Windows 不允许:
+// 服务端刚 sendFile 完,句柄要等一小会儿才释放,直接 rmSync 会 ENOTEMPTY。
+// Node 的 maxRetries/retryDelay 就是为 Windows 的 EBUSY/ENOTEMPTY/EPERM 准备的。
+function removeTree(target: string): void {
+    rmSync(target, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+}
+
+
 interface PatchFixture {
     app: FastifyInstance;
     root: string;
@@ -41,7 +49,7 @@ async function fixture(): Promise<PatchFixture> {
         outsideRoot,
         async close(): Promise<void> {
             await app.close();
-            rmSync(root, { recursive: true, force: true });
+            removeTree(root);
         },
     };
 }
@@ -152,6 +160,6 @@ test("safe leaf resolution rejects missing roots and non-files without throwing"
         assert.equal(resolveSafeLeaf(path.join(root, "missing"), "file.zip", /^[\w.-]+\.zip$/), null);
         assert.equal(resolveSafeLeaf(root, "directory.zip", /^[\w.-]+\.zip$/), null);
     } finally {
-        rmSync(root, { recursive: true, force: true });
+        removeTree(root);
     }
 });
