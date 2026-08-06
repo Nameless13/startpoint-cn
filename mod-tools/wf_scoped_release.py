@@ -21,6 +21,7 @@ from wf_release_inventory_contract import (
     MemberKey,
 )
 import wf_scoped_release_archive as archive
+import wf_scoped_release_transaction as transaction
 
 
 CI_ZIP_CAP = archive.CI_ZIP_CAP
@@ -321,8 +322,8 @@ def stage_archives(
     plans: Iterable[EdgePlan], staging_dir: Path
 ) -> tuple[Path, ...]:
     try:
-        return archive.stage_archives(tuple(plans), Path(staging_dir))
-    except (OSError, archive.ArchiveError) as error:
+        return transaction.stage_archives(tuple(plans), Path(staging_dir))
+    except (OSError, transaction.TransactionError) as error:
         raise ScopedReleaseError(str(error)) from error
 
 
@@ -348,7 +349,7 @@ def publish_archives_and_manifest(
         raise ScopedReleaseError("manifest preimage sha256 mismatch")
     output = render_manifest(preimage, selected)
     try:
-        return archive.publish_transaction(
+        return transaction.publish_transaction(
             selected,
             Path(active_dir),
             manifest_path,
@@ -356,5 +357,5 @@ def publish_archives_and_manifest(
             manifest_output=output,
             checkpoint=checkpoint,
         )
-    except (OSError, archive.ArchiveError) as error:
+    except (OSError, transaction.TransactionError) as error:
         raise ScopedReleaseError(str(error)) from error

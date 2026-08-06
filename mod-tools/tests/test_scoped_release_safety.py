@@ -195,16 +195,148 @@ class ScopedReleaseSafetyTest(InventoryCase):
             self.assertEqual([], list(active.iterdir()))
             self.assertEqual(EMPTY_MANIFEST, manifest.read_bytes())
 
+    def test_private_name_collision_is_never_deleted_as_owned_output(self):
+        plan = self.small_plan()
+        with tempfile.TemporaryDirectory() as td:
+            patch_root = Path(td) / "asset-patch"
+            active = patch_root / "active"
+            active.mkdir(parents=True)
+            manifest = patch_root / "manifest.json"
+            manifest.write_bytes(EMPTY_MANIFEST)
+            token = "1" * 32
+            foreign = active / f".wf-scoped-{token}-1.pending"
+            foreign.write_bytes(b"foreign")
+
+            with mock.patch.object(
+                scoped.transaction.uuid, "uuid4", return_value=type(
+                    "FixedUuid", (), {"hex": token}
+                )()
+            ):
+                with self.assertRaises(scoped.ScopedReleaseError):
+                    scoped.publish_archives_and_manifest(
+                        (plan,),
+                        active,
+                        manifest,
+                        expected_manifest_sha256=hashlib.sha256(
+                            EMPTY_MANIFEST
+                        ).hexdigest(),
+                    )
+            self.assertEqual(b"foreign", foreign.read_bytes())
+            self.assertEqual(EMPTY_MANIFEST, manifest.read_bytes())
+            self.assertFalse((patch_root / ".wf-scoped-release.lock").exists())
+
     def test_exclusive_write_failure_leaves_no_partial_staging_file(self):
         plan = self.small_plan()
         with tempfile.TemporaryDirectory() as td:
             staging = Path(td) / "staging"
             with mock.patch.object(
-                scoped.archive.os, "fsync", side_effect=OSError("injected fsync")
+                scoped.transaction.os, "fsync", side_effect=OSError("injected fsync")
             ):
                 with self.assertRaisesRegex(scoped.ScopedReleaseError, "injected fsync"):
                     scoped.stage_archives((plan,), staging)
             self.assertFalse(staging.exists())
+
+    def test_archive_tamper_after_visibility_link_aborts_before_manifest(self):
+        plan = self.small_plan()
+        with tempfile.TemporaryDirectory() as td:
+            patch_root = Path(td) / "asset-patch"
+            active = patch_root / "active"
+            active.mkdir(parents=True)
+            manifest = patch_root / "manifest.json"
+            manifest.write_bytes(EMPTY_MANIFEST)
+
+            def tamper(phase: str) -> None:
+                if phase == "after_archive":
+                    target = next(active.glob("*.zip"))
+                    target.write_bytes(b"tampered" * 800_000)
+
+            with self.assertRaisesRegex(
+                scoped.ScopedReleaseError, "hard cap|readback|drift|changed"
+            ):
+                scoped.publish_archives_and_manifest(
+                    (plan,),
+                    active,
+                    manifest,
+                    expected_manifest_sha256=hashlib.sha256(EMPTY_MANIFEST).hexdigest(),
+                    checkpoint=tamper,
+                )
+            self.assertEqual(EMPTY_MANIFEST, manifest.read_bytes())
+            self.assertEqual([], list(active.iterdir()))
+            self.assertFalse((patch_root / ".wf-scoped-release.lock").exists())
+
+    def test_incomplete_rollback_retains_lock_and_orphan_for_manual_recovery(self):
+        plan = self.small_plan()
+        with tempfile.TemporaryDirectory() as td:
+            patch_root = Path(td) / "asset-patch"
+            active = patch_root / "active"
+            active.mkdir(parents=True)
+            manifest = patch_root / "manifest.json"
+            manifest.write_bytes(EMPTY_MANIFEST)
+            real_unlink = Path.unlink
+
+            def refuse_archive_unlink(path: Path, *args, **kwargs):
+                if path.parent == active and path.suffix == ".zip":
+                    raise PermissionError("injected archive unlink failure")
+                return real_unlink(path, *args, **kwargs)
+
+            def fail(phase: str) -> None:
+                if phase == "before_manifest":
+                    raise RuntimeError("injected precommit failure")
+
+            with mock.patch.object(Path, "unlink", refuse_archive_unlink):
+                with self.assertRaisesRegex(
+                    scoped.ScopedReleaseError, "rollback|lock|unlink"
+                ):
+                    scoped.publish_archives_and_manifest(
+                        (plan,),
+                        active,
+                        manifest,
+                        expected_manifest_sha256=hashlib.sha256(
+                            EMPTY_MANIFEST
+                        ).hexdigest(),
+                        checkpoint=fail,
+                    )
+            lock = patch_root / ".wf-scoped-release.lock"
+            self.assertTrue(lock.is_file())
+            self.assertEqual(EMPTY_MANIFEST, manifest.read_bytes())
+            self.assertEqual(1, len(list(active.glob("*.zip"))))
+            for target in active.glob("*.zip"):
+                target.unlink()
+            lock.unlink()
+
+    def test_publish_rejects_reparse_in_any_existing_ancestor_before_writes(self):
+        plan = self.small_plan()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            patch_root = root / "nested" / "asset-patch"
+            active = patch_root / "active"
+            active.mkdir(parents=True)
+            manifest = patch_root / "manifest.json"
+            manifest.write_bytes(EMPTY_MANIFEST)
+            unsafe_ancestor = root / "nested"
+            real_is_reparse = scoped.transaction._is_reparse
+
+            with mock.patch.object(
+                scoped.transaction,
+                "_is_reparse",
+                side_effect=lambda path: (
+                    Path(path) == unsafe_ancestor or real_is_reparse(Path(path))
+                ),
+            ):
+                with self.assertRaisesRegex(
+                    scoped.ScopedReleaseError, "ancestor|reparse"
+                ):
+                    scoped.publish_archives_and_manifest(
+                        (plan,),
+                        active,
+                        manifest,
+                        expected_manifest_sha256=hashlib.sha256(
+                            EMPTY_MANIFEST
+                        ).hexdigest(),
+                    )
+            self.assertEqual(EMPTY_MANIFEST, manifest.read_bytes())
+            self.assertEqual([], list(active.iterdir()))
+            self.assertFalse((patch_root / ".wf-scoped-release.lock").exists())
 
     def test_archive_inputs_reject_noncanonical_versions_tags_and_roots(self):
         with self.assertRaises(scoped.ScopedReleaseError):
@@ -227,6 +359,15 @@ class ScopedReleaseSafetyTest(InventoryCase):
                 tag="safety0806",
                 max_zip_bytes=scoped.CI_ZIP_CAP,
             )
+        plan = self.small_plan()
+        invalid = scoped.EdgePlan(
+            plan.spec,
+            plan.entries,
+            (replace(plan.parts[0], root="unknown"),),
+        )
+        with tempfile.TemporaryDirectory() as td:
+            with self.assertRaisesRegex(scoped.ScopedReleaseError, "root"):
+                scoped.stage_archives((invalid,), Path(td) / "staging")
 
 
 if __name__ == "__main__":

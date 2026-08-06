@@ -3,16 +3,12 @@
 """Deterministic ZIP assembly and manifest-last filesystem transaction helpers."""
 from __future__ import annotations
 
-import hashlib
 import io
-import os
 import re
 import stat
-import tempfile
 import zipfile
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Callable, Iterable, Protocol, Sequence
+from typing import Iterable, Protocol, Sequence
 
 
 CI_ZIP_CAP = 5 << 20
@@ -50,20 +46,6 @@ def _version(value: str) -> tuple[int, int, int]:
     if not isinstance(value, str) or VERSION_RE.fullmatch(value) is None:
         raise ArchiveError(f"invalid archive version: {value!r}")
     return tuple(int(part) for part in value.split("."))  # type: ignore[return-value]
-
-
-def _is_reparse(path: Path) -> bool:
-    try:
-        if path.is_symlink():
-            return True
-        junction = getattr(path, "is_junction", None)
-        if junction is not None and junction():
-            return True
-        attributes = getattr(path.lstat(), "st_file_attributes", 0)
-        marker = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
-        return bool(attributes & marker)
-    except OSError:
-        return False
 
 
 def _compressed_size(payload: bytes) -> int:
@@ -262,160 +244,3 @@ def attest_plan_parts(
             "archive plan payload mismatch: "
             f"missing={missing[:3]} extra={extra[:3]} changed={changed[:3]}"
         )
-
-
-def _parts(plans: Iterable[object]) -> tuple[ArchivePart, ...]:
-    flattened: list[ArchivePart] = []
-    for plan in plans:
-        values = getattr(plan, "parts", None)
-        if not isinstance(values, tuple):
-            raise ArchiveError("release plan parts must be a tuple")
-        if any(not isinstance(part, ArchivePart) for part in values):
-            raise ArchiveError("release plan contains an invalid archive part")
-        flattened.extend(values)
-    if len({part.name for part in flattened}) != len(flattened):
-        raise ArchiveError("duplicate archive filename across release plans")
-    for part in flattened:
-        if Path(part.name).name != part.name or not part.name.endswith(".zip"):
-            raise ArchiveError(f"unsafe archive filename: {part.name!r}")
-    return tuple(flattened)
-
-
-def _write_exclusive(path: Path, payload: bytes) -> None:
-    created = False
-    try:
-        with path.open("xb") as stream:
-            created = True
-            stream.write(payload)
-            stream.flush()
-            os.fsync(stream.fileno())
-        if path.read_bytes() != payload:
-            raise ArchiveError(f"write readback drift: {path}")
-    except BaseException:
-        if created:
-            path.unlink(missing_ok=True)
-        raise
-
-
-def _fsync_directory(path: Path) -> None:
-    try:
-        descriptor = os.open(path, os.O_RDONLY)
-    except OSError:
-        if os.name == "nt":
-            return
-        raise
-    try:
-        os.fsync(descriptor)
-    except OSError:
-        if os.name != "nt":
-            raise
-    finally:
-        os.close(descriptor)
-
-
-def stage_archives(plans: Iterable[object], staging_dir: Path) -> tuple[Path, ...]:
-    parts = _parts(plans)
-    staging_dir = Path(staging_dir)
-    if staging_dir.exists() or staging_dir.is_symlink():
-        raise ArchiveError(f"staging directory already exists: {staging_dir}")
-    if _is_reparse(staging_dir.parent):
-        raise ArchiveError(f"staging parent is a reparse point: {staging_dir.parent}")
-    staging_dir.mkdir(parents=True, exist_ok=False)
-    if _is_reparse(staging_dir):
-        raise ArchiveError(f"staging directory became a reparse point: {staging_dir}")
-    created: list[Path] = []
-    try:
-        for part in parts:
-            target = staging_dir / part.name
-            _write_exclusive(target, part.blob)
-            created.append(target)
-        _fsync_directory(staging_dir)
-        return tuple(created)
-    except BaseException:
-        for path in reversed(created):
-            path.unlink(missing_ok=True)
-        try:
-            staging_dir.rmdir()
-        except OSError:
-            pass
-        raise
-
-
-def publish_transaction(
-    plans: Iterable[object],
-    active_dir: Path,
-    manifest_path: Path,
-    *,
-    manifest_preimage: bytes,
-    manifest_output: bytes,
-    checkpoint: Callable[[str], None] | None = None,
-) -> tuple[Path, ...]:
-    parts = _parts(plans)
-    active_dir, manifest_path = Path(active_dir), Path(manifest_path)
-    if _is_reparse(active_dir) or not active_dir.is_dir():
-        raise ArchiveError(f"active directory is unsafe: {active_dir}")
-    if _is_reparse(manifest_path) or not manifest_path.is_file():
-        raise ArchiveError(f"manifest path is unsafe: {manifest_path}")
-    if _is_reparse(manifest_path.parent):
-        raise ArchiveError(f"manifest parent is a reparse point: {manifest_path.parent}")
-    if manifest_path.parent.resolve() != active_dir.parent.resolve():
-        raise ArchiveError("manifest must be a sibling of the active directory")
-    if manifest_path.read_bytes() != manifest_preimage:
-        raise ArchiveError("manifest changed before archive publication")
-
-    targets = [active_dir / part.name for part in parts]
-    existing = [path for path in targets if path.exists() or path.is_symlink()]
-    if existing:
-        raise ArchiveError(f"archive target already exists: {existing[0].name}")
-
-    lock_path = manifest_path.parent / ".wf-scoped-release.lock"
-    created: list[Path] = []
-    temporary: Path | None = None
-    committed = False
-    lock_created = False
-    callback = checkpoint or (lambda _phase: None)
-    manifest_mode = stat.S_IMODE(manifest_path.stat().st_mode)
-    try:
-        _write_exclusive(lock_path, hashlib.sha256(manifest_preimage).digest())
-        lock_created = True
-        for part, target in zip(parts, targets, strict=True):
-            _write_exclusive(target, part.blob)
-            created.append(target)
-            callback("after_archive")
-        _fsync_directory(active_dir)
-
-        if manifest_path.read_bytes() != manifest_preimage:
-            raise ArchiveError("manifest changed before commit point")
-        callback("before_manifest")
-        if manifest_path.read_bytes() != manifest_preimage:
-            raise ArchiveError("manifest changed during commit checkpoint")
-        descriptor, temporary_name = tempfile.mkstemp(
-            prefix=f".{manifest_path.name}.", suffix=".tmp", dir=manifest_path.parent
-        )
-        temporary = Path(temporary_name)
-        with os.fdopen(descriptor, "wb") as stream:
-            os.chmod(temporary, manifest_mode)
-            stream.write(manifest_output)
-            stream.flush()
-            os.fsync(stream.fileno())
-        if temporary.read_bytes() != manifest_output:
-            raise ArchiveError("manifest staging readback drift")
-        if manifest_path.read_bytes() != manifest_preimage:
-            raise ArchiveError("manifest changed before atomic replace")
-        os.replace(temporary, manifest_path)
-        temporary = None
-        committed = True
-        _fsync_directory(manifest_path.parent)
-        callback("after_manifest")
-        return tuple(targets)
-    except BaseException:
-        if not committed:
-            for path in reversed(created):
-                path.unlink(missing_ok=True)
-            _fsync_directory(active_dir)
-        raise
-    finally:
-        if temporary is not None:
-            temporary.unlink(missing_ok=True)
-        if lock_created:
-            lock_path.unlink(missing_ok=True)
