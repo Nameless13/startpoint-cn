@@ -93,6 +93,40 @@ class ScopedTransactionIdentityTest(InventoryCase):
             self.assertEqual(MANIFEST, manifest.read_bytes())
             self.assertFalse((active.parent / ".wf-scoped-release.lock").exists())
 
+    def test_cleanup_quarantines_a_replacement_injected_before_atomic_rename(self):
+        with tempfile.TemporaryDirectory() as td:
+            target = Path(td) / "owned.bin"
+            target.write_bytes(b"owned")
+            owned = scoped.transaction._OwnedPath(
+                target,
+                scoped.transaction._object_identity(target.lstat()),
+            )
+            foreign = b"foreign injected at cleanup"
+            real_rename = scoped.transaction.os.rename
+            injected = False
+
+            def replace_then_rename(source, destination):
+                nonlocal injected
+                if Path(source) == target and not injected:
+                    injected = True
+                    target.unlink()
+                    target.write_bytes(foreign)
+                return real_rename(source, destination)
+
+            with mock.patch.object(
+                scoped.transaction.os,
+                "rename",
+                side_effect=replace_then_rename,
+            ):
+                errors = scoped.transaction._remove_owned((owned,))
+
+            self.assertTrue(injected)
+            self.assertTrue(errors)
+            self.assertEqual(foreign, target.read_bytes())
+            quarantined = tuple(Path(td).glob(".owned.bin.wf-quarantine-*"))
+            self.assertEqual(1, len(quarantined))
+            self.assertEqual(foreign, quarantined[0].read_bytes())
+
     def test_versions_reject_leading_zero_segments(self):
         with self.assertRaisesRegex(scoped.archive.ArchiveError, "version"):
             scoped.archive.build_parts(

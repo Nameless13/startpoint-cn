@@ -146,25 +146,62 @@ def _fsync_directory(path: Path) -> None:
 
 
 def _remove_owned(paths: Iterable[_OwnedPath]) -> list[str]:
+    """Remove owned links through an identity-checked sibling quarantine.
+
+    Moving the directory entry first closes the old lstat(path)->unlink(path)
+    replacement window.  A foreign object moved by the atomic rename is never
+    deleted: it is retained under the unpredictable quarantine name and, when
+    it is a regular file, hard-linked back to its original name exclusively.
+    """
     errors: list[str] = []
     for owned in reversed(tuple(paths)):
         path = owned.path
+        quarantine = path.parent / (
+            f".{path.name}.wf-quarantine-{uuid.uuid4().hex}"
+        )
         try:
             _assert_plain_ancestry(path.parent, leaf="directory")
             try:
-                metadata = path.lstat()
+                os.rename(path, quarantine)
             except FileNotFoundError:
                 continue
+            metadata = quarantine.lstat()
             if (
-                _is_reparse(path)
+                _is_reparse(quarantine)
                 or not stat.S_ISREG(metadata.st_mode)
                 or _object_identity(metadata) != owned.object_id
             ):
-                errors.append(f"{path}: owned identity changed; left untouched")
+                restored = ""
+                if not _is_reparse(quarantine) and stat.S_ISREG(metadata.st_mode):
+                    try:
+                        os.link(quarantine, path, follow_symlinks=False)
+                        restored = "; foreign identity restored at original path"
+                    except FileExistsError:
+                        restored = "; original path is occupied"
+                    except OSError as restore_error:
+                        restored = f"; original-name restore failed: {restore_error}"
+                errors.append(
+                    f"{path}: owned identity changed; foreign object retained at "
+                    f"quarantine {quarantine}{restored}"
+                )
                 continue
-            path.unlink()
+            try:
+                quarantine.unlink()
+            except OSError as unlink_error:
+                restored = ""
+                try:
+                    os.link(quarantine, path, follow_symlinks=False)
+                    restored = "; quarantine restored at original path"
+                except FileExistsError:
+                    restored = "; original path is occupied"
+                except OSError as restore_error:
+                    restored = f"; original-name restore failed: {restore_error}"
+                errors.append(
+                    f"{path}: quarantine cleanup failed: {unlink_error}; "
+                    f"retained at {quarantine}{restored}"
+                )
         except (OSError, TransactionError) as error:
-            errors.append(f"{path}: {error}")
+            errors.append(f"{path}: quarantine cleanup failed: {error}")
     return errors
 
 

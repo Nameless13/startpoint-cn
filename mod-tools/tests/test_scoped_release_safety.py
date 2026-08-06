@@ -335,8 +335,11 @@ class ScopedReleaseSafetyTest(InventoryCase):
             real_unlink = Path.unlink
 
             def refuse_archive_unlink(path: Path, *args, **kwargs):
-                if path.parent == active and path.suffix == ".zip":
-                    raise PermissionError("injected archive unlink failure")
+                if (
+                    path.parent == active
+                    and ".zip.wf-quarantine-" in path.name
+                ):
+                    raise PermissionError("injected quarantine unlink failure")
                 return real_unlink(path, *args, **kwargs)
 
             def fail(phase: str) -> None:
@@ -360,7 +363,11 @@ class ScopedReleaseSafetyTest(InventoryCase):
             self.assertTrue(lock.is_file())
             self.assertEqual(EMPTY_MANIFEST, manifest.read_bytes())
             self.assertEqual(1, len(list(active.glob("*.zip"))))
+            quarantined = tuple(active.glob("*.wf-quarantine-*"))
+            self.assertEqual(1, len(quarantined))
             for target in active.glob("*.zip"):
+                target.unlink()
+            for target in quarantined:
                 target.unlink()
             lock.unlink()
 
