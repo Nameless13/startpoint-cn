@@ -307,6 +307,84 @@ test("archive replay uses root, numeric sequence, and relative path order", asyn
 });
 
 
+test("archive sequence accepts Number.MAX_SAFE_INTEGER and rejects the next value", () => {
+    const f = fixture();
+    const from = "1.4.107";
+    const to = "1.4.217";
+    const maxSeq = 9_007_199_254_740_991;
+    try {
+        writeSequencedLegacy(
+            f, from, to, "common", maxSeq, "max",
+            "max.bin", "max",
+        );
+        writeSequencedLegacy(
+            f, from, to, "common", maxSeq + 1, "overflow",
+            "overflow.bin", "overflow",
+        );
+
+        const graph = build(f, from);
+        const edge = graph.edges.find(item => item.from === from && item.to === to);
+        assert.ok(edge);
+        assert.deepEqual(edge.archives.map(archive => archive.seq), [maxSeq]);
+        assert.match(graph.issues.join("\n"), /sequence.*9007199254740992/);
+    } finally {
+        f.cleanup();
+    }
+});
+
+
+test("archive ordering keeps source as the final stable tie-breaker", () => {
+    const f = fixture();
+    const from = "1.4.107";
+    const to = "1.4.108";
+    try {
+        const name = writeSequencedLegacy(
+            f, from, to, "common", 1, "source-tie",
+            "source.bin", "same-archive",
+        );
+        const relativePath = `${DIFF_DIRS.common}/${name}`;
+        const graph = buildReleaseGraph({
+            cdnDir: f.cdnDir,
+            assetPatchRoot: f.assetPatchRoot,
+            fullBase: from,
+            supportedBases: [from],
+            characterChain: {
+                baseVersion: from,
+                tailVersion: to,
+                error: null,
+                releases: [{
+                    release_id: "source-a",
+                    package_id: "fixture",
+                    from_version: from,
+                    version: to,
+                    package_manifest_sha256: "0".repeat(64),
+                    archives: [{
+                        root: "common",
+                        relative_path: relativePath,
+                        size: 1,
+                        sha256: "0".repeat(64),
+                    }],
+                }],
+            },
+        });
+        const edge = graph.edges.find(item => item.from === from && item.to === to);
+        assert.ok(edge);
+        const tied = edge.archives.filter(archive => archive.relativePath === relativePath);
+        assert.deepEqual(tied.map(archive => ({
+            root: archive.root,
+            seq: archive.seq,
+            relativePath: archive.relativePath,
+            source: archive.source,
+        })), [
+            { root: "common", seq: 1, relativePath, source: "character:source-a" },
+            { root: "common", seq: 1, relativePath, source: "legacy:common" },
+        ]);
+    } finally {
+        f.cleanup();
+    }
+});
+
+
 test("character chain may attach at a reachable earlier node and merge four roots", () => {
     const f = fixture();
     try {

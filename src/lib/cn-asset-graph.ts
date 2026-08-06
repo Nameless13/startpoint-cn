@@ -65,6 +65,7 @@ export interface CnReleaseGraphOptions {
 
 const VERSION_RE = /^\d+\.\d+\.\d+$/;
 const ARCHIVE_RE = /^pinball-(\d+\.\d+\.\d+)-(\d+\.\d+\.\d+)-([1-9]\d*)-(.+)\.zip$/;
+export const MAX_ARCHIVE_SEQ = Number.MAX_SAFE_INTEGER;
 const LEGACY_ROOTS: Array<{ root: CharacterRoot, directory: string }> = [
     { root: "common", directory: "archive-common-diff" },
     { root: "medium", directory: "archive-medium-diff" },
@@ -161,10 +162,16 @@ interface EdgeBuilder {
 }
 
 
-function archiveSeq(relativePath: string): number {
+function parseArchiveSeq(raw: string): number | null {
+    const seq = Number(raw);
+    return Number.isSafeInteger(seq) && seq >= 1 ? seq : null;
+}
+
+
+function archiveSeq(relativePath: string): number | null {
     const normalized = relativePath.replace(/\\/g, "/");
     const match = ARCHIVE_RE.exec(path.posix.basename(normalized));
-    return match === null ? 1 : Number(match[3]);
+    return match === null ? null : parseArchiveSeq(match[3]);
 }
 
 
@@ -380,12 +387,19 @@ export function buildReleaseGraph(input: ReleaseGraphInput): ReleaseGraphSnapsho
                 issues.push(`release archive filename is invalid: ${path.join(directory, name)}`);
                 continue;
             }
+            const seq = parseArchiveSeq(match[3]);
+            if (seq === null) {
+                issues.push(
+                    `release archive sequence exceeds ${MAX_ARCHIVE_SEQ}: ${path.join(directory, name)}: ${match[3]}`,
+                );
+                continue;
+            }
             const archive = archiveFromDisk(
                 path.join(directory, name),
                 root,
                 `${relativePrefix}/${name}`,
                 source,
-                Number(match[3]),
+                seq,
             );
             if (!archive) {
                 issues.push(`release archive is missing or empty: ${path.join(directory, name)}`);
@@ -416,10 +430,17 @@ export function buildReleaseGraph(input: ReleaseGraphInput): ReleaseGraphSnapsho
     if (characterChain.error) issues.push(`character release: ${characterChain.error}`);
     for (const release of characterChain.releases) {
         for (const archive of release.archives) {
+            const seq = archiveSeq(archive.relative_path);
+            if (seq === null) {
+                issues.push(
+                    `character archive filename/sequence is invalid: ${archive.relative_path}`,
+                );
+                continue;
+            }
             addArchive(release.from_version, release.version, {
                 root: archive.root,
                 relativePath: archive.relative_path,
-                seq: archiveSeq(archive.relative_path),
+                seq,
                 size: archive.size,
                 sha256: archive.sha256,
                 source: `character:${release.release_id}`,
