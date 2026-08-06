@@ -26,8 +26,12 @@ PRIMARY_SPEC = scoped.EdgeSpec(
     to_version=TARGET_VERSION,
     tag="localsync0806",
     patch_id="local-live-main",
-    name="Local live content 1.4.312",
-    description="Tower, weapons, Light/Dark Dragons, Lafu, and Ginovi from local truth",
+    name="1.4.277→1.4.312 本地实装终态回灌",
+    description=(
+        "以冻结的本地实装合同外科式回灌 700099 深渊连战塔、15 把深渊武器、"
+        "光暗龙、拉芙与基诺维的主数据、技能、立绘、像素、特效和语音；"
+        "未认领表行保持 1.4.277 基线。"
+    ),
     created_at="2026-08-06",
 )
 COMPATIBILITY_SPEC = scoped.EdgeSpec(
@@ -35,8 +39,11 @@ COMPATIBILITY_SPEC = scoped.EdgeSpec(
     to_version=TARGET_VERSION,
     tag="localsync0806",
     patch_id="local-live-compatibility",
-    name="Local live content 1.4.312 compatibility ingress",
-    description="Direct compatibility ingress from the installed local 1.4.311 tail",
+    name="1.4.311→1.4.312 本地实装兼容入口",
+    description=(
+        "供已更新到本地 1.4.311 链尾的客户端直接取得同一份 1.4.312 终态；"
+        "仅携带相对 1.4.311 仍有差异的认领路径。"
+    ),
     created_at="2026-08-06",
 )
 
