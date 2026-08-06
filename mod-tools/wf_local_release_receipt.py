@@ -19,6 +19,7 @@ import wf_local_release_contract as local_contract
 import wf_local_server_contract as server_contract
 import wf_mod_tool as core
 import wf_release_inventory as inventory
+import wf_scoped_table_merge as table_merge
 from wf_release_inventory_contract import (
     InventoryContract,
     InventoryError,
@@ -426,12 +427,26 @@ def _attest_sources(
 def _expected_output(
     source: bytes, baseline: bytes | None, members: tuple[InventoryMember, ...]
 ) -> bytes:
-    if baseline is None:
+    """Re-derive the payload the publisher must have produced for one path.
+
+    This has to use the same joint claim-order merge the publisher uses.
+    Folding the owners in one at a time instead rebases each owner onto the
+    previous owner's intermediate table rather than onto the baseline, so as
+    soon as a table carries more than one owner — or its claimed rows are not
+    already contiguous — the two derivations disagree on row order and the
+    receipt rejects a correctly published edge.
+    """
+    kinds = {member.kind for member in members}
+    if len(kinds) != 1:
+        raise ReceiptError("terminal members disagree on kind")
+    if next(iter(kinds)) == "file":
         return source
-    merged = baseline
-    for member in members:
-        merged = inventory.merge_claimed_member(member, source, merged)
-    return merged
+    if baseline is None:
+        raise ReceiptError("table baseline is absent and cannot preserve unclaimed rows")
+    try:
+        return table_merge.merge_table_members(members, source, baseline)
+    except table_merge.ScopedTableMergeError as error:
+        raise ReceiptError(f"cannot re-derive claimed table merge: {error}") from error
 
 
 def _terminal_source_anchor(

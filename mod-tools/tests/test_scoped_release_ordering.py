@@ -14,6 +14,7 @@ from release_inventory_support import InventoryCase, LOGICAL, ordered
 
 import wf_character_pack as character_pack
 import wf_mod_tool as core
+import wf_local_release_receipt as receipt
 import wf_scoped_release as scoped
 
 
@@ -222,6 +223,123 @@ class ScopedReleaseOrderingTest(InventoryCase):
             "contract_id": "ordering-contract",
             "members": members,
         }
+
+
+class ReceiptDerivationAgreementTest(InventoryCase):
+    """The receipt must re-derive exactly what the publisher writes.
+
+    The receipt is the only build-time cross-check on the published payload,
+    so a derivation that disagrees with the publisher is not a conservative
+    failure: it rejects correct releases, and if the two ever drifted the other
+    way it would sign off on a payload nobody re-derived.
+    """
+
+    spec = staticmethod(ScopedReleaseOrderingTest.spec)
+    payload = staticmethod(ScopedReleaseOrderingTest.payload)
+    payload_contract = staticmethod(ScopedReleaseOrderingTest.payload_contract)
+
+    def derive(self, contract, terminal: bytes, baseline: bytes) -> tuple[bytes, bytes]:
+        plan = scoped.build_edge_plan(
+            contract,
+            {("common", LOGICAL): baseline},
+            lambda _member: terminal,
+            self.spec(),
+        )
+        members = receipt._members_by_path(contract)[("common", LOGICAL)]
+        return self.payload(plan), receipt._expected_output(terminal, baseline, members)
+
+    def test_scattered_claims_derive_identically_for_publisher_and_receipt(self):
+        terminal = ordered([
+            ("terminal-unclaimed", b"never-copy"),
+            ("boss2", b"terminal-2"),
+            ("boss3", b"terminal-3"),
+            ("boss4", b"terminal-4"),
+        ])
+        baseline = ordered([
+            ("sentinel-head", b"base-head"),
+            ("boss3", b"old-3"),
+            ("sentinel-tail", b"base-tail"),
+            ("boss4", b"old-4"),
+        ])
+        claim = character_pack.TableClaim(
+            "common", LOGICAL, "flat", ("boss2", "boss3", "boss4")
+        )
+        contract = self.parse(self.payload_contract([
+            self.member("abyss-tower", terminal, claim)
+        ]))
+
+        published, expected = self.derive(contract, terminal, baseline)
+
+        self.assertEqual(published, expected)
+
+    def test_three_owners_on_one_table_derive_identically(self):
+        terminal = ordered([
+            ("unclaimed-head", b"never-copy"),
+            ("c1", b"terminal-c1"),
+            ("a1", b"terminal-a1"),
+            ("b1", b"terminal-b1"),
+            ("unclaimed-tail", b"also-never"),
+        ])
+        baseline = ordered([
+            ("sentinel-head", b"base-head"),
+            ("b1", b"old-b1"),
+            ("sentinel-mid", b"base-mid"),
+            ("a1", b"old-a1"),
+            ("sentinel-tail", b"base-tail"),
+        ])
+        contract = self.parse(self.payload_contract([
+            self.member(
+                owner, terminal,
+                character_pack.TableClaim("common", LOGICAL, "flat", (key,)),
+            )
+            for owner, key in (("ginovi", "a1"), ("lafu", "b1"), ("dragons", "c1"))
+        ]))
+
+        published, expected = self.derive(contract, terminal, baseline)
+
+        self.assertEqual(published, expected)
+
+    def test_identical_baseline_and_terminal_agree_on_both_sides(self):
+        # Grouping claimed rows at the first claimed position is deliberate, so
+        # rebasing a table onto itself is not a byte-level no-op when the claims
+        # were scattered.  Both derivations must land on the same regrouping.
+        terminal = ordered([
+            ("head", b"h"),
+            ("owned-a", b"a"),
+            ("middle", b"m"),
+            ("owned-b", b"b"),
+            ("tail", b"t"),
+        ])
+        contract = self.parse(self.payload_contract([
+            self.member(
+                "owner", terminal,
+                character_pack.TableClaim(
+                    "common", LOGICAL, "flat", ("owned-a", "owned-b")
+                ),
+            )
+        ]))
+
+        published, expected = self.derive(contract, terminal, terminal)
+
+        self.assertEqual(published, expected)
+        keys, rows = core._strict_orderedmap_rows(
+            published, label="regrouped", compressed_rows=True
+        )
+        self.assertEqual(["head", "owned-a", "owned-b", "middle", "tail"], keys)
+        self.assertEqual([b"h", b"a", b"b", b"m", b"t"], rows)
+
+    def test_receipt_refuses_a_table_without_a_baseline(self):
+        terminal = ordered([("head", b"h"), ("owned", b"o")])
+        contract = self.parse(self.payload_contract([
+            self.member(
+                "owner", terminal,
+                character_pack.TableClaim("common", LOGICAL, "flat", ("owned",)),
+            )
+        ]))
+        members = receipt._members_by_path(contract)[("common", LOGICAL)]
+
+        with self.assertRaisesRegex(receipt.ReceiptError, "baseline is absent"):
+            receipt._expected_output(terminal, None, members)
 
 
 if __name__ == "__main__":
