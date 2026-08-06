@@ -28,6 +28,12 @@ class _UncertainLinkError(TransactionError):
 class _OwnedPath:
     path: Path
     object_id: tuple[int, int]
+    # POSIX only.  A descriptor held from the moment we created or identified
+    # the object pins its inode, so the number cannot be recycled underneath
+    # us.  Without it, `(st_dev, st_ino)` is not an identity on POSIX at all:
+    # unlink a file and write a new one at the same name and the kernel hands
+    # the fresh file the inode that was just freed.
+    descriptor: int | None = None
 
 
 def _absolute(path: Path) -> Path:
@@ -109,6 +115,24 @@ def _read_stable(path: Path, label: str) -> tuple[bytes, tuple[int, int, int, in
     return b"".join(chunks), _identity(after)
 
 
+def _retain(descriptor: int) -> int | None:
+    """Hold an independent POSIX reference to the object behind ``descriptor``."""
+    if os.name == "nt" or not _posix_exact_cleanup_supported():
+        return None
+    return os.dup(descriptor)
+
+
+def _release_owned(items: Iterable[_OwnedPath]) -> None:
+    """Drop retained references for owned objects we are done with."""
+    for owned in items:
+        if owned.descriptor is None:
+            continue
+        try:
+            os.close(owned.descriptor)
+        except OSError:
+            pass
+
+
 def _write_exclusive(
     path: Path, payload: bytes, owned: list[_OwnedPath]
 ) -> None:
@@ -119,7 +143,11 @@ def _write_exclusive(
         metadata = os.fstat(stream.fileno())
         if not stat.S_ISREG(metadata.st_mode):
             raise TransactionError(f"exclusive output is not a regular file: {path}")
-        owned.append(_OwnedPath(path, _object_identity(metadata)))
+        owned.append(
+            _OwnedPath(
+                path, _object_identity(metadata), _retain(stream.fileno())
+            )
+        )
         stream.write(payload)
         stream.flush()
         os.fsync(stream.fileno())
@@ -189,22 +217,44 @@ def _open_owned_parent_posix(parent: Path) -> int:
 def _remove_owned_posix(paths: Iterable[_OwnedPath]) -> list[str]:
     """Unlink only the exact object, resolved relative to its owning directory.
 
-    POSIX has no delete-by-handle primitive, so the closest safe equivalent of
-    the Windows ``FileDispositionInfo`` path is a directory descriptor plus a
-    single relative name: ``_assert_plain_ancestry`` rejects reparse points,
-    ``O_DIRECTORY | O_NOFOLLOW`` pins the parent object, ``fstatat`` proves the
-    name still denotes the owned ``(st_dev, st_ino)``, and ``unlinkat`` acts on
-    that same descriptor.  No component of the path can be re-resolved between
-    the check and the unlink; the only residual window is a replacement of the
-    identical name inside the pinned directory, which the caller's exclusive,
-    token-unique creation discipline already excludes.  Falling back to
-    ``Path.unlink()`` would instead re-walk the whole path and is never done.
+    POSIX has no delete-by-handle primitive, so this is assembled from the
+    pieces that do exist.  ``_assert_plain_ancestry`` rejects reparse points,
+    ``O_DIRECTORY | O_NOFOLLOW`` pins the parent object, ``fstatat`` reads the
+    name without following a symlink, and ``unlinkat`` acts on that same
+    directory descriptor -- so no path component can be re-resolved between the
+    check and the unlink.
+
+    Identity is anchored on the descriptor retained since the object was
+    created, not on the recorded ``(st_dev, st_ino)`` alone.  Inode numbers are
+    reused the instant a file is unlinked, so a replacement written at the same
+    name commonly inherits the same number and would pass a bare comparison;
+    the retained descriptor keeps the original inode allocated, which makes
+    that impossible.  An owned path with no retained descriptor is therefore
+    refused rather than deleted on a guess.
+
+    The residual window is a replacement of the identical name inside the
+    pinned directory between ``fstatat`` and ``unlinkat``, which the caller's
+    exclusive, token-unique creation discipline already excludes.  Falling back
+    to ``Path.unlink()`` would re-walk the whole path and is never done.
     """
     errors: list[str] = []
     for owned in reversed(tuple(paths)):
         path = _absolute(owned.path)
         descriptor: int | None = None
         try:
+            if owned.descriptor is None:
+                errors.append(
+                    f"{path}: owned object was never pinned; left untouched"
+                )
+                continue
+            try:
+                pinned = os.fstat(owned.descriptor)
+            except OSError as error:
+                errors.append(f"{path}: retained reference is unusable: {error}")
+                continue
+            if _object_identity(pinned) != owned.object_id:
+                errors.append(f"{path}: retained reference identity drifted")
+                continue
             parent = _assert_plain_ancestry(path.parent, leaf="directory")
             if parent.lstat().st_dev != owned.object_id[0]:
                 errors.append(f"{path}: owned parent volume changed; left untouched")
@@ -218,7 +268,7 @@ def _remove_owned_posix(paths: Iterable[_OwnedPath]) -> list[str]:
                 continue
             if (
                 not stat.S_ISREG(metadata.st_mode)
-                or _object_identity(metadata) != owned.object_id
+                or _object_identity(metadata) != _object_identity(pinned)
             ):
                 errors.append(f"{path}: owned identity changed; left untouched")
                 continue
@@ -233,6 +283,7 @@ def _remove_owned_posix(paths: Iterable[_OwnedPath]) -> list[str]:
                     os.close(descriptor)
                 except OSError as error:
                     errors.append(f"{path}: close owned parent handle failed: {error}")
+    _release_owned(paths)
     return errors
 
 
@@ -262,6 +313,7 @@ def _remove_owned_unsupported(paths: Iterable[_OwnedPath]) -> list[str]:
             )
         except (OSError, TransactionError) as error:
             errors.append(f"{path}: {error}")
+    _release_owned(paths)
     return errors
 
 
@@ -322,6 +374,7 @@ def _remove_owned_windows(paths: Iterable[_OwnedPath]) -> list[str]:
                 errors.append(
                     f"{path}: path occupied after exact cleanup; left untouched"
                 )
+    _release_owned(paths)
     return errors
 
 
@@ -365,7 +418,23 @@ def _probe_owned_at(path: Path, *, label: str) -> _OwnedPath | None:
         return None
     if _is_reparse(target) or not stat.S_ISREG(metadata.st_mode):
         raise TransactionError(f"{label} is not a plain regular file")
-    return _OwnedPath(target, _object_identity(metadata))
+    # Pin the object we just identified, so its inode cannot be recycled into
+    # some other file before cleanup gets to it.
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(target, flags)
+    except FileNotFoundError:
+        return None
+    try:
+        opened = os.fstat(descriptor)
+        if not stat.S_ISREG(opened.st_mode):
+            raise TransactionError(f"{label} is not a plain regular file")
+        if _object_identity(opened) != _object_identity(metadata):
+            raise TransactionError(f"{label} changed while being identified")
+        retained = _retain(descriptor)
+    finally:
+        os.close(descriptor)
+    return _OwnedPath(target, _object_identity(opened), retained)
 
 
 def _owned_at(path: Path, *, label: str) -> _OwnedPath:
@@ -390,6 +459,7 @@ def _link_owned(
         if linked is None:
             raise
         if linked.object_id != source.object_id:
+            _release_owned((linked,))
             raise _UncertainLinkError(
                 f"ambiguous link target identity changed; left untouched: {target}"
             ) from error
@@ -397,6 +467,7 @@ def _link_owned(
         raise
     linked = _owned_at(target, label="linked archive")
     if linked.object_id != source.object_id:
+        _release_owned((linked,))
         raise _UncertainLinkError(
             f"linked archive identity differs from pending source: {target}"
         )
@@ -420,7 +491,9 @@ def stage_archives(plans: Iterable[object], staging_dir: Path) -> tuple[Path, ..
             target = staging_dir / part.name
             _write_exclusive(target, part.blob, created)
         _fsync_directory(staging_dir)
-        return tuple(item.path for item in created)
+        paths = tuple(item.path for item in created)
+        _release_owned(created)
+        return paths
     except BaseException as error:
         failures = _remove_owned(created)
         failures.extend(_remove_owned_directory(staging_owned))
@@ -524,7 +597,8 @@ def publish_transaction(
         )
         temporary_path = Path(temporary_name)
         temporary = _OwnedPath(
-            temporary_path, _object_identity(os.fstat(descriptor))
+            temporary_path, _object_identity(os.fstat(descriptor)),
+            _retain(descriptor),
         )
         with os.fdopen(descriptor, "wb") as stream:
             os.chmod(temporary_path, stat.S_IMODE(manifest.stat().st_mode))
@@ -541,6 +615,7 @@ def publish_transaction(
         if current_manifest != manifest_preimage or current_id != manifest_id:
             raise TransactionError("manifest changed before atomic replace")
         os.replace(temporary_path, manifest)
+        _release_owned((temporary,))
         temporary = None
         committed = True
         _fsync_directory(manifest.parent)
@@ -554,6 +629,7 @@ def publish_transaction(
         if isinstance(error, _UncertainLinkError):
             cleanup.append(str(error))
         if committed:
+            _release_owned(created)
             detail = (
                 "; cleanup incomplete: " + "; ".join(cleanup) if cleanup else ""
             )
@@ -587,4 +663,6 @@ def publish_transaction(
                 "manifest committed but release lock cleanup failed: "
                 + "; ".join(lock_cleanup)
             )
+    _release_owned(created)
+    _release_owned(private_created)
     return targets

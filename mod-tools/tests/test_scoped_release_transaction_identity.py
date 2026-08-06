@@ -181,17 +181,21 @@ class ScopedTransactionIdentityTest(InventoryCase):
                 " complete on this platform",
             )
 
+    @staticmethod
+    def owned_now(path: Path):
+        """Build an owned path the way the transaction does: created and pinned."""
+        created: list = []
+        scoped.transaction._write_exclusive(path, path.name.encode(), created)
+        return created[0]
+
     @unittest.skipIf(sys.platform == "win32", "POSIX dir_fd cleanup contract")
     def test_posix_cleanup_removes_only_the_owned_object(self):
         with tempfile.TemporaryDirectory() as td:
             target = Path(td) / "owned.bin"
-            target.write_bytes(b"owned")
             neighbour = Path(td) / "other.bin"
             neighbour.write_bytes(b"other")
-            owned = scoped.transaction._OwnedPath(
-                target,
-                scoped.transaction._object_identity(target.lstat()),
-            )
+            owned = self.owned_now(target)
+            self.assertIsNotNone(owned.descriptor)
 
             errors = scoped.transaction._remove_owned_posix((owned,))
 
@@ -200,14 +204,15 @@ class ScopedTransactionIdentityTest(InventoryCase):
             self.assertEqual(b"other", neighbour.read_bytes())
 
     @unittest.skipIf(sys.platform == "win32", "POSIX dir_fd cleanup contract")
-    def test_posix_cleanup_refuses_a_replacement_at_the_owned_name(self):
+    def test_posix_cleanup_refuses_a_replacement_that_reused_the_inode(self):
+        # The kernel hands a freed inode number straight back to the next file
+        # created in that filesystem, so a replacement at the same name usually
+        # carries the identical (st_dev, st_ino).  Only the descriptor retained
+        # since creation -- which keeps the original inode allocated -- can tell
+        # the two apart.
         with tempfile.TemporaryDirectory() as td:
             target = Path(td) / "owned.bin"
-            target.write_bytes(b"owned")
-            owned = scoped.transaction._OwnedPath(
-                target,
-                scoped.transaction._object_identity(target.lstat()),
-            )
+            owned = self.owned_now(target)
             foreign = b"foreign present before cleanup"
             target.unlink()
             target.write_bytes(foreign)
@@ -218,26 +223,37 @@ class ScopedTransactionIdentityTest(InventoryCase):
             self.assertEqual(foreign, target.read_bytes())
 
     @unittest.skipIf(sys.platform == "win32", "POSIX dir_fd cleanup contract")
+    def test_posix_cleanup_refuses_an_owned_path_that_was_never_pinned(self):
+        with tempfile.TemporaryDirectory() as td:
+            target = Path(td) / "owned.bin"
+            target.write_bytes(b"owned")
+            unpinned = scoped.transaction._OwnedPath(
+                target,
+                scoped.transaction._object_identity(target.lstat()),
+            )
+
+            errors = scoped.transaction._remove_owned_posix((unpinned,))
+
+            self.assertTrue(errors)
+            self.assertEqual(b"owned", target.read_bytes())
+
+    @unittest.skipIf(sys.platform == "win32", "POSIX dir_fd cleanup contract")
     def test_posix_cleanup_refuses_a_symlinked_parent_directory(self):
         with tempfile.TemporaryDirectory() as td:
             real = Path(td) / "real"
             real.mkdir()
             target = real / "owned.bin"
-            target.write_bytes(b"owned")
-            owned = scoped.transaction._OwnedPath(
-                target,
-                scoped.transaction._object_identity(target.lstat()),
-            )
+            owned = self.owned_now(target)
             link = Path(td) / "link"
             link.symlink_to(real, target_is_directory=True)
             through_link = scoped.transaction._OwnedPath(
-                link / "owned.bin", owned.object_id
+                link / "owned.bin", owned.object_id, owned.descriptor
             )
 
             errors = scoped.transaction._remove_owned_posix((through_link,))
 
             self.assertTrue(errors)
-            self.assertEqual(b"owned", target.read_bytes())
+            self.assertEqual(target.name.encode(), target.read_bytes())
 
     def test_versions_reject_leading_zero_segments(self):
         with self.assertRaisesRegex(scoped.archive.ArchiveError, "version"):

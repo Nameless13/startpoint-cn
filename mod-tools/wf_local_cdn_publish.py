@@ -244,11 +244,11 @@ def publish_local_311_edge(
             authority = next(item for item in private_owned if item.path == private)
             transaction._link_owned(authority, target, final_owned)
             cleanup = transaction._remove_owned((authority,))
+            private_owned.remove(authority)
             if cleanup:
                 raise LocalCdnPublishError(
                     "pending archive cleanup incomplete: " + "; ".join(cleanup)
                 )
-            private_owned.remove(authority)
             callback("after_archive")
         _sync(directories, parts)
         _verify(parts, targets, tuple(final_owned))
@@ -286,4 +286,6 @@ def publish_local_311_edge(
             + "; ".join(lock_cleanup)
         )
     transaction._fsync_directory(root)
+    transaction._release_owned(final_owned)
+    transaction._release_owned(private_owned)
     return LocalCdnPublishResult(digest, targets)
