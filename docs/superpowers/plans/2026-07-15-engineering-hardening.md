@@ -460,7 +460,7 @@ git commit -m "perf(admin): lazy-load routes and enforce bundle budget"
 1. `普通 文件.txt`：应通过；
 2. `角色资料/测试.md`：应通过；
 3. 文件名包含实际换行字符的文本文件：应被作为一个路径处理且通过；
-4. `含IP 中文.md`，内容为 `192.168.0.130`：应失败；
+4. `含IP 中文.md`，内容为 `192.168.99.99`：应失败；
 5. `assets/asset-patch/active/pinball-1.4.139-1.4.140-1-mod07150000.zip`，有效 ZIP 且 1–5 MiB：应通过；
 6. `assets/asset-patch/active/not-a-patch.zip`，同样大小：应失败；
 7. 合法命名但 ZIP 验证失败：应失败；

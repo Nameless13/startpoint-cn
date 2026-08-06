@@ -68,12 +68,12 @@ expect_pass "$repo" 'filename containing a newline is handled as one safe path'
 
 repo=$(new_repo newline_forbidden)
 newline_forbidden=$'private\naddress.txt'
-printf '192.168.0.130\n' > "$repo/$newline_forbidden"
+printf '192.168.99.99\n' > "$repo/$newline_forbidden"
 (cd "$repo" && git add -A)
 expect_fail "$repo" 'forbidden content is detected through a newline filename' '个人 IP'
 
 repo=$(new_repo private_ip)
-printf 'server=192.168.0.130\n' > "$repo/含IP 中文.md"
+printf 'server=192.168.99.99\n' > "$repo/含IP 中文.md"
 (cd "$repo" && git add -- '含IP 中文.md')
 expect_fail "$repo" 'private IP is rejected' '个人 IP'
 

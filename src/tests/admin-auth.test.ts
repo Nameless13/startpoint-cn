@@ -46,7 +46,7 @@ function sessionCookie(response: Awaited<ReturnType<FastifyInstance["inject"]>>)
 test("LAN binding rejects missing and weak admin tokens", () => {
     assert.throws(() => loadAdminAuthConfig({}, "0.0.0.0"), /CN_ADMIN_TOKEN/);
     assert.throws(
-        () => loadAdminAuthConfig({ CN_ADMIN_TOKEN: "too-short" }, "192.168.0.130"),
+        () => loadAdminAuthConfig({ CN_ADMIN_TOKEN: "too-short" }, "192.0.2.10"),
         /32 UTF-8 bytes/,
     );
 });
