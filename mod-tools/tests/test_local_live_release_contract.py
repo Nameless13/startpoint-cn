@@ -339,7 +339,7 @@ class LocalLiveReleaseContractTest(unittest.TestCase):
     @unittest.skipUnless(
         os.environ.get("WF_REAL_LOCAL_REPO"), "requires explicit local truth root"
     )
-    def test_real_baselines_attest_read_only_and_1_4_312_is_still_absent(self):
+    def test_real_baselines_attest_read_only_over_the_published_local_edge(self):
         import wf_mod_tool as core
         import wf_release_inventory as inventory
 
@@ -372,8 +372,33 @@ class LocalLiveReleaseContractTest(unittest.TestCase):
                     if old != new
                 ],
             )
-        with self.assertRaisesRegex(self.contract.InventoryError, "1.4.312"):
-            self.contract.require_release_artifacts(repo / ".cdn" / "cn", "1.4.312")
+        # The local compatibility edge has been published into this CDN, so the
+        # 1.4.311 baseline above is now resolved past a chain tail that already
+        # carries 1.4.312 -- and attestation still may not touch either tree.
+        artifacts = self.contract.require_release_artifacts(
+            repo / ".cdn" / "cn", "1.4.312"
+        )
+        self.assertEqual(
+            ["pinball-1.4.311-1.4.312-1-localsync0806.zip"],
+            [path.name for path in artifacts],
+        )
+        published = artifacts[0].read_bytes()
+        # Compare against this repository's own manifest, not the truth root's:
+        # the published archive and the committed one must be the same bytes.
+        manifest = json.loads(
+            (MOD_TOOLS.parent / "assets" / "asset-patch" / "manifest.json")
+            .read_text(encoding="utf-8")
+        )
+        expected = next(
+            record
+            for patch in manifest["patches"]
+            if patch["id"] == "local-live-compatibility"
+            for record in patch["archive_integrity"]
+        )
+        self.assertEqual(expected["size"], len(published))
+        self.assertEqual(
+            expected["sha256"], hashlib.sha256(published).hexdigest()
+        )
         for package, owner in (
             ("ginovi", "ginovi"),
             ("lafu_lunar_ny", "lafu_lunar_ny"),
