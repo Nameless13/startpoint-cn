@@ -42,10 +42,20 @@ class ArchivePart:
     blob: bytes
 
 
+@dataclass(frozen=True, slots=True)
+class _CanonicalEntry:
+    root: str
+    member_name: str
+    payload: bytes
+
+
 def _version(value: str) -> tuple[int, int, int]:
     if not isinstance(value, str) or VERSION_RE.fullmatch(value) is None:
         raise ArchiveError(f"invalid archive version: {value!r}")
-    return tuple(int(part) for part in value.split("."))  # type: ignore[return-value]
+    parts = value.split(".")
+    if any(str(int(part)) != part for part in parts):
+        raise ArchiveError(f"archive version is not canonical: {value!r}")
+    return tuple(int(part) for part in parts)  # type: ignore[return-value]
 
 
 def _compressed_size(payload: bytes) -> int:
@@ -115,6 +125,8 @@ def _verify_blob(
             bad = archive.testzip()
             if bad is not None:
                 raise ArchiveError(f"ZIP CRC failure: {bad}")
+        if _archive_blob(entries) != blob:
+            raise ArchiveError("ZIP byte representation is not canonical")
     except ArchiveError:
         raise
     except (OSError, zipfile.BadZipFile, RuntimeError) as error:
@@ -199,6 +211,7 @@ def attest_plan_parts(
         if part.root not in ROOT_PREFIXES:
             raise ArchiveError(f"archive part has invalid root: {part.root!r}")
         try:
+            canonical: list[_CanonicalEntry] = []
             with zipfile.ZipFile(io.BytesIO(part.blob)) as zipped:
                 infos = zipped.infolist()
                 names = [info.filename for info in infos]
@@ -227,11 +240,17 @@ def attest_plan_parts(
                     key = part.root, info.filename
                     if key in actual:
                         raise ArchiveError(f"archive member repeated across parts: {key}")
-                    actual[key] = zipped.read(info)
+                    payload = zipped.read(info)
+                    actual[key] = payload
+                    canonical.append(_CanonicalEntry(part.root, info.filename, payload))
                 if zipped.testzip() is not None:
                     raise ArchiveError(f"archive part failed CRC readback: {part.name}")
                 if zipped.comment != b"":
                     raise ArchiveError(f"archive part comment drift: {part.name}")
+            if _archive_blob(canonical) != part.blob:
+                raise ArchiveError(
+                    f"archive part byte representation is not canonical: {part.name}"
+                )
         except ArchiveError:
             raise
         except (OSError, zipfile.BadZipFile, RuntimeError) as error:

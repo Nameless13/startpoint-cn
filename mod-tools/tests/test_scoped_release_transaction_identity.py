@@ -1,0 +1,121 @@
+# -*- coding: utf-8 -*-
+"""Identity and canonical-byte regressions for scoped release transactions."""
+from __future__ import annotations
+
+import hashlib
+import sys
+import tempfile
+import unittest
+from dataclasses import replace
+from pathlib import Path
+from unittest import mock
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from release_inventory_support import InventoryCase
+
+import wf_scoped_release as scoped
+
+
+FILE_LOGICAL = "character/fixture/identity.bin"
+MANIFEST = b'{"cdn_version":"1.4.54","patches":[]}\n'
+
+
+class ScopedTransactionIdentityTest(InventoryCase):
+    def plan(self) -> scoped.EdgePlan:
+        raw = b"identity fixture"
+        contract = self.parse(self.payload([
+            self.file_member("owner", raw, logical_path=FILE_LOGICAL)
+        ]))
+        spec = scoped.EdgeSpec(
+            "1.4.311", "1.4.312", "identity0806", "identity-fixture",
+            "identity fixture", "identity fixture", "2026-08-06",
+        )
+        return scoped.build_edge_plan(
+            contract, {("common", FILE_LOGICAL): None}, lambda _member: raw, spec
+        )
+
+    @staticmethod
+    def repository(root: Path) -> tuple[Path, Path]:
+        active = root / "asset-patch" / "active"
+        active.mkdir(parents=True)
+        manifest = active.parent / "manifest.json"
+        manifest.write_bytes(MANIFEST)
+        return active, manifest
+
+    def publish(self, plan: scoped.EdgePlan, active: Path, manifest: Path, checkpoint=None):
+        return scoped.publish_archives_and_manifest(
+            (plan,), active, manifest,
+            expected_manifest_sha256=hashlib.sha256(MANIFEST).hexdigest(),
+            checkpoint=checkpoint,
+        )
+
+    def test_rollback_leaves_replacement_foreign_archive_and_retains_lock(self):
+        plan = self.plan()
+        with tempfile.TemporaryDirectory() as td:
+            active, manifest = self.repository(Path(td))
+            foreign = b"foreign replacement"
+
+            def replace_archive(phase: str) -> None:
+                if phase == "before_manifest":
+                    target = next(active.glob("*.zip"))
+                    target.unlink()
+                    target.write_bytes(foreign)
+
+            with self.assertRaisesRegex(scoped.ScopedReleaseError, "identity|rollback|lock"):
+                self.publish(plan, active, manifest, replace_archive)
+            target = active / plan.parts[0].name
+            self.assertEqual(foreign, target.read_bytes())
+            self.assertEqual(MANIFEST, manifest.read_bytes())
+            self.assertTrue((active.parent / ".wf-scoped-release.lock").is_file())
+            target.unlink()
+            (active.parent / ".wf-scoped-release.lock").unlink()
+
+    def test_link_success_followed_by_exception_is_discovered_and_cleaned(self):
+        plan = self.plan()
+        with tempfile.TemporaryDirectory() as td:
+            active, manifest = self.repository(Path(td))
+            real_link = scoped.transaction.os.link
+
+            def link_then_raise(source, target, **kwargs):
+                real_link(source, target, **kwargs)
+                raise OSError("injected ambiguous link result")
+
+            with mock.patch.object(
+                scoped.transaction.os, "link", side_effect=link_then_raise
+            ):
+                with self.assertRaisesRegex(
+                    scoped.ScopedReleaseError, "ambiguous|link"
+                ):
+                    self.publish(plan, active, manifest)
+            self.assertEqual([], list(active.iterdir()))
+            self.assertEqual(MANIFEST, manifest.read_bytes())
+            self.assertFalse((active.parent / ".wf-scoped-release.lock").exists())
+
+    def test_versions_reject_leading_zero_segments(self):
+        with self.assertRaisesRegex(scoped.archive.ArchiveError, "version"):
+            scoped.archive.build_parts(
+                (), roots=("common",), from_version="1.04.311",
+                to_version="1.4.312", tag="identity0806",
+                max_zip_bytes=scoped.CI_ZIP_CAP,
+            )
+
+    def test_zip_prefix_or_suffix_junk_is_not_a_canonical_archive(self):
+        plan = self.plan()
+        for label, blob in (
+            ("prefix", b"JUNK" + plan.parts[0].blob),
+            ("suffix", plan.parts[0].blob + b"JUNK"),
+        ):
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as td:
+                bad = scoped.EdgePlan(
+                    plan.spec, plan.entries, (replace(plan.parts[0], blob=blob),)
+                )
+                with self.assertRaisesRegex(
+                    scoped.ScopedReleaseError, "canonical|byte|ZIP"
+                ):
+                    scoped.stage_archives((bad,), Path(td) / "stage")
+
+
+if __name__ == "__main__":
+    unittest.main()

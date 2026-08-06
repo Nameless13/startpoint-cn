@@ -4,30 +4,30 @@
 from __future__ import annotations
 
 import hashlib
-import io
 import os
-import re
 import stat
 import tempfile
 import uuid
-import zipfile
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable
 
 import wf_scoped_release_archive as archive
-
-
-ARCHIVE_RE = re.compile(
-    r"^pinball-(\d+\.\d+\.\d+)-(\d+\.\d+\.\d+)-([1-9]\d*)-([a-z0-9]+)\.zip$"
+from wf_scoped_release_validation import (
+    TransactionError,
+    parts as _parts,
+    validate_blob as _validate_blob,
 )
-MEMBER_RE = {
-    root: re.compile(rf"^{re.escape(prefix)}[0-9a-f]{{2}}/[0-9a-f]{{38}}$")
-    for root, prefix in archive.ROOT_PREFIXES.items()
-}
 
 
-class TransactionError(RuntimeError):
-    """The filesystem transaction failed closed or retained its recovery lock."""
+class _UncertainLinkError(TransactionError):
+    """A link result cannot be attributed safely; retain the recovery lock."""
+
+
+@dataclass(frozen=True, slots=True)
+class _OwnedPath:
+    path: Path
+    object_id: tuple[int, int]
 
 
 def _absolute(path: Path) -> Path:
@@ -83,6 +83,10 @@ def _identity(metadata: os.stat_result) -> tuple[int, int, int, int]:
     )
 
 
+def _object_identity(metadata: os.stat_result) -> tuple[int, int]:
+    return metadata.st_dev, metadata.st_ino
+
+
 def _read_stable(path: Path, label: str) -> tuple[bytes, tuple[int, int, int, int]]:
     target = _assert_plain_ancestry(path, leaf="file")
     before = target.lstat()
@@ -105,81 +109,17 @@ def _read_stable(path: Path, label: str) -> tuple[bytes, tuple[int, int, int, in
     return b"".join(chunks), _identity(after)
 
 
-def _parts(plans: Iterable[object]) -> tuple[archive.ArchivePart, ...]:
-    flattened: list[archive.ArchivePart] = []
-    for plan in plans:
-        values = getattr(plan, "parts", None)
-        spec = getattr(plan, "spec", None)
-        if not isinstance(values, tuple) or any(
-            not isinstance(part, archive.ArchivePart) for part in values
-        ):
-            raise TransactionError("release plan contains invalid archive parts")
-        if [part.sequence for part in values] != list(range(1, len(values) + 1)):
-            raise TransactionError("release plan archive sequence is not contiguous")
-        if any(part.root not in archive.CLIENT_ROOTS for part in values):
-            raise TransactionError("release plan archive root is invalid")
-        roots = [archive.CLIENT_ROOTS.index(part.root) for part in values]
-        if roots != sorted(roots):
-            raise TransactionError("release plan archive roots are not canonical")
-        for part in values:
-            match = ARCHIVE_RE.fullmatch(part.name)
-            if match is None or int(match[3]) != part.sequence:
-                raise TransactionError(f"non-canonical archive filename: {part.name!r}")
-            if spec is not None and (
-                match[1] != getattr(spec, "from_version", None)
-                or match[2] != getattr(spec, "to_version", None)
-                or match[4] != getattr(spec, "tag", None)
-            ):
-                raise TransactionError(f"archive filename differs from edge spec: {part.name}")
-            _validate_blob(part, part.blob)
-        flattened.extend(values)
-    if len({part.name for part in flattened}) != len(flattened):
-        raise TransactionError("duplicate archive filename across release plans")
-    return tuple(flattened)
-
-
-def _validate_blob(part: archive.ArchivePart, blob: bytes) -> None:
-    if not isinstance(blob, bytes) or not blob or len(blob) > archive.CI_ZIP_CAP:
-        raise TransactionError(
-            f"archive exceeds final 5 MiB hard cap or is empty: {part.name}"
-        )
-    if part.root not in MEMBER_RE:
-        raise TransactionError(f"archive has invalid root: {part.root!r}")
-    try:
-        with zipfile.ZipFile(io.BytesIO(blob)) as zipped:
-            infos = zipped.infolist()
-            names = [info.filename for info in infos]
-            if not names or names != sorted(names) or len(names) != len(set(names)):
-                raise TransactionError(f"archive member set/order is invalid: {part.name}")
-            for info in infos:
-                if (
-                    MEMBER_RE[part.root].fullmatch(info.filename) is None
-                    or info.date_time != archive.ZIP_TIMESTAMP
-                    or info.compress_type != zipfile.ZIP_DEFLATED
-                    or info.create_system != 3
-                    or info.external_attr != archive.ZIP_MODE
-                    or info.flag_bits != 0
-                    or info.extra != b""
-                    or info.comment != b""
-                    or info.is_dir()
-                ):
-                    raise TransactionError(
-                        f"archive member path/metadata is invalid: {part.name}!{info.filename}"
-                    )
-            if zipped.comment != b"" or zipped.testzip() is not None:
-                raise TransactionError(f"archive CRC/comment validation failed: {part.name}")
-    except TransactionError:
-        raise
-    except (OSError, zipfile.BadZipFile, RuntimeError) as error:
-        raise TransactionError(f"invalid final archive {part.name}: {error}") from error
-
-
-def _write_exclusive(path: Path, payload: bytes, owned: list[Path]) -> None:
+def _write_exclusive(
+    path: Path, payload: bytes, owned: list[_OwnedPath]
+) -> None:
     _assert_plain_ancestry(path.parent, leaf="directory")
     with path.open("xb") as stream:
         # Record ownership immediately after exclusive creation.  Callers may then
         # retry cleanup without ever deleting a pre-existing foreign path.
-        owned.append(path)
+        metadata = os.fstat(stream.fileno())
+        if not stat.S_ISREG(metadata.st_mode):
+            raise TransactionError(f"exclusive output is not a regular file: {path}")
+        owned.append(_OwnedPath(path, _object_identity(metadata)))
         stream.write(payload)
         stream.flush()
         os.fsync(stream.fileno())
@@ -205,14 +145,91 @@ def _fsync_directory(path: Path) -> None:
         os.close(descriptor)
 
 
-def _remove(paths: Iterable[Path]) -> list[str]:
+def _remove_owned(paths: Iterable[_OwnedPath]) -> list[str]:
     errors: list[str] = []
-    for path in reversed(tuple(paths)):
+    for owned in reversed(tuple(paths)):
+        path = owned.path
         try:
-            path.unlink(missing_ok=True)
-        except OSError as error:
+            _assert_plain_ancestry(path.parent, leaf="directory")
+            try:
+                metadata = path.lstat()
+            except FileNotFoundError:
+                continue
+            if (
+                _is_reparse(path)
+                or not stat.S_ISREG(metadata.st_mode)
+                or _object_identity(metadata) != owned.object_id
+            ):
+                errors.append(f"{path}: owned identity changed; left untouched")
+                continue
+            path.unlink()
+        except (OSError, TransactionError) as error:
             errors.append(f"{path}: {error}")
     return errors
+
+
+def _remove_owned_directory(owned: _OwnedPath) -> list[str]:
+    path = owned.path
+    try:
+        _assert_plain_ancestry(path.parent, leaf="directory")
+        metadata = path.lstat()
+        if (
+            _is_reparse(path)
+            or not stat.S_ISDIR(metadata.st_mode)
+            or _object_identity(metadata) != owned.object_id
+        ):
+            return [f"{path}: owned directory identity changed; left untouched"]
+        path.rmdir()
+        return []
+    except (OSError, TransactionError) as error:
+        return [f"{path}: {error}"]
+
+
+def _probe_owned_at(path: Path, *, label: str) -> _OwnedPath | None:
+    target = _absolute(path)
+    _assert_plain_ancestry(target.parent, leaf="directory")
+    try:
+        metadata = target.lstat()
+    except FileNotFoundError:
+        return None
+    if _is_reparse(target) or not stat.S_ISREG(metadata.st_mode):
+        raise TransactionError(f"{label} is not a plain regular file")
+    return _OwnedPath(target, _object_identity(metadata))
+
+
+def _owned_at(path: Path, *, label: str) -> _OwnedPath:
+    owned = _probe_owned_at(path, label=label)
+    if owned is None:
+        raise TransactionError(f"{label} is missing: {path}")
+    return owned
+
+
+def _link_owned(
+    source: _OwnedPath, target: Path, created: list[_OwnedPath]
+) -> None:
+    try:
+        os.link(source.path, target, follow_symlinks=False)
+    except BaseException as error:
+        try:
+            linked = _probe_owned_at(target, label="ambiguous link target")
+        except (OSError, TransactionError) as probe_error:
+            raise _UncertainLinkError(
+                f"cannot prove ambiguous link outcome for {target}: {probe_error}"
+            ) from error
+        if linked is None:
+            raise
+        if linked.object_id != source.object_id:
+            raise _UncertainLinkError(
+                f"ambiguous link target identity changed; left untouched: {target}"
+            ) from error
+        created.append(linked)
+        raise
+    linked = _owned_at(target, label="linked archive")
+    if linked.object_id != source.object_id:
+        raise _UncertainLinkError(
+            f"linked archive identity differs from pending source: {target}"
+        )
+    created.append(linked)
 
 
 def stage_archives(plans: Iterable[object], staging_dir: Path) -> tuple[Path, ...]:
@@ -222,20 +239,20 @@ def stage_archives(plans: Iterable[object], staging_dir: Path) -> tuple[Path, ..
         raise TransactionError(f"staging directory already exists: {staging_dir}")
     _assert_plain_ancestry(staging_dir.parent, leaf="directory")
     staging_dir.mkdir(parents=False, exist_ok=False)
-    created: list[Path] = []
+    staging_owned = _OwnedPath(
+        staging_dir, _object_identity(staging_dir.lstat())
+    )
+    created: list[_OwnedPath] = []
     try:
         _assert_plain_ancestry(staging_dir, leaf="directory")
         for part in parts:
             target = staging_dir / part.name
             _write_exclusive(target, part.blob, created)
         _fsync_directory(staging_dir)
-        return tuple(created)
+        return tuple(item.path for item in created)
     except BaseException as error:
-        failures = _remove(created)
-        try:
-            staging_dir.rmdir()
-        except OSError as cleanup_error:
-            failures.append(f"{staging_dir}: {cleanup_error}")
+        failures = _remove_owned(created)
+        failures.extend(_remove_owned_directory(staging_owned))
         if failures:
             raise TransactionError(
                 "staging cleanup incomplete: " + "; ".join(failures)
@@ -288,12 +305,12 @@ def publish_transaction(
         for index, _part in enumerate(parts, start=1)
     )
     callback = checkpoint or (lambda _phase: None)
-    created: list[Path] = []
-    private_created: list[Path] = []
-    temporary: Path | None = None
+    created: list[_OwnedPath] = []
+    private_created: list[_OwnedPath] = []
+    temporary: _OwnedPath | None = None
     lock_created = False
     committed = False
-    lock_owned: list[Path] = []
+    lock_owned: list[_OwnedPath] = []
     try:
         _write_exclusive(
             lock, hashlib.sha256(manifest_preimage).digest(), lock_owned
@@ -304,13 +321,20 @@ def publish_transaction(
         _fsync_directory(active)
 
         for part, pending, target in zip(parts, private, targets, strict=True):
-            os.link(pending, target, follow_symlinks=False)
-            created.append(target)
+            pending_owned = next(
+                item for item in private_created if item.path == pending
+            )
+            _link_owned(pending_owned, target, created)
             raw, _file_id = _read_stable(target, f"linked archive {part.name}")
             if raw != part.blob:
                 raise TransactionError(f"linked archive readback drift: {part.name}")
-            pending.unlink()
-            private_created.remove(pending)
+            pending_cleanup = _remove_owned((pending_owned,))
+            if pending_cleanup:
+                raise TransactionError(
+                    "pending archive cleanup incomplete: "
+                    + "; ".join(pending_cleanup)
+                )
+            private_created.remove(pending_owned)
             callback("after_archive")
         _fsync_directory(active)
         archive_ids = _verify_final(parts, targets)
@@ -327,28 +351,37 @@ def publish_transaction(
         descriptor, temporary_name = tempfile.mkstemp(
             prefix=f".{manifest.name}.", suffix=".tmp", dir=manifest.parent
         )
-        temporary = Path(temporary_name)
+        temporary_path = Path(temporary_name)
+        temporary = _OwnedPath(
+            temporary_path, _object_identity(os.fstat(descriptor))
+        )
         with os.fdopen(descriptor, "wb") as stream:
-            os.chmod(temporary, stat.S_IMODE(manifest.stat().st_mode))
+            os.chmod(temporary_path, stat.S_IMODE(manifest.stat().st_mode))
             stream.write(manifest_output)
             stream.flush()
             os.fsync(stream.fileno())
-        staged_manifest, _staged_id = _read_stable(temporary, "staged manifest")
+        staged_manifest, _staged_id = _read_stable(
+            temporary_path, "staged manifest"
+        )
         if staged_manifest != manifest_output:
             raise TransactionError("manifest staging readback drift")
         _verify_final(parts, targets, archive_ids)
         current_manifest, current_id = _read_stable(manifest, "manifest final preimage")
         if current_manifest != manifest_preimage or current_id != manifest_id:
             raise TransactionError("manifest changed before atomic replace")
-        os.replace(temporary, manifest)
+        os.replace(temporary_path, manifest)
         temporary = None
         committed = True
         _fsync_directory(manifest.parent)
         callback("after_manifest")
     except BaseException as error:
         lock_created = lock_created or bool(lock_owned)
-        cleanup = _remove(([temporary] if temporary is not None else []))
-        cleanup.extend(_remove(private_created))
+        cleanup = _remove_owned(
+            ([temporary] if temporary is not None else [])
+        )
+        cleanup.extend(_remove_owned(private_created))
+        if isinstance(error, _UncertainLinkError):
+            cleanup.append(str(error))
         if committed:
             detail = (
                 "; cleanup incomplete: " + "; ".join(cleanup) if cleanup else ""
@@ -358,7 +391,7 @@ def publish_transaction(
                 + detail
             ) from error
         if not committed:
-            cleanup.extend(_remove(created))
+            cleanup.extend(_remove_owned(created))
             try:
                 _fsync_directory(active)
             except OSError as cleanup_error:
@@ -368,19 +401,19 @@ def publish_transaction(
                 "rollback incomplete; release lock retained: " + "; ".join(cleanup)
             ) from error
         if lock_created:
-            try:
-                lock.unlink()
-                lock_created = False
-            except OSError as cleanup_error:
+            lock_cleanup = _remove_owned(lock_owned)
+            if lock_cleanup:
                 raise TransactionError(
-                    f"release lock retained after failure: {cleanup_error}"
+                    "release lock retained after failure: "
+                    + "; ".join(lock_cleanup)
                 ) from error
+            lock_created = False
         raise
     if lock_created:
-        try:
-            lock.unlink()
-        except OSError as error:
+        lock_cleanup = _remove_owned(lock_owned)
+        if lock_cleanup:
             raise TransactionError(
-                f"manifest committed but release lock cleanup failed: {error}"
-            ) from error
+                "manifest committed but release lock cleanup failed: "
+                + "; ".join(lock_cleanup)
+            )
     return targets
