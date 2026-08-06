@@ -9,6 +9,7 @@
     "typecheck": "tsc --noEmit",
     "test:node": "npm run build:server && node scripts/run-node-tests.mjs",
     "test:python": "python -m unittest discover -s mod-tools/tests -p \"test_*.py\"",
+    "verify:local-release": "python -X utf8 mod-tools/wf_local_release_verify.py",
     "css": "npx tailwindcss -i ./src/input.css -o ./web/public/tailwind.css",
     "css:watch": "npx tailwindcss -i ./src/input.css -o ./web/public/tailwind.css --watch --poll",
     "dev": "npm run build && node --env-file=.env out/server.js",
@@ -26,7 +27,7 @@
     "test:launcher:windows": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/tests/test-start-cn.ps1",
     "test:launcher:linux": "node scripts/run-bash.mjs scripts/tests/test-start-cn-sh.sh",
     "test:launcher": "node scripts/run-launcher-tests.mjs",
-    "verify": "npm run typecheck && npm run test:node && npm run typecheck:admin && npm run build:admin && npm run test:python"
+    "verify": "npm run typecheck && npm run test:node && npm run typecheck:admin && npm run build:admin && npm run test:python && npm run verify:local-release"
   },
   "author": "",
   "license": "GPL-3.0-or-later",

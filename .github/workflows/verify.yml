@@ -81,6 +81,10 @@ jobs:
       - run: python -m pip install --upgrade pip
       - run: python -m pip install -r mod-tools/requirements.txt
       - run: python -m unittest discover -s mod-tools/tests -p "test_*.py"
+      # 只用仓库里已提交的东西验回执:合同、9 个 ZIP、manifest、服务端数据。
+      # 不碰 .cdn、不碰本地真值根——克隆下来的人跑的就是这一条。
+      - name: Verify the committed local-live release receipt
+        run: npm run verify:local-release
       - shell: powershell
         run: ./scripts/tests/test-start-cn.ps1
 
@@ -107,7 +111,10 @@ jobs:
           python -m unittest
           tests.test_scoped_release_transaction_identity
           tests.test_scoped_release_safety
+          tests.test_scoped_release_ordering
           tests.test_local_cdn_publish
           tests.test_local_scoped_release
           tests.test_local_release_receipt
           tests.test_local_live_release_contract
+      - name: Verify the committed local-live release receipt on POSIX
+        run: python -X utf8 mod-tools/wf_local_release_verify.py
