@@ -1,4 +1,5 @@
-import { existsSync, readdirSync, statSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 
 import {
@@ -240,6 +241,22 @@ function archiveFromDisk(
             size: stats.size,
             sha256: "",
             source,
+        };
+    } catch {
+        return null;
+    }
+}
+
+
+function archiveIntegrityFromDisk(
+    disk: string,
+): { size: number; sha256: string } | null {
+    try {
+        const raw = readFileSync(disk);
+        if (raw.length <= 0) return null;
+        return {
+            size: raw.length,
+            sha256: createHash("sha256").update(raw).digest("hex"),
         };
     } catch {
         return null;
@@ -500,8 +517,9 @@ export function buildReleaseGraph(input: ReleaseGraphInput): ReleaseGraphSnapsho
             archive: ReleaseArchive;
         }> = [];
         for (const declared of entry.archives) {
+            const disk = path.join(activeDirectory, declared.name);
             const archive = archiveFromDisk(
-                path.join(activeDirectory, declared.name),
+                disk,
                 "patch",
                 `asset-patch/active/${declared.name}`,
                 "asset-patch:active",
@@ -514,6 +532,23 @@ export function buildReleaseGraph(input: ReleaseGraphInput): ReleaseGraphSnapsho
                 );
                 pending.length = 0;
                 break;
+            }
+            if (declared.integrity !== undefined) {
+                const actual = archiveIntegrityFromDisk(disk);
+                if (
+                    actual === null
+                    || actual.size !== declared.integrity.size
+                    || actual.sha256 !== declared.integrity.sha256
+                ) {
+                    issues.push(
+                        `asset-patch manifest entry ${entry.id} integrity mismatch: `
+                        + declared.name,
+                    );
+                    pending.length = 0;
+                    break;
+                }
+                archive.size = actual.size;
+                archive.sha256 = actual.sha256;
             }
             pending.push({
                 from: declared.from,

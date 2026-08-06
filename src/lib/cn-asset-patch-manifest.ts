@@ -5,6 +5,13 @@ import path from "node:path";
 const VERSION_RE = /^\d+\.\d+\.\d+$/;
 const TOKEN_RE = /^[a-z0-9][a-z0-9_-]*$/;
 const ARCHIVE_RE = /^pinball-(\d+\.\d+\.\d+)-(\d+\.\d+\.\d+)-([1-9]\d*)-(.+)\.zip$/;
+const SHA256_RE = /^[0-9a-f]{64}$/;
+
+
+export interface DeclaredPatchArchiveIntegrity {
+    size: number;
+    sha256: string;
+}
 
 
 export interface DeclaredPatchArchive {
@@ -12,6 +19,7 @@ export interface DeclaredPatchArchive {
     from: string;
     to: string;
     seq: number;
+    integrity?: DeclaredPatchArchiveIntegrity;
 }
 
 export interface DeclaredPatchEntry {
@@ -136,6 +144,46 @@ export function readDeclaredPatchManifest(assetPatchRoot: string): DeclaredPatch
         if (malformed) {
             issues.push(`asset-patch manifest patch ${id} has invalid archive names`);
             continue;
+        }
+
+        const rawIntegrity = patch.archive_integrity;
+        if (rawIntegrity !== undefined) {
+            if (!Array.isArray(rawIntegrity) || rawIntegrity.length !== archives.length) {
+                issues.push(
+                    `asset-patch manifest patch ${id} archive_integrity must exactly cover chain`,
+                );
+                continue;
+            }
+            for (const [archiveIndex, rawItem] of rawIntegrity.entries()) {
+                if (typeof rawItem !== "object" || rawItem === null || Array.isArray(rawItem)) {
+                    malformed = true;
+                    break;
+                }
+                const integrity = rawItem as Record<string, unknown>;
+                const size = integrity.size;
+                const sha256 = integrity.sha256;
+                if (
+                    integrity.name !== archives[archiveIndex].name
+                    || typeof size !== "number"
+                    || !Number.isSafeInteger(size)
+                    || size <= 0
+                    || typeof sha256 !== "string"
+                    || !SHA256_RE.test(sha256)
+                ) {
+                    malformed = true;
+                    break;
+                }
+                archives[archiveIndex] = {
+                    ...archives[archiveIndex],
+                    integrity: { size, sha256 },
+                };
+            }
+            if (malformed) {
+                issues.push(
+                    `asset-patch manifest patch ${id} has invalid archive_integrity`,
+                );
+                continue;
+            }
         }
 
         const edgeOrder: string[] = [];

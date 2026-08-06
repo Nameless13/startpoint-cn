@@ -224,6 +224,17 @@ function writePatchManifest(
 }
 
 
+function patchIntegrity(
+    f: GraphFixture,
+    names: readonly string[],
+): Array<{ name: string; size: number; sha256: string }> {
+    return names.map(name => {
+        const raw = readFileSync(path.join(f.assetPatchRoot, "active", name));
+        return { name, size: raw.length, sha256: sha256(raw) };
+    });
+}
+
+
 interface CharacterOptions {
     corruptRelease?: number;
     missingRelease?: number;
@@ -613,6 +624,72 @@ test("asset-patch entry is invisible until every declared archive exists", () =>
         const edge = committed.edges.find(item => item.to === "1.4.312");
         assert.ok(edge);
         assert.deepEqual(edge.archives.map(item => item.seq), [1, 2]);
+    } finally {
+        f.cleanup();
+    }
+});
+
+
+test("asset-patch integrity mismatch hides the entire manifest entry", () => {
+    const f = fixture();
+    try {
+        writeLegacy(f, "1.4.54", "1.4.277", "common", "public-main");
+        const first = writeSequencedPatch(
+            f, "1.4.277", "1.4.312", 1, "integrity-entry",
+        );
+        const second = writeSequencedPatch(
+            f, "1.4.277", "1.4.312", 2, "integrity-entry",
+        );
+        const chain = [first, second];
+        writePatchManifest(f, [{
+            id: "integrity-entry",
+            type: "patch",
+            enabled: true,
+            depends_on: "1.4.277",
+            version: "1.4.312",
+            chain,
+            archive_integrity: patchIntegrity(f, chain),
+        }]);
+
+        const committed = build(f, "1.4.54");
+        assert.equal(committed.tailVersion, "1.4.312");
+
+        const target = path.join(f.assetPatchRoot, "active", second);
+        const tampered = Buffer.from(readFileSync(target));
+        tampered[0] ^= 0xff;
+        writeFileSync(target, tampered);
+        const rejected = build(f, "1.4.54");
+        assert.equal(rejected.tailVersion, "1.4.277");
+        assert.equal(rejected.edges.some(edge => edge.to === "1.4.312"), false);
+        assert.match(rejected.issues.join("\n"), /integrity.*mismatch|sha256/i);
+    } finally {
+        f.cleanup();
+    }
+});
+
+
+test("archive_integrity must cover the declared chain exactly", () => {
+    const f = fixture();
+    try {
+        const first = writeSequencedPatch(
+            f, "1.4.0", "1.4.2", 1, "integrity-coverage",
+        );
+        const second = writeSequencedPatch(
+            f, "1.4.0", "1.4.2", 2, "integrity-coverage",
+        );
+        writePatchManifest(f, [{
+            id: "integrity-coverage",
+            type: "patch",
+            enabled: true,
+            depends_on: "1.4.0",
+            version: "1.4.2",
+            chain: [first, second],
+            archive_integrity: patchIntegrity(f, [first]),
+        }]);
+
+        const graph = build(f, "1.4.0");
+        assert.equal(graph.tailVersion, "1.4.0");
+        assert.match(graph.issues.join("\n"), /archive_integrity/i);
     } finally {
         f.cleanup();
     }
