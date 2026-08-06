@@ -107,8 +107,17 @@ def _server_members(
         identity = member.logical_path, key
         if identity in character:
             raise MigrationError(f"duplicate server migration {member.logical_path}:{key}")
+        before, after = member.preimage, member.terminal
+        if (
+            not isinstance(before, dict) or set(before) != {key}
+            or not isinstance(after, dict) or set(after) != {key}
+        ):
+            raise MigrationError(
+                f"server migration wrapper is not exact: {member.logical_path}:{key}"
+            )
         character[identity] = ServerRowSpec(
-            member.logical_path, key, member.preimage_sha256, member.terminal_sha256,
+            member.logical_path, key,
+            sha256(canonical(before[key])), sha256(canonical(after[key])),
         )
     expected = {
         (relative, key)
