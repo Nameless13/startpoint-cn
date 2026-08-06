@@ -42,7 +42,9 @@ def manifest_blob(value: object) -> bytes:
     return (json.dumps(value, ensure_ascii=False, indent=1) + "\n").encode("utf-8")
 
 
-def zip_blob(member_payloads: list[tuple[str, bytes]]) -> bytes:
+def zip_blob(
+    member_payloads: list[tuple[str, bytes]], *, compresslevel: int = 9
+) -> bytes:
     output = io.BytesIO()
     with zipfile.ZipFile(output, "w") as archive:
         for name, payload in member_payloads:
@@ -50,7 +52,10 @@ def zip_blob(member_payloads: list[tuple[str, bytes]]) -> bytes:
             info.compress_type = zipfile.ZIP_DEFLATED
             info.create_system = 3
             info.external_attr = (stat.S_IFREG | 0o644) << 16
-            archive.writestr(info, payload, compress_type=zipfile.ZIP_DEFLATED, compresslevel=9)
+            archive.writestr(
+                info, payload,
+                compress_type=zipfile.ZIP_DEFLATED, compresslevel=compresslevel,
+            )
     return output.getvalue()
 
 
@@ -61,7 +66,8 @@ def reseal(value: dict[str, object]) -> bytes:
 
 
 class ReceiptFixture:
-    def __init__(self):
+    def __init__(self, compresslevel: int = 9):
+        self.compresslevel = compresslevel
         self.old_a, self.old_b = b"old-a", b"old-b"
         self.new_a, self.new_b = b"new-a", b"new-b"
         self.key_a = ("common", "fixture/a.bin")
@@ -196,8 +202,11 @@ class ReceiptFixture:
             (receipt.archive_member_name(*self.key_a), self.new_a),
             (receipt.archive_member_name(*self.key_b), self.new_b),
             (receipt.archive_member_name(*self.key_table), self.table_output_277),
-        ])
-        blob311 = zip_blob([(receipt.archive_member_name(*self.key_b), self.new_b)])
+        ], compresslevel=self.compresslevel)
+        blob311 = zip_blob(
+            [(receipt.archive_member_name(*self.key_b), self.new_b)],
+            compresslevel=self.compresslevel,
+        )
         self.edges = (
             receipt.EdgeEvidence(
                 "1.4.277", "1.4.312", "fixture-277", "fixture277",
@@ -356,6 +365,65 @@ class LocalReleaseReceiptTest(unittest.TestCase):
             server_files=fx.server_files,
         )
         self.assertEqual((2, 3, 3), (report.edge_count, report.path_count_per_edge, report.claim_count_per_edge))
+
+    def test_verifier_does_not_depend_on_the_local_deflate_implementation(self):
+        # The verifier used to re-deflate every member and demand the bytes
+        # come back identical, which made a receipt verifiable only on a
+        # machine whose zlib matched the publisher's -- green locally on
+        # Python 3.14, red on CI's 3.11.  Archives compressed at a different
+        # level are byte-different but structurally identical, and must verify.
+        fx = ReceiptFixture(compresslevel=1)
+        raw = receipt.build_receipt(
+            fx.context, fx.policy,
+            terminal_sources=fx.terminal_sources, edges=fx.edges,
+            manifest_preimage=fx.preimage, manifest_output=fx.manifest,
+            server_files=fx.server_files,
+        )
+        blobs = fx.archive_blobs()
+        self.assertNotEqual(
+            blobs, ReceiptFixture(compresslevel=9).archive_blobs()
+        )
+
+        report = receipt.verify_receipt(
+            fx.context, fx.policy, raw,
+            archive_blobs=blobs, manifest_raw=fx.manifest,
+            server_files=fx.server_files,
+        )
+
+        self.assertEqual((2, 3, 3), (
+            report.edge_count,
+            report.path_count_per_edge,
+            report.claim_count_per_edge,
+        ))
+
+    def test_verifier_rejects_bytes_hidden_outside_the_declared_members(self):
+        fx = ReceiptFixture()
+        raw = receipt.build_receipt(
+            fx.context, fx.policy,
+            terminal_sources=fx.terminal_sources, edges=fx.edges,
+            manifest_preimage=fx.preimage, manifest_output=fx.manifest,
+            server_files=fx.server_files,
+        )
+        value = receipt.parse_receipt(raw)
+        blobs = fx.archive_blobs()
+        target = next(iter(blobs))
+        padded = b"\x00" * 8 + blobs[target]
+        record = next(
+            archive
+            for edge in value["edges"] for archive in edge["archives"]
+            if archive["path"] == target
+        )
+        record["size"] = len(padded)
+        record["sha256"] = sha(padded)
+
+        with self.assertRaisesRegex(
+            receipt.ReceiptError, "gap or overlap|trailing, hidden"
+        ):
+            receipt.verify_receipt(
+                fx.context, fx.policy, reseal(value),
+                archive_blobs={**blobs, target: padded},
+                manifest_raw=fx.manifest, server_files=fx.server_files,
+            )
 
     def test_noop_omission_uses_content_claim_not_baseline_owner_label(self):
         fx = ReceiptFixture()
@@ -560,7 +628,9 @@ class LocalReleaseReceiptTest(unittest.TestCase):
         archive_record["sha256"] = sha(junk)
         value.pop("receipt_sha256")
         value["receipt_sha256"] = sha(receipt.canonical_receipt(value))
-        with self.assertRaisesRegex(receipt.ReceiptError, "canonical byte-for-byte"):
+        with self.assertRaisesRegex(
+            receipt.ReceiptError, "does not end with its central directory"
+        ):
             receipt.verify_receipt(
                 fx.context, fx.policy, receipt.canonical_receipt(value),
                 archive_blobs={**archives, first: junk},

@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import io
 import json
+import struct
 import sys
 import zipfile
 from pathlib import Path
@@ -37,6 +38,68 @@ def _verify_contracts(context: model.ReleaseContext, value: object) -> None:
     } for binding in context.contract_bindings]
     if value != expected:
         raise model.ReceiptError("contract hash/id binding mismatch")
+
+
+def _assert_dense_layout(
+    blob: bytes, infos: list[zipfile.ZipInfo], path: str
+) -> None:
+    """Prove the archive is exactly its declared members, with nothing hidden.
+
+    This replaces a re-deflate-and-compare.  That comparison tied verification
+    to the verifier's own zlib build: the same receipt verified on the machine
+    that published it and failed everywhere else, which is the opposite of what
+    an offline receipt is for.  (It did exactly that -- green on Python 3.14
+    locally, "archive is not canonical byte-for-byte" on CI's 3.11.)
+
+    What the comparison was really standing in for is that no bytes exist
+    outside the declared members: no prefix, no padding between entries, no
+    appended data, no second central directory.  Check that structurally.
+    Every entry's metadata, payload digest and CRC is verified by the caller,
+    so a dense layout plus those checks pins the whole file.
+    """
+    position = 0
+    for info in infos:
+        if info.header_offset != position:
+            raise model.ReceiptError(
+                f"archive has a gap or overlap before {info.filename}: {path}"
+            )
+        # flag_bits == 0 and extra == b"" are enforced by the caller, so the
+        # local header is exactly 30 bytes plus the name, with no descriptor.
+        position += 30 + len(info.filename.encode("utf-8")) + info.compress_size
+    directory_offset = position
+    for info in infos:
+        position += (
+            46
+            + len(info.filename.encode("utf-8"))
+            + len(info.extra)
+            + len(info.comment)
+        )
+    directory_size = position - directory_offset
+
+    if len(blob) < 22:
+        raise model.ReceiptError(f"archive is too short to hold a directory: {path}")
+    end = blob[-22:]
+    if end[:4] != b"PK\x05\x06":
+        raise model.ReceiptError(
+            f"archive does not end with its central directory: {path}"
+        )
+    (
+        disk, directory_disk, disk_entries, total_entries,
+        recorded_size, recorded_offset, comment_length,
+    ) = struct.unpack("<HHHHIIH", end[4:])
+    if (
+        disk
+        or directory_disk
+        or comment_length
+        or disk_entries != len(infos)
+        or total_entries != len(infos)
+        or recorded_offset != directory_offset
+        or recorded_size != directory_size
+        or directory_offset + directory_size + 22 != len(blob)
+    ):
+        raise model.ReceiptError(
+            f"archive has trailing, hidden, or misdeclared bytes: {path}"
+        )
 
 
 def _read_zip_record(
@@ -73,11 +136,8 @@ def _read_zip_record(
         raise model.ReceiptError(f"archive size or sha256 mismatch: {path}")
     payloads: dict[tuple[str, str], bytes] = {}
     members: list[dict[str, object]] = []
-    rebuilt = io.BytesIO()
     try:
-        with zipfile.ZipFile(io.BytesIO(blob)) as zipped, zipfile.ZipFile(
-            rebuilt, "w"
-        ) as canonical_zip:
+        with zipfile.ZipFile(io.BytesIO(blob)) as zipped:
             infos = zipped.infolist()
             names = [info.filename for info in infos]
             if not names or names != sorted(names) or len(names) != len(set(names)):
@@ -99,16 +159,6 @@ def _read_zip_record(
                     )
                 payload = zipped.read(info)
                 payloads[(cast(str, root), info.filename)] = payload
-                canonical_info = zipfile.ZipInfo(info.filename, model.ZIP_TIMESTAMP)
-                canonical_info.compress_type = zipfile.ZIP_DEFLATED
-                canonical_info.create_system = 3
-                canonical_info.external_attr = model.ZIP_MODE
-                canonical_info.extra = b""
-                canonical_info.comment = b""
-                canonical_zip.writestr(
-                    canonical_info, payload,
-                    compress_type=zipfile.ZIP_DEFLATED, compresslevel=9,
-                )
                 members.append({
                     "name": info.filename,
                     "size": len(payload),
@@ -116,14 +166,13 @@ def _read_zip_record(
                 })
             if zipped.comment or zipped.testzip() is not None:
                 raise model.ReceiptError(f"archive CRC/comment drift: {path}")
+            _assert_dense_layout(blob, infos, cast(str, path))
     except model.ReceiptError:
         raise
     except (OSError, zipfile.BadZipFile, RuntimeError) as error:
         raise model.ReceiptError(f"cannot read archive {path}: {error}") from error
     if members != record["members"]:
         raise model.ReceiptError(f"archive member evidence mismatch: {path}")
-    if rebuilt.getvalue() != blob:
-        raise model.ReceiptError(f"archive is not canonical byte-for-byte: {path}")
     return payloads
 
 
