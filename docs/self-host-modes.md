@@ -55,7 +55,7 @@ cd starpoint-cn && npm install
 ### 4. 打你自己的客户端(**五合一补丁**)
 
 **推荐路线(服主/新手都走这条):** 下载
-[`WorldFlipper-abyss-v2.apk`](https://github.com/kuronzzhan-droid/startpoint-cn-mod-tools/releases/download/v2.0-threechar/WorldFlipper-abyss-v2.apk)
+[`WorldFlipper-abyss-v2.apk`](https://github.com/kuronzzhan-droid/startpoint-cn/releases/download/client-base-v2.0/WorldFlipper-abyss-v2.apk)
 作为五合一基座,确认大小 `139714293` 字节、SHA256
 `9b539c210a80d76856ddbdf67e426746c020e9b389f78a63771a750327608772`,然后照
 [`client-patch/repoint-apk/给服主的重指向指南.md`](../client-patch/repoint-apk/给服主的重指向指南.md)
@@ -126,7 +126,7 @@ python -X utf8 client-patch/dual-form-v1/build_patch.py \
 1. **换服务端代码**:`git remote add kuron https://github.com/kuronzzhan-droid/startpoint-cn.git && git fetch kuron && git checkout -b release/modes-20260714 kuron/release/modes-20260714`,然后 `npm install`、重新构建、重启。**数据库零迁移**——本分支不改表结构,原 `.database/` 和全部玩家存档直接沿用。
 2. **数据自动下发**:服务端 masterdata 和客户端增量链都随分支到手(见步骤 2),重启后自动 serve。base CDN 须完整到官方链尾 1.4.54;仓库桥接包会从 1.4.54 继续推进到链尾,重启游戏即触发下载。
 3. **重打客户端(唯一的人工大步)**:按步骤 4 打**五合一**,②重定向填你们**已有的**服务器地址。存量服的旧客户端只有①②——缺③=深渊武器装上不生效,缺④=赛瑞斯特殊演出必崩,缺⑤=杰拉德/基诺维等像素在角色页、队伍格或战斗里异常放大(不崩)。
-4. **换包与账号**:新 APK 签名与旧包不同时玩家须卸载重装,**本地客户端身份会被抹掉、下次登录开新号**;服主可在管理后台按 device_id 把老存档重绑,或重打时沿用旧包同一个 keystore(可覆盖安装,身份保留)。**免 FFDec 快路**:`client-patch/repoint-apk/repoint_build.py` 拿已发布的 v2.0 五合一整合包只换服务器指向并重签(基座 APK 在 [startpoint-cn-mod-tools Releases](https://github.com/kuronzzhan-droid/startpoint-cn-mod-tools/releases),双补丁齐全)。**全员换完包再发角色**——数据与客户端补丁必须配套。
+4. **换包与账号**:新 APK 签名与旧包不同时玩家须卸载重装,**本地客户端身份会被抹掉、下次登录开新号**;服主可在管理后台按 device_id 把老存档重绑,或重打时沿用旧包同一个 keystore(可覆盖安装,身份保留)。**免 FFDec 快路**:`client-patch/repoint-apk/repoint_build.py` 拿已发布的 v2.0 五合一整合包只换服务器指向并重签(基座 APK 在[本仓 Releases](https://github.com/kuronzzhan-droid/startpoint-cn/releases/tag/client-base-v2.0),五层补丁齐全)。**全员换完包再发角色**——数据与客户端补丁必须配套。
 5. **发角色 + 验证**:同步骤 5/6。
 
 ### 通用桥接:玩家客户端卡在任意版本 V(接不上增量链)

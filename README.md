@@ -10,7 +10,7 @@
 | 你是谁 | 需要什么 |
 |---|---|
 | **想进别人的服玩** | 不用下载本仓库。只向服主要他**按本服地址重签的完整五合一 APK**和账号说明；不要混用旧 APK。角色/模式资源由所连接服务器下发到 1.4.312 |
-| **想自己开服**(玩全部内容,含八位自制/改造角色) | **三步**:① 下载 [deploy.ps1](deploy.ps1) 运行(自动装 Git/Node → clone → 构建 → 起服 → 自检)→ ② 自备基础 CDN ~11GB 放入 `.cdn\cn\`(唯一手工环节,脚本会指引)→ ③ 按 [保姆级部署攻略](docs/部署攻略.md) 下载并校验[完整五合一基座 APK](https://github.com/kuronzzhan-droid/startpoint-cn-mod-tools/releases/download/v2.0-threechar/WorldFlipper-abyss-v2.apk),只改成自己的服务器地址后重签。技术参考/存量服升级/救援见 [docs/self-host-modes.md](docs/self-host-modes.md);mod 增量内容(1.4.54→**1.4.312** 现役态)已随仓库自带,clone 即得 |
+| **想自己开服**(玩全部内容,含八位自制/改造角色) | **三步**:① 下载 [deploy.ps1](deploy.ps1) 运行(自动装 Git/Node → clone → 构建 → 起服 → 自检)→ ② 自备基础 CDN ~11GB 放入 `.cdn\cn\`(唯一手工环节,脚本会指引)→ ③ 按 [保姆级部署攻略](docs/部署攻略.md) 下载并校验[完整五合一基座 APK](https://github.com/kuronzzhan-droid/startpoint-cn/releases/download/client-base-v2.0/WorldFlipper-abyss-v2.apk),只改成自己的服务器地址后重签。技术参考/存量服升级/救援见 [docs/self-host-modes.md](docs/self-host-modes.md);mod 增量内容(1.4.54→**1.4.312** 现役态)已随仓库自带,clone 即得 |
 | **想改数据 / 做自己的 mod** | 数据修改工具链:[mod-tools/](mod-tools/)(独立仓 [startpoint-cn-mod-tools](https://github.com/kuronzzhan-droid/startpoint-cn-mod-tools),带全套文档与《新角色制作心得》) |
 
 ## 功能状态
