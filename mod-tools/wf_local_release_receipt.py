@@ -68,6 +68,7 @@ class BaselineDescriptor:
     sha256: str | None
     writer: str | None
     archive_member: str | None
+    unclaimed_sha256: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,6 +91,9 @@ class ReleasePolicy:
     server_member_count: int
     client_migration_count: int
     contract_ids: Mapping[str, str]
+    manifest_preimage_sha256: str
+    manifest_cdn_version: str
+    manifest_preimage_patch_count: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,6 +137,9 @@ LOCAL_POLICY = ReleasePolicy(
     18,
     1,
     LOCAL_CONTRACT_IDS,
+    "8c828497f8fd40a6cf7093001058d0f1c9f1a928e6feb71d48ff0cae4fe8a948",
+    "1.4.54",
+    13,
 )
 
 
@@ -253,6 +260,7 @@ def load_local_context(contract_dir: Path) -> ReleaseContext:
                 None if evidence is None else evidence.sha256,
                 None if evidence is None else evidence.writer,
                 None if evidence is None else evidence.archive_member,
+                None if evidence is None else evidence.unclaimed_sha256,
             )
     return ReleaseContext(
         bundle.terminal, bundle.baselines, descriptors, bundle.migrations,
@@ -354,6 +362,14 @@ def _validate_context(context: ReleaseContext, policy: ReleasePolicy) -> tuple[M
         raise ReceiptError("server migration count mismatch")
     if len(context.migration.client_tables) != policy.client_migration_count:
         raise ReceiptError("client migration count mismatch")
+    if (
+        SHA_RE.fullmatch(policy.manifest_preimage_sha256) is None
+        or not isinstance(policy.manifest_cdn_version, str)
+        or not policy.manifest_cdn_version
+        or type(policy.manifest_preimage_patch_count) is not int
+        or policy.manifest_preimage_patch_count < 0
+    ):
+        raise ReceiptError("manifest policy is invalid")
     bindings = {binding.role: binding for binding in context.contract_bindings}
     if set(bindings) != set(policy.contract_ids) or len(bindings) != len(context.contract_bindings):
         raise ReceiptError("five-contract binding set mismatch")
@@ -379,6 +395,7 @@ def _attest_sources(
     if set(terminal_sources) != set(keys) or any(not isinstance(raw, bytes) for raw in terminal_sources.values()):
         raise ReceiptError("terminal source path coverage mismatch")
     inventory.attest_source(context.terminal, lambda member: terminal_sources[member.key])
+    members_by_path = _members_by_path(context.terminal)
     for edge in edges:
         if set(edge.baseline) != set(keys) or set(edge.output) != set(keys):
             raise ReceiptError(f"edge {edge.from_version} path coverage mismatch")
@@ -389,6 +406,17 @@ def _attest_sources(
                 raise ReceiptError(f"baseline presence drift for {edge.from_version}:{key}")
             if raw is not None and (len(raw) != descriptor.size or _sha(raw) != descriptor.sha256):
                 raise ReceiptError(f"baseline source drift for {edge.from_version}:{key}")
+            is_table = members_by_path[key][0].kind == "table"
+            if raw is not None and is_table:
+                actual_unclaimed = _unclaimed_sha(raw, members_by_path[key])
+                if descriptor.unclaimed_sha256 != actual_unclaimed:
+                    raise ReceiptError(
+                        f"baseline unclaimed sha256 drift for {edge.from_version}:{key}"
+                    )
+            elif descriptor.unclaimed_sha256 is not None:
+                raise ReceiptError(
+                    f"unexpected baseline unclaimed anchor for {edge.from_version}:{key}"
+                )
         inventory.attest_source(
             context.baselines[edge.from_version],
             lambda member, source=edge.baseline: cast(bytes, source[member.key]),
@@ -404,6 +432,22 @@ def _expected_output(
     for member in members:
         merged = inventory.merge_claimed_member(member, source, merged)
     return merged
+
+
+def _terminal_source_anchor(
+    members: tuple[InventoryMember, ...]
+) -> tuple[int, str]:
+    anchors = {
+        (
+            cast(int, member.size), cast(str, member.sha256)
+        ) if member.kind == "file" else (
+            cast(int, member.source_size), cast(str, member.source_sha256)
+        )
+        for member in members
+    }
+    if len(anchors) != 1:
+        raise ReceiptError("terminal members disagree on whole-source anchor")
+    return next(iter(anchors))
 
 
 def _read_archives(edge: EdgeEvidence) -> tuple[list[dict[str, object]], dict[tuple[str, str], tuple[bytes, str]]]:
@@ -474,6 +518,7 @@ def _manifest_evidence(
     preimage_raw: bytes,
     output_raw: bytes,
     edges: tuple[EdgeEvidence, ...],
+    policy: ReleasePolicy,
 ) -> dict[str, object]:
     before = _json(preimage_raw, "manifest preimage")
     after = _json(output_raw, "manifest output")
@@ -491,19 +536,36 @@ def _manifest_evidence(
     if before_other != after_other or new_patches[:len(old_patches)] != old_patches:
         raise ReceiptError("manifest changed outside append-only patches")
     appended = new_patches[len(old_patches):]
+    if (
+        _sha(preimage_raw) != policy.manifest_preimage_sha256
+        or before.get("cdn_version") != policy.manifest_cdn_version
+        or len(old_patches) != policy.manifest_preimage_patch_count
+    ):
+        raise ReceiptError("manifest policy baseline mismatch")
     if len(appended) != len(edges):
         raise ReceiptError("manifest must append exactly both release edges")
     for patch, edge in zip(appended, edges):
         if not isinstance(patch, dict):
             raise ReceiptError("manifest appended patch must be an object")
+        integrity = [
+            {
+                "name": part.name,
+                "size": len(part.blob),
+                "sha256": _sha(part.blob),
+            }
+            for part in edge.archives
+        ]
         if (
             patch.get("id") != edge.patch_id
             or patch.get("version") != edge.to_version
             or patch.get("depends_on") != edge.from_version
             or patch.get("chain") != [part.name for part in edge.archives]
+            or patch.get("archive_integrity") != integrity
             or patch.get("enabled") is not True
         ):
-            raise ReceiptError(f"manifest edge mismatch for {edge.from_version}")
+            raise ReceiptError(
+                f"manifest edge/archive_integrity mismatch for {edge.from_version}"
+            )
     return {
         "preimage_sha256": _sha(preimage_raw),
         "output_sha256": _sha(output_raw),
@@ -646,7 +708,9 @@ def _build_receipt(
         "terminal_member_count": policy.terminal_member_count,
         "unique_path_count": policy.unique_path_count,
         "contracts": contracts, "edges": edge_records,
-        "manifest": _manifest_evidence(manifest_preimage, manifest_output, edges),
+        "manifest": _manifest_evidence(
+            manifest_preimage, manifest_output, edges, policy
+        ),
         "server": {"remaining_changes": 0, "files": server_records},
         "client_migrations": client_records,
     }

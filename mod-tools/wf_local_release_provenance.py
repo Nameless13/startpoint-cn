@@ -33,6 +33,7 @@ class BaselineEvidence:
     size: int
     sha256: str
     table_claims: tuple[ClaimEvidence, ...]
+    unclaimed_sha256: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -106,7 +107,7 @@ def _evidence(value: object, label: str) -> BaselineEvidence:
         raise InventoryError(f"{label}: must be an object or null")
     fields = {"writer", "archive_member", "size", "sha256"}
     if "table_claims" in value:
-        fields.add("table_claims")
+        fields.update({"table_claims", "unclaimed_sha256"})
     obj = _exact(value, fields, label)
     member = validate_logical_path(obj["archive_member"], label)
     size = obj["size"]
@@ -121,6 +122,11 @@ def _evidence(value: object, label: str) -> BaselineEvidence:
     return BaselineEvidence(
         _safe_writer(obj["writer"], label), member, size,
         _sha(obj["sha256"], label), claims,
+        (
+            _sha(obj["unclaimed_sha256"], f"{label}.unclaimed_sha256")
+            if "table_claims" in obj
+            else None
+        ),
     )
 
 
@@ -131,7 +137,8 @@ def provenance_sha256(members: tuple[ProvenanceMember, ...]) -> str:
         for version in VERSIONS:
             value = member.versions[version]
             versions.append(None if value is None else [
-                value.writer, value.archive_member, value.size, value.sha256
+                value.writer, value.archive_member, value.size, value.sha256,
+                value.unclaimed_sha256,
             ])
         lines.append(json.dumps(
             [member.root, member.logical_path, ",".join(member.owners), *versions],

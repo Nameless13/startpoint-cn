@@ -217,6 +217,13 @@ def _verify_path(
             InventoryContract(context.terminal.contract_id, members),
             lambda _member, raw=payload: raw,
         )
+        if not descriptor.present:
+            source_size, source_sha256 = model._terminal_source_anchor(members)
+            if len(payload) != source_size or model._sha(payload) != source_sha256:
+                raise model.ReceiptError(
+                    f"absent baseline output differs from terminal source for "
+                    f"{root}:{logical}"
+                )
         if (
             is_table
             and model._unclaimed_sha(payload, members)
@@ -252,16 +259,39 @@ def _verify_path(
         != path_record["unclaimed_after_sha256"]
     ):
         raise model.ReceiptError(f"unclaimed rows changed for {root}:{logical}")
+    if is_table and descriptor.present:
+        if (
+            descriptor.unclaimed_sha256 is None
+            or path_record["unclaimed_before_sha256"]
+            != descriptor.unclaimed_sha256
+        ):
+            raise model.ReceiptError(
+                f"baseline unclaimed sha256 mismatch for {root}:{logical}"
+            )
+    elif descriptor.unclaimed_sha256 is not None:
+        raise model.ReceiptError(
+            f"unexpected baseline unclaimed anchor for {root}:{logical}"
+        )
     return key, used, len(expected_claims)
 
 
 def _verify_manifest(
-    value: object, manifest_raw: bytes, edges: list[dict[str, object]]
+    value: object,
+    manifest_raw: bytes,
+    edges: list[dict[str, object]],
+    policy: model.ReleasePolicy,
 ) -> None:
     evidence = _expect_fields(value, {
         "preimage_sha256", "output_sha256", "cdn_version",
         "preimage_patch_count", "appended_patches",
     }, "manifest evidence")
+    if (
+        evidence["preimage_sha256"] != policy.manifest_preimage_sha256
+        or evidence["cdn_version"] != policy.manifest_cdn_version
+        or evidence["preimage_patch_count"]
+        != policy.manifest_preimage_patch_count
+    ):
+        raise model.ReceiptError("manifest policy baseline mismatch")
     if model._sha(manifest_raw) != evidence["output_sha256"]:
         raise model.ReceiptError("manifest output sha256 mismatch")
     manifest = model._json(manifest_raw, "manifest")
@@ -297,6 +327,14 @@ def _verify_manifest(
         raise model.ReceiptError("manifest preimage sha256/cdn_version mismatch")
     for patch, edge in zip(appended, edges):
         archives = cast(list[dict[str, object]], edge["archives"])
+        integrity = [
+            {
+                "name": archive["name"],
+                "size": archive["size"],
+                "sha256": archive["sha256"],
+            }
+            for archive in archives
+        ]
         if (
             not isinstance(patch, dict)
             or patch.get("id") != edge["patch_id"]
@@ -304,8 +342,11 @@ def _verify_manifest(
             or patch.get("depends_on") != edge["from_version"]
             or patch.get("enabled") is not True
             or patch.get("chain") != [archive["name"] for archive in archives]
+            or patch.get("archive_integrity") != integrity
         ):
-            raise model.ReceiptError("manifest edge/chain evidence mismatch")
+            raise model.ReceiptError(
+                "manifest edge/chain/archive_integrity evidence mismatch"
+            )
 
 
 def _verify_receipt(
@@ -393,6 +434,7 @@ def _verify_receipt(
     _verify_manifest(
         top["manifest"], manifest_raw,
         cast(list[dict[str, object]], raw_edges),
+        policy,
     )
     server_value = _expect_fields(
         top["server"], {"remaining_changes", "files"}, "server evidence"

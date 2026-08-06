@@ -54,6 +54,12 @@ def zip_blob(member_payloads: list[tuple[str, bytes]]) -> bytes:
     return output.getvalue()
 
 
+def reseal(value: dict[str, object]) -> bytes:
+    value.pop("receipt_sha256", None)
+    value["receipt_sha256"] = sha(receipt.canonical_receipt(value))
+    return receipt.canonical_receipt(value)
+
+
 class ReceiptFixture:
     def __init__(self):
         self.old_a, self.old_b = b"old-a", b"old-b"
@@ -70,6 +76,7 @@ class ReceiptFixture:
                 "fixture", ["sentinel", "owned"], [sentinel, owned], Path("<fixture>"),
             ))
 
+        self.make_table = table
         self.table_terminal = table(b"terminal-wip", b"terminal-owned")
         self.table_277 = table(b"baseline-277", b"old-owned")
         self.table_311 = table(b"baseline-311", b"terminal-owned")
@@ -151,6 +158,9 @@ class ReceiptFixture:
                 self.key_table: receipt.BaselineDescriptor(
                     True, len(self.table_277), sha(self.table_277),
                     "archive/277.zip", receipt.archive_member_name(*self.key_table),
+                    receipt._unclaimed_sha(
+                        self.table_277, (terminal.members[2],)
+                    ),
                 ),
             },
             "1.4.311": {
@@ -159,10 +169,14 @@ class ReceiptFixture:
                 self.key_table: receipt.BaselineDescriptor(
                     True, len(self.table_311), sha(self.table_311),
                     "archive/311.zip", receipt.archive_member_name(*self.key_table),
+                    receipt._unclaimed_sha(
+                        self.table_311, (terminal.members[2],)
+                    ),
                 ),
             },
         }
         self.context = receipt.ReleaseContext(terminal, baselines, descriptors, migration, bindings)
+        self.preimage = manifest_blob({"cdn_version": "1.4.54", "patches": []})
         self.policy = receipt.ReleasePolicy(
             release_id="local-live-1-4-312",
             terminal_contract_id=terminal.contract_id,
@@ -172,6 +186,9 @@ class ReceiptFixture:
             server_member_count=1,
             client_migration_count=0,
             contract_ids={binding.role: binding.contract_id for binding in bindings},
+            manifest_preimage_sha256=sha(self.preimage),
+            manifest_cdn_version="1.4.54",
+            manifest_preimage_patch_count=0,
         )
         name277 = "pinball-1.4.277-1.4.312-1-fixture277.zip"
         name311 = "pinball-1.4.311-1.4.312-1-fixture311.zip"
@@ -204,7 +221,6 @@ class ReceiptFixture:
                 (receipt.ArchiveEvidence("common", name311, blob311),),
             ),
         )
-        self.preimage = manifest_blob({"cdn_version": "1.4.54", "patches": []})
         patches = []
         for edge in self.edges:
             patches.append({
@@ -216,6 +232,14 @@ class ReceiptFixture:
                 "depends_on": edge.from_version,
                 "enabled": True,
                 "chain": [part.name for part in edge.archives],
+                "archive_integrity": [
+                    {
+                        "name": part.name,
+                        "size": len(part.blob),
+                        "sha256": sha(part.blob),
+                    }
+                    for part in edge.archives
+                ],
                 "created_at": "2026-08-06",
             })
         self.manifest = manifest_blob({"cdn_version": "1.4.54", "patches": patches})
@@ -245,6 +269,55 @@ class ReceiptFixture:
 
 
 class LocalReleaseReceiptTest(unittest.TestCase):
+    def forge_table_payload(
+        self,
+        fx: ReceiptFixture,
+        value: dict[str, object],
+        replacement: bytes,
+    ) -> tuple[bytes, dict[str, bytes], bytes]:
+        edge = value["edges"][0]
+        archive = edge["archives"][0]
+        archive_path = archive["path"]
+        original_blob = fx.archive_blobs()[archive_path]
+        member_name = receipt.archive_member_name(*fx.key_table)
+        with zipfile.ZipFile(io.BytesIO(original_blob)) as zipped:
+            payloads = [
+                (
+                    info.filename,
+                    replacement if info.filename == member_name else zipped.read(info),
+                )
+                for info in zipped.infolist()
+            ]
+        forged_blob = zip_blob(payloads)
+        archive["size"] = len(forged_blob)
+        archive["sha256"] = sha(forged_blob)
+        member = next(
+            item for item in archive["members"] if item["name"] == member_name
+        )
+        member["size"] = len(replacement)
+        member["sha256"] = sha(replacement)
+        path = next(
+            item for item in edge["paths"]
+            if item["logical_path"] == fx.key_table[1]
+        )
+        path["output_size"] = len(replacement)
+        path["output_sha256"] = sha(replacement)
+        unclaimed = receipt._unclaimed_sha(
+            replacement, (fx.context.terminal.members[2],)
+        )
+        path["unclaimed_before_sha256"] = unclaimed
+        path["unclaimed_after_sha256"] = unclaimed
+
+        manifest = json.loads(fx.manifest)
+        integrity = manifest["patches"][0]["archive_integrity"][0]
+        integrity["size"] = len(forged_blob)
+        integrity["sha256"] = sha(forged_blob)
+        manifest_raw = manifest_blob(manifest)
+        value["manifest"]["output_sha256"] = sha(manifest_raw)
+        value["manifest"]["appended_patches"] = manifest["patches"]
+        archives = {**fx.archive_blobs(), archive_path: forged_blob}
+        return reseal(value), archives, manifest_raw
+
     def test_writer_and_offline_verifier_cover_both_edges_and_noop_omission(self):
         fx = ReceiptFixture()
         raw = fx.build()
@@ -301,6 +374,119 @@ class LocalReleaseReceiptTest(unittest.TestCase):
                 server_files=fx.server_files,
             )
 
+    def test_verifier_rejects_present_baseline_unclaimed_row_forgery(self):
+        fx = ReceiptFixture()
+        value = receipt.parse_receipt(fx.build())
+        forged_table = fx.make_table(b"forged-unclaimed", b"terminal-owned")
+        forged_receipt, archives, manifest = self.forge_table_payload(
+            fx, value, forged_table
+        )
+        with self.assertRaisesRegex(receipt.ReceiptError, "baseline unclaimed"):
+            receipt.verify_receipt(
+                fx.context, fx.policy, forged_receipt,
+                archive_blobs=archives, manifest_raw=manifest,
+                server_files=fx.server_files,
+            )
+
+    def test_verifier_rejects_absent_baseline_nonterminal_whole_source(self):
+        fx = ReceiptFixture()
+        value = receipt.parse_receipt(fx.build())
+        table_path = next(
+            item for item in value["edges"][0]["paths"]
+            if item["logical_path"] == fx.key_table[1]
+        )
+        table_path["baseline"] = None
+        descriptors = {
+            version: dict(items)
+            for version, items in fx.context.baseline_descriptors.items()
+        }
+        descriptors["1.4.277"][fx.key_table] = receipt.BaselineDescriptor(
+            False, None, None, None, None, None
+        )
+        baselines = dict(fx.context.baselines)
+        baselines["1.4.277"] = InventoryContract(
+            baselines["1.4.277"].contract_id,
+            tuple(
+                member for member in baselines["1.4.277"].members
+                if member.key != fx.key_table
+            ),
+        )
+        context = replace(
+            fx.context,
+            baselines=baselines,
+            baseline_descriptors=descriptors,
+        )
+        forged_table = fx.make_table(b"forged-unclaimed", b"terminal-owned")
+        forged_receipt, archives, manifest = self.forge_table_payload(
+            fx, value, forged_table
+        )
+        with self.assertRaisesRegex(
+            receipt.ReceiptError, "absent baseline.*terminal source"
+        ):
+            receipt.verify_receipt(
+                context, fx.policy, forged_receipt,
+                archive_blobs=archives, manifest_raw=manifest,
+                server_files=fx.server_files,
+            )
+
+    def test_manifest_baseline_is_fixed_by_policy_for_writer_and_verifier(self):
+        fx = ReceiptFixture()
+        forged_old = {
+            "id": "forged-old", "version": "1.4.277",
+            "depends_on": "1.4.1", "enabled": False,
+        }
+        original_patches = json.loads(fx.manifest)["patches"]
+        forged_preimage = manifest_blob({
+            "cdn_version": "1.4.54", "patches": [forged_old]
+        })
+        forged_manifest = manifest_blob({
+            "cdn_version": "1.4.54",
+            "patches": [forged_old, *original_patches],
+        })
+        with self.assertRaisesRegex(receipt.ReceiptError, "manifest policy"):
+            receipt.build_receipt(
+                fx.context, fx.policy,
+                terminal_sources=fx.terminal_sources, edges=fx.edges,
+                manifest_preimage=forged_preimage,
+                manifest_output=forged_manifest,
+                server_files=fx.server_files,
+            )
+
+        value = receipt.parse_receipt(fx.build())
+        value["manifest"]["preimage_sha256"] = sha(forged_preimage)
+        value["manifest"]["preimage_patch_count"] = 1
+        value["manifest"]["output_sha256"] = sha(forged_manifest)
+        with self.assertRaisesRegex(receipt.ReceiptError, "manifest policy"):
+            receipt.verify_receipt(
+                fx.context, fx.policy, reseal(value),
+                archive_blobs=fx.archive_blobs(),
+                manifest_raw=forged_manifest, server_files=fx.server_files,
+            )
+
+    def test_archive_integrity_is_exactly_bound_for_writer_and_verifier(self):
+        fx = ReceiptFixture()
+        manifest = json.loads(fx.manifest)
+        manifest["patches"][0]["archive_integrity"][0]["sha256"] = "0" * 64
+        forged_manifest = manifest_blob(manifest)
+        with self.assertRaisesRegex(receipt.ReceiptError, "archive_integrity"):
+            receipt.build_receipt(
+                fx.context, fx.policy,
+                terminal_sources=fx.terminal_sources, edges=fx.edges,
+                manifest_preimage=fx.preimage,
+                manifest_output=forged_manifest,
+                server_files=fx.server_files,
+            )
+
+        value = receipt.parse_receipt(fx.build())
+        value["manifest"]["output_sha256"] = sha(forged_manifest)
+        value["manifest"]["appended_patches"] = manifest["patches"]
+        with self.assertRaisesRegex(receipt.ReceiptError, "archive_integrity"):
+            receipt.verify_receipt(
+                fx.context, fx.policy, reseal(value),
+                archive_blobs=fx.archive_blobs(),
+                manifest_raw=forged_manifest, server_files=fx.server_files,
+            )
+
     def test_strict_json_rejects_duplicate_nan_absolute_and_runtime_paths(self):
         bad = (
             b'{"schema":"wf-local-release-receipt/v1",'
@@ -349,7 +535,7 @@ class LocalReleaseReceiptTest(unittest.TestCase):
         value["manifest"]["preimage_sha256"] = "0" * 64
         value.pop("receipt_sha256")
         value["receipt_sha256"] = sha(receipt.canonical_receipt(value))
-        with self.assertRaisesRegex(receipt.ReceiptError, "preimage sha256"):
+        with self.assertRaisesRegex(receipt.ReceiptError, "manifest policy"):
             receipt.verify_receipt(
                 fx.context, fx.policy, receipt.canonical_receipt(value),
                 archive_blobs=archives, manifest_raw=fx.manifest,

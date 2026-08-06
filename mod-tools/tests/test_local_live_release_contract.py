@@ -21,6 +21,7 @@ sys.path.insert(0, str(MOD_TOOLS))
 class LocalLiveReleaseContractTest(unittest.TestCase):
     def setUp(self):
         self.contract = importlib.import_module("wf_local_release_contract")
+        self.provenance = importlib.import_module("wf_local_release_provenance")
         self.server = importlib.import_module("wf_local_server_contract")
         self.bundle = self.contract.load_bundle(CONTRACTS)
 
@@ -62,7 +63,7 @@ class LocalLiveReleaseContractTest(unittest.TestCase):
     def test_provenance_covers_each_path_once_with_independent_baselines(self):
         provenance = self.bundle.provenance
         self.assertEqual(
-            "fdced2a04d8cd0c712d6b1704018e098d717dd46c4d14135a130cf7a405c921e",
+            "34481b057b90f05df4eb13e8e4fd458a0054f9e7b1c2ec582a8fb6c09cb7df77",
             provenance.inventory_sha256,
         )
         counts = {
@@ -80,6 +81,42 @@ class LocalLiveReleaseContractTest(unittest.TestCase):
         self.assertEqual(
             terminal_owners,
             {member.key: set(member.owners) for member in provenance.members},
+        )
+
+    def test_present_table_provenance_anchors_unclaimed_rows_in_inventory_digest(self):
+        provenance = self.bundle.provenance
+        table_evidence = [
+            evidence
+            for member in provenance.members
+            for evidence in member.versions.values()
+            if evidence is not None and evidence.table_claims
+        ]
+        self.assertTrue(table_evidence)
+        self.assertTrue(all(
+            isinstance(evidence.unclaimed_sha256, str)
+            and len(evidence.unclaimed_sha256) == 64
+            for evidence in table_evidence
+        ))
+
+        first = table_evidence[0]
+        changed = replace(first, unclaimed_sha256="0" * 64)
+        changed_members = tuple(
+            replace(
+                member,
+                versions={
+                    version: (
+                        changed
+                        if evidence is first
+                        else evidence
+                    )
+                    for version, evidence in member.versions.items()
+                },
+            )
+            for member in provenance.members
+        )
+        self.assertNotEqual(
+            self.provenance.provenance_sha256(provenance.members),
+            self.provenance.provenance_sha256(changed_members),
         )
 
     def test_claim_boundaries_keep_shared_and_negative_ownership_exact(self):
