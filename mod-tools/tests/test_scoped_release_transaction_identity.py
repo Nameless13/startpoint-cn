@@ -93,7 +93,7 @@ class ScopedTransactionIdentityTest(InventoryCase):
             self.assertEqual(MANIFEST, manifest.read_bytes())
             self.assertFalse((active.parent / ".wf-scoped-release.lock").exists())
 
-    def test_cleanup_quarantines_a_replacement_injected_before_atomic_rename(self):
+    def test_cleanup_leaves_a_preexisting_foreign_occupant_at_its_original_name(self):
         with tempfile.TemporaryDirectory() as td:
             target = Path(td) / "owned.bin"
             target.write_bytes(b"owned")
@@ -101,31 +101,143 @@ class ScopedTransactionIdentityTest(InventoryCase):
                 target,
                 scoped.transaction._object_identity(target.lstat()),
             )
-            foreign = b"foreign injected at cleanup"
-            real_rename = scoped.transaction.os.rename
-            injected = False
+            foreign = b"foreign present before cleanup"
+            target.unlink()
+            target.write_bytes(foreign)
 
-            def replace_then_rename(source, destination):
-                nonlocal injected
-                if Path(source) == target and not injected:
-                    injected = True
-                    target.unlink()
-                    target.write_bytes(foreign)
-                return real_rename(source, destination)
+            errors = scoped.transaction._remove_owned((owned,))
 
-            with mock.patch.object(
-                scoped.transaction.os,
-                "rename",
-                side_effect=replace_then_rename,
-            ):
-                errors = scoped.transaction._remove_owned((owned,))
-
-            self.assertTrue(injected)
             self.assertTrue(errors)
             self.assertEqual(foreign, target.read_bytes())
-            quarantined = tuple(Path(td).glob(".owned.bin.wf-quarantine-*"))
-            self.assertEqual(1, len(quarantined))
-            self.assertEqual(foreign, quarantined[0].read_bytes())
+            self.assertEqual([], list(Path(td).glob("*.wf-quarantine-*")))
+
+    @unittest.skipUnless(sys.platform == "win32", "Windows handle cleanup contract")
+    def test_cleanup_handle_blocks_replacement_after_identity_validation(self):
+        with tempfile.TemporaryDirectory() as td:
+            target = Path(td) / "owned.bin"
+            target.write_bytes(b"owned")
+            owned = scoped.transaction._OwnedPath(
+                target,
+                scoped.transaction._object_identity(target.lstat()),
+            )
+            api = scoped.transaction._windows_owned_api()
+            real_dispose = api.dispose
+            attempted = False
+            replacement_blocked = False
+
+            def replace_then_dispose(handle: int) -> None:
+                nonlocal attempted, replacement_blocked
+                attempted = True
+                try:
+                    target.unlink()
+                except OSError:
+                    replacement_blocked = True
+                else:
+                    target.write_bytes(b"foreign replacement")
+                real_dispose(handle)
+
+            with mock.patch.object(api, "dispose", side_effect=replace_then_dispose):
+                errors = scoped.transaction._remove_owned((owned,))
+
+            self.assertTrue(attempted)
+            self.assertTrue(replacement_blocked)
+            self.assertEqual([], errors)
+            self.assertFalse(target.exists())
+
+    def test_platform_without_exact_cleanup_fails_closed_and_keeps_the_path(self):
+        with tempfile.TemporaryDirectory() as td:
+            target = Path(td) / "owned.bin"
+            target.write_bytes(b"owned")
+            owned = scoped.transaction._OwnedPath(
+                target,
+                scoped.transaction._object_identity(target.lstat()),
+            )
+
+            errors = scoped.transaction._remove_owned_unsupported((owned,))
+
+            self.assertTrue(errors)
+            self.assertEqual(b"owned", target.read_bytes())
+            self.assertEqual([target], list(Path(td).iterdir()))
+
+    def test_every_platform_resolves_an_exact_cleanup_or_declares_none(self):
+        # A platform must either provide an exact object-scoped cleanup or be
+        # explicitly unsupported.  Silently degrading to a pathname unlink would
+        # reintroduce the TOCTOU this module exists to prevent.
+        strategy = scoped.transaction._remove_owned_strategy()
+        self.assertIn(
+            strategy,
+            (
+                scoped.transaction._remove_owned_windows,
+                scoped.transaction._remove_owned_posix,
+                scoped.transaction._remove_owned_unsupported,
+            ),
+        )
+        if sys.platform == "win32":
+            self.assertIs(strategy, scoped.transaction._remove_owned_windows)
+        else:
+            self.assertIsNot(
+                strategy, scoped.transaction._remove_owned_unsupported,
+                "POSIX exact cleanup must be available or publication cannot"
+                " complete on this platform",
+            )
+
+    @unittest.skipIf(sys.platform == "win32", "POSIX dir_fd cleanup contract")
+    def test_posix_cleanup_removes_only_the_owned_object(self):
+        with tempfile.TemporaryDirectory() as td:
+            target = Path(td) / "owned.bin"
+            target.write_bytes(b"owned")
+            neighbour = Path(td) / "other.bin"
+            neighbour.write_bytes(b"other")
+            owned = scoped.transaction._OwnedPath(
+                target,
+                scoped.transaction._object_identity(target.lstat()),
+            )
+
+            errors = scoped.transaction._remove_owned_posix((owned,))
+
+            self.assertEqual([], errors)
+            self.assertFalse(target.exists())
+            self.assertEqual(b"other", neighbour.read_bytes())
+
+    @unittest.skipIf(sys.platform == "win32", "POSIX dir_fd cleanup contract")
+    def test_posix_cleanup_refuses_a_replacement_at_the_owned_name(self):
+        with tempfile.TemporaryDirectory() as td:
+            target = Path(td) / "owned.bin"
+            target.write_bytes(b"owned")
+            owned = scoped.transaction._OwnedPath(
+                target,
+                scoped.transaction._object_identity(target.lstat()),
+            )
+            foreign = b"foreign present before cleanup"
+            target.unlink()
+            target.write_bytes(foreign)
+
+            errors = scoped.transaction._remove_owned_posix((owned,))
+
+            self.assertTrue(errors)
+            self.assertEqual(foreign, target.read_bytes())
+
+    @unittest.skipIf(sys.platform == "win32", "POSIX dir_fd cleanup contract")
+    def test_posix_cleanup_refuses_a_symlinked_parent_directory(self):
+        with tempfile.TemporaryDirectory() as td:
+            real = Path(td) / "real"
+            real.mkdir()
+            target = real / "owned.bin"
+            target.write_bytes(b"owned")
+            owned = scoped.transaction._OwnedPath(
+                target,
+                scoped.transaction._object_identity(target.lstat()),
+            )
+            link = Path(td) / "link"
+            link.symlink_to(real, target_is_directory=True)
+            through_link = scoped.transaction._OwnedPath(
+                link / "owned.bin", owned.object_id
+            )
+
+            errors = scoped.transaction._remove_owned_posix((through_link,))
+
+            self.assertTrue(errors)
+            self.assertEqual(b"owned", target.read_bytes())
 
     def test_versions_reject_leading_zero_segments(self):
         with self.assertRaisesRegex(scoped.archive.ArchiveError, "version"):

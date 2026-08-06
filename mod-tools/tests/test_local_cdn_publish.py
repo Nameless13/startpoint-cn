@@ -253,37 +253,39 @@ class LocalCdnPublishTest(InventoryCase):
         target.unlink()
         (self.cdn / publisher.LOCK_NAME).unlink()
 
-    def test_foreign_lock_swap_during_cleanup_is_recoverable_and_retained(self):
+    @unittest.skipUnless(sys.platform == "win32", "Windows handle cleanup contract")
+    def test_foreign_lock_replacement_before_handle_open_is_retained(self):
         lock = self.cdn / publisher.LOCK_NAME
         foreign = b"foreign lock replacement"
-        real_rename = publisher.transaction.os.rename
+        api = publisher.transaction._windows_owned_api()
+        real_reopen = api.reopen_output_cleanup
         injected = False
 
-        def replace_then_rename(source, destination):
+        def replace_then_reopen(parent: int, name: str):
             nonlocal injected
-            if Path(source) == lock and not injected:
+            if name == publisher.LOCK_NAME and not injected:
                 injected = True
                 lock.unlink()
                 lock.write_bytes(foreign)
-            return real_rename(source, destination)
+            return real_reopen(parent, name)
 
         with mock.patch.object(
-            publisher.transaction.os,
-            "rename",
-            side_effect=replace_then_rename,
+            api,
+            "reopen_output_cleanup",
+            side_effect=replace_then_reopen,
         ):
             with self.assertRaisesRegex(
-                publisher.LocalCdnPublishError, "lock|quarantine|identity"
+                publisher.LocalCdnPublishError, "lock|identity"
             ):
                 self.publish()
 
         self.assertTrue(injected)
         self.assertEqual(foreign, lock.read_bytes())
-        quarantined = tuple(
-            self.cdn.glob(f".{publisher.LOCK_NAME}.wf-quarantine-*")
-        )
-        self.assertEqual(1, len(quarantined))
-        self.assertEqual(foreign, quarantined[0].read_bytes())
+        for part in self.edge.parts:
+            target = self.directories[part.root] / part.name
+            self.assertEqual(part.blob, target.read_bytes())
+        self.assertEqual([], list(self.cdn.rglob("*.wf-quarantine-*")))
+        lock.unlink()
 
     def test_confirmation_and_stopped_server_are_mandatory(self):
         with self.assertRaisesRegex(publisher.LocalCdnPublishError, "requires"):

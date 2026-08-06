@@ -324,6 +324,7 @@ class ScopedReleaseSafetyTest(InventoryCase):
             self.assertEqual([], list(active.iterdir()))
             self.assertFalse((patch_root / ".wf-scoped-release.lock").exists())
 
+    @unittest.skipUnless(sys.platform == "win32", "Windows handle cleanup contract")
     def test_incomplete_rollback_retains_lock_and_orphan_for_manual_recovery(self):
         plan = self.small_plan()
         with tempfile.TemporaryDirectory() as td:
@@ -332,23 +333,24 @@ class ScopedReleaseSafetyTest(InventoryCase):
             active.mkdir(parents=True)
             manifest = patch_root / "manifest.json"
             manifest.write_bytes(EMPTY_MANIFEST)
-            real_unlink = Path.unlink
+            api = scoped.transaction._windows_owned_api()
+            real_dispose = api.dispose
 
-            def refuse_archive_unlink(path: Path, *args, **kwargs):
-                if (
-                    path.parent == active
-                    and ".zip.wf-quarantine-" in path.name
-                ):
-                    raise PermissionError("injected quarantine unlink failure")
-                return real_unlink(path, *args, **kwargs)
+            def refuse_archive_dispose(handle: int) -> None:
+                target = api.final_path(handle)
+                if target.parent == active and target.suffix == ".zip":
+                    raise PermissionError("injected exact handle cleanup failure")
+                real_dispose(handle)
 
             def fail(phase: str) -> None:
                 if phase == "before_manifest":
                     raise RuntimeError("injected precommit failure")
 
-            with mock.patch.object(Path, "unlink", refuse_archive_unlink):
+            with mock.patch.object(
+                api, "dispose", side_effect=refuse_archive_dispose
+            ):
                 with self.assertRaisesRegex(
-                    scoped.ScopedReleaseError, "rollback|lock|unlink"
+                    scoped.ScopedReleaseError, "rollback|lock|handle"
                 ):
                     scoped.publish_archives_and_manifest(
                         (plan,),
@@ -363,11 +365,7 @@ class ScopedReleaseSafetyTest(InventoryCase):
             self.assertTrue(lock.is_file())
             self.assertEqual(EMPTY_MANIFEST, manifest.read_bytes())
             self.assertEqual(1, len(list(active.glob("*.zip"))))
-            quarantined = tuple(active.glob("*.wf-quarantine-*"))
-            self.assertEqual(1, len(quarantined))
             for target in active.glob("*.zip"):
-                target.unlink()
-            for target in quarantined:
                 target.unlink()
             lock.unlink()
 

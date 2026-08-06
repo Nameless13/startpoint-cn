@@ -145,64 +145,198 @@ def _fsync_directory(path: Path) -> None:
         os.close(descriptor)
 
 
-def _remove_owned(paths: Iterable[_OwnedPath]) -> list[str]:
-    """Remove owned links through an identity-checked sibling quarantine.
+def _windows_owned_api():
+    if os.name != "nt":
+        raise TransactionError("Windows exact cleanup is unavailable")
+    import wf_character_pack as character_pack
 
-    Moving the directory entry first closes the old lstat(path)->unlink(path)
-    replacement window.  A foreign object moved by the atomic rename is never
-    deleted: it is retained under the unpredictable quarantine name and, when
-    it is a regular file, hard-linked back to its original name exclusively.
+    api = character_pack._WIN_OWNED_API
+    if api is None:
+        raise TransactionError("Windows exact cleanup API is unavailable")
+    return api
+
+
+def _posix_exact_cleanup_supported() -> bool:
+    """Report whether ``unlinkat``/``fstatat`` can scope cleanup to a directory."""
+    if os.name == "nt":
+        return False
+    supports = getattr(os, "supports_dir_fd", frozenset())
+    return (
+        hasattr(os, "O_DIRECTORY")
+        and os.unlink in supports
+        and os.stat in supports
+    )
+
+
+def _open_owned_parent_posix(parent: Path) -> int:
+    """Open the owning directory itself, never a path that may be re-resolved."""
+    flags = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(parent, flags)
+    try:
+        opened = os.fstat(descriptor)
+        if not stat.S_ISDIR(opened.st_mode):
+            raise TransactionError(f"owned parent is not a directory: {parent}")
+        if _object_identity(opened) != _object_identity(parent.lstat()):
+            raise TransactionError(
+                f"owned parent directory identity changed: {parent}"
+            )
+    except BaseException:
+        os.close(descriptor)
+        raise
+    return descriptor
+
+
+def _remove_owned_posix(paths: Iterable[_OwnedPath]) -> list[str]:
+    """Unlink only the exact object, resolved relative to its owning directory.
+
+    POSIX has no delete-by-handle primitive, so the closest safe equivalent of
+    the Windows ``FileDispositionInfo`` path is a directory descriptor plus a
+    single relative name: ``_assert_plain_ancestry`` rejects reparse points,
+    ``O_DIRECTORY | O_NOFOLLOW`` pins the parent object, ``fstatat`` proves the
+    name still denotes the owned ``(st_dev, st_ino)``, and ``unlinkat`` acts on
+    that same descriptor.  No component of the path can be re-resolved between
+    the check and the unlink; the only residual window is a replacement of the
+    identical name inside the pinned directory, which the caller's exclusive,
+    token-unique creation discipline already excludes.  Falling back to
+    ``Path.unlink()`` would instead re-walk the whole path and is never done.
     """
     errors: list[str] = []
     for owned in reversed(tuple(paths)):
+        path = _absolute(owned.path)
+        descriptor: int | None = None
+        try:
+            parent = _assert_plain_ancestry(path.parent, leaf="directory")
+            if parent.lstat().st_dev != owned.object_id[0]:
+                errors.append(f"{path}: owned parent volume changed; left untouched")
+                continue
+            descriptor = _open_owned_parent_posix(parent)
+            try:
+                metadata = os.stat(
+                    path.name, dir_fd=descriptor, follow_symlinks=False
+                )
+            except FileNotFoundError:
+                continue
+            if (
+                not stat.S_ISREG(metadata.st_mode)
+                or _object_identity(metadata) != owned.object_id
+            ):
+                errors.append(f"{path}: owned identity changed; left untouched")
+                continue
+            os.unlink(path.name, dir_fd=descriptor)
+        except FileNotFoundError:
+            continue
+        except (OSError, TransactionError) as error:
+            errors.append(f"{path}: exact relative cleanup failed: {error}")
+        finally:
+            if descriptor is not None:
+                try:
+                    os.close(descriptor)
+                except OSError as error:
+                    errors.append(f"{path}: close owned parent handle failed: {error}")
+    return errors
+
+
+def _remove_owned_unsupported(paths: Iterable[_OwnedPath]) -> list[str]:
+    """Fail closed where no exact object-scoped unlink primitive exists."""
+    errors: list[str] = []
+    for owned in reversed(tuple(paths)):
         path = owned.path
-        quarantine = path.parent / (
-            f".{path.name}.wf-quarantine-{uuid.uuid4().hex}"
-        )
         try:
             _assert_plain_ancestry(path.parent, leaf="directory")
             try:
-                os.rename(path, quarantine)
+                metadata = path.lstat()
             except FileNotFoundError:
                 continue
-            metadata = quarantine.lstat()
             if (
-                _is_reparse(quarantine)
+                _is_reparse(path)
                 or not stat.S_ISREG(metadata.st_mode)
                 or _object_identity(metadata) != owned.object_id
             ):
-                restored = ""
-                if not _is_reparse(quarantine) and stat.S_ISREG(metadata.st_mode):
-                    try:
-                        os.link(quarantine, path, follow_symlinks=False)
-                        restored = "; foreign identity restored at original path"
-                    except FileExistsError:
-                        restored = "; original path is occupied"
-                    except OSError as restore_error:
-                        restored = f"; original-name restore failed: {restore_error}"
                 errors.append(
-                    f"{path}: owned identity changed; foreign object retained at "
-                    f"quarantine {quarantine}{restored}"
+                    f"{path}: owned identity changed; left untouched"
                 )
                 continue
-            try:
-                quarantine.unlink()
-            except OSError as unlink_error:
-                restored = ""
-                try:
-                    os.link(quarantine, path, follow_symlinks=False)
-                    restored = "; quarantine restored at original path"
-                except FileExistsError:
-                    restored = "; original path is occupied"
-                except OSError as restore_error:
-                    restored = f"; original-name restore failed: {restore_error}"
-                errors.append(
-                    f"{path}: quarantine cleanup failed: {unlink_error}; "
-                    f"retained at {quarantine}{restored}"
-                )
+            errors.append(
+                f"{path}: exact cleanup unavailable on this platform;"
+                " owned path retained"
+            )
         except (OSError, TransactionError) as error:
-            errors.append(f"{path}: quarantine cleanup failed: {error}")
+            errors.append(f"{path}: {error}")
     return errors
+
+
+def _remove_owned_windows(paths: Iterable[_OwnedPath]) -> list[str]:
+    """Delete only the object opened and identity-checked by a Windows handle."""
+    api = _windows_owned_api()
+    errors: list[str] = []
+    for owned in reversed(tuple(paths)):
+        path = _absolute(owned.path)
+        parent_handle: int | None = None
+        output_handle: int | None = None
+        disposed = False
+        try:
+            parent = _assert_plain_ancestry(path.parent, leaf="directory")
+            if parent.lstat().st_dev != owned.object_id[0]:
+                errors.append(f"{path}: owned parent volume changed; left untouched")
+                continue
+            parent_handle = api.open_root(parent)
+            expected_parent = os.path.normcase(os.path.abspath(os.fspath(parent)))
+            opened_parent = os.path.normcase(
+                os.path.abspath(os.fspath(api.final_path(parent_handle)))
+            )
+            if opened_parent != expected_parent:
+                errors.append(
+                    f"{path}: owned parent handle resolved elsewhere; left untouched"
+                )
+                continue
+            output_handle = api.reopen_output_cleanup(parent_handle, path.name)
+            current = api.identity(output_handle, directory=False)
+            if current[1] != owned.object_id[1]:
+                errors.append(f"{path}: owned identity changed; left untouched")
+                continue
+            api.dispose(output_handle)
+            disposed = True
+        except FileNotFoundError:
+            continue
+        except (OSError, RuntimeError) as error:
+            errors.append(f"{path}: exact handle cleanup failed: {error}")
+        finally:
+            if output_handle is not None:
+                try:
+                    api.close(output_handle)
+                except OSError as error:
+                    errors.append(f"{path}: close owned output handle failed: {error}")
+            if parent_handle is not None:
+                try:
+                    api.close(parent_handle)
+                except OSError as error:
+                    errors.append(f"{path}: close owned parent handle failed: {error}")
+        if disposed:
+            try:
+                path.lstat()
+            except FileNotFoundError:
+                pass
+            except OSError as error:
+                errors.append(f"{path}: exact cleanup readback failed: {error}")
+            else:
+                errors.append(
+                    f"{path}: path occupied after exact cleanup; left untouched"
+                )
+    return errors
+
+
+def _remove_owned_strategy() -> Callable[[Iterable[_OwnedPath]], list[str]]:
+    """Resolve the exact-cleanup implementation this platform can honour."""
+    if os.name == "nt":
+        return _remove_owned_windows
+    if _posix_exact_cleanup_supported():
+        return _remove_owned_posix
+    return _remove_owned_unsupported
+
+
+def _remove_owned(paths: Iterable[_OwnedPath]) -> list[str]:
+    """Remove only exact owned objects; never unlink a re-resolved pathname."""
+    return _remove_owned_strategy()(paths)
 
 
 def _remove_owned_directory(owned: _OwnedPath) -> list[str]:
