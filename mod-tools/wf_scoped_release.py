@@ -21,6 +21,7 @@ from wf_release_inventory_contract import (
     MemberKey,
 )
 import wf_scoped_release_archive as archive
+import wf_scoped_table_merge as table_merge
 import wf_scoped_release_transaction as transaction
 
 
@@ -170,11 +171,9 @@ def build_edge_plan(
                     f"table baseline is absent and cannot preserve unclaimed rows: {key}"
                 )
             if is_table:
-                merged = cast(bytes, baseline_raw)
-                for member in members:
-                    merged = inventory.merge_claimed_member(
-                        member, terminal[key], merged
-                    )
+                merged = table_merge.merge_table_members(
+                    members, terminal[key], cast(bytes, baseline_raw)
+                )
             else:
                 merged = terminal[key]
             output[key] = merged
@@ -199,7 +198,13 @@ def build_edge_plan(
         )
     except ScopedReleaseError:
         raise
-    except (OSError, KeyError, inventory.InventoryError, archive.ArchiveError) as error:
+    except (
+        OSError,
+        KeyError,
+        inventory.InventoryError,
+        archive.ArchiveError,
+        table_merge.ScopedTableMergeError,
+    ) as error:
         raise ScopedReleaseError(str(error)) from error
     return EdgePlan(spec, tuple(entries), parts)
 
