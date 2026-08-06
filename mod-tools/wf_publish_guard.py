@@ -25,6 +25,20 @@ CDN 的投递单位是**整个文件**:store 里的文件名 = 逻辑路径的 s
 所以对 ability/character/action_skill/power_flip_action 这些不同 codec 的表一视同仁;
 解不出来的(DSL、图片、mp3)自动跳过,只做存在性报告。
 
+## 内容体检(`content_notes`,只告警不阻断)
+
+上面那条判据只看键集合,所以它**比不出**「键一个没少、但整表内容被换成了另一个
+来源的版本」。1.4.307 就是这么过闸的:直发 store 原字节的 ability_soul,451 键
+原封不动,而 409 个键的内容变了、108 个键的记录条数变少,把 1.4.164 以来在线的
+整套官方魂珠增强一次性回退。对照 1.4.164→1.4.301 只动 15 个键(15 把深渊武器)
+——那才是正常改动的形状。
+
+于是补两条**提示**(永远不进 problems、永远不拦发布):
+  ① 改动面过大(>20 个键且占比 >25%);
+  ② 键内**记录条数变少** —— 一键多记录的表里,行没了和键没了是同一类损失,
+     这条噪声低,不设占比门槛。
+30 条历史 ability_soul 边回放:只有 6 条被标,且全是真的整表大改。
+
 用法:
     python mod-tools/wf_publish_guard.py              # 检查当前 pending 列表
     python mod-tools/wf_publish_guard.py --tables ability,leader_ability
@@ -37,6 +51,7 @@ import json
 import re
 import sys
 import zipfile
+import zlib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -104,6 +119,80 @@ def _keys_of(blob: bytes) -> list[str] | None:
         return list(core.parse_index(blob)[0])
     except Exception:
         return None
+
+
+def _rows_of(blob: bytes) -> dict[str, bytes] | None:
+    """orderedmap 的 {键: 解压后的整行字节};不是 orderedmap 就返回 None。
+
+    索引里的 row_offset 是该行的**结束**位置,row_i = data[offset_{i-1}:offset_i]
+    (见 core.read_orderedmap_file 的注释,曾有版本误当起始位置用而全表错位一格)。
+    这里不解 CSV,只比字节 + 数行数,所以与行编解码器无关。"""
+    try:
+        keys, pairs, index_len = core.parse_index(blob)
+    except Exception:
+        return None
+    data = blob[4 + index_len:]
+    out: dict[str, bytes] = {}
+    prev = 0
+    for key, (_, row_end) in zip(keys, pairs):
+        chunk = data[prev:row_end]
+        prev = row_end
+        if not chunk:
+            out[key] = b""
+            continue
+        try:
+            out[key] = zlib.decompress(chunk)
+        except zlib.error:
+            # 未压缩行的 orderedmap(core.build_orderedmap_raw_rows 造的就是)
+            # 直接用原字节;逐块降级,不因为一块解不开就放弃整表。
+            out[key] = chunk
+    return out
+
+
+def _row_lines(payload: bytes) -> int:
+    """一个键里装了几条 CSV 记录(一键多记录是常态,ability 最多 9~10 条)。"""
+    return len([ln for ln in payload.split(b"\n") if ln.strip()])
+
+
+def content_notes(label: str, version: str,
+                  old: bytes, new: bytes) -> list[str]:
+    """键集合合规**之后**的内容体检。只告警,永不阻断。
+
+    键闸门只比键集合,比不出「键数一个没变、但 409 行内容全换了」。
+    实例:1.4.307 直发 store 原字节的 ability_soul,451 键里 409 个键的内容变了,
+    把 1.4.164 以来在线的整套官方魂珠增强一次性回退(5085000 由 8 行掉到 6 行、
+    kind 468 Guts 强度 227273→100000 …),而键数 451→451,闸门必然放行。
+    对照:1.4.164→1.4.301 只动了 15 个键(15 把深渊武器)——这才是正常改动的形状。
+
+    两条判据:
+      ① 改动面过大(既看绝对数也看占比,避免小表误报)
+      ② **键内行数变少** —— 一键多记录的表里,行没了和键没了是同一类损失,
+         而现有闸门对它完全失明。这条噪声低,不设占比门槛。
+    """
+    old_rows, new_rows = _rows_of(old), _rows_of(new)
+    if not old_rows or not new_rows:
+        return []
+    common = [k for k in old_rows if k in new_rows]
+    if not common:
+        return []
+    changed = [k for k in common if old_rows[k] != new_rows[k]]
+    shrunk = [k for k in changed
+              if _row_lines(new_rows[k]) < _row_lines(old_rows[k])]
+    notes: list[str] = []
+    if changed and len(changed) > 20 and len(changed) / len(common) > 0.25:
+        notes.append(
+            f"{label}: 相对链上 {version} 有 {len(changed)}/{len(common)} 个键"
+            f"内容变了({len(changed) / len(common):.0%})。确认这是你要发的改动面,"
+            f"不是把整表换成了另一个来源的版本 -> {changed[:8]}"
+            + (" ..." if len(changed) > 8 else ""))
+    if shrunk:
+        notes.append(
+            f"{label}: {len(shrunk)} 个键的**记录条数变少**(一键多记录的表里"
+            f"这和丢键是同一类损失) -> "
+            + ", ".join(f"{k}({_row_lines(old_rows[k])}→{_row_lines(new_rows[k])}条)"
+                        for k in shrunk[:6])
+            + (" ..." if len(shrunk) > 6 else ""))
+    return notes
 
 
 def protected_keys() -> dict[str, set[str]]:
@@ -174,6 +263,11 @@ def check(entries: list[tuple[str, bytes]], *, verbose: bool = True) -> list[str
         elif verbose:
             print(f"  [表  ] {label} 链上{version} {len(old_keys)}键 -> {len(new_keys)}键"
                   f"{(',新增 ' + str(added[:6])) if added else ''}")
+
+        # 内容体检:键集合合规不代表内容没被整表换掉。只告警,不进 problems。
+        if verbose:
+            for note in content_notes(label, version, old, payload):
+                print(f"  [⚠内容] {note}")
 
         # 角色包 claims 的行必须还在(链上已有的前提下)
         must = guarded.get(logical or "", set()) & set(old_keys)

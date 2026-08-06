@@ -117,5 +117,66 @@ class PublishGuardTest(unittest.TestCase):
         self.assertIn("claims 的行不见了", problems[1])
 
 
+class ContentNotesTest(unittest.TestCase):
+    """键集合合规**之后**的内容体检(只告警,永不阻断)。
+
+    回归的是 1.4.307:直发 store 原字节的 ability_soul,451 键一个没少,
+    但 409 个键的内容被换成了另一个来源的版本,108 个键的记录条数变少
+    (整套官方魂珠增强被一次性回退)。键闸门对这种情况完全失明。
+    """
+
+    @staticmethod
+    def _table(rows: dict[str, bytes]) -> bytes:
+        return _orderedmap(rows)
+
+    def test_small_edit_is_silent(self) -> None:
+        """只改几个键 = 正常发布(1.4.164→1.4.301 就是 15 把深渊武器),不许出声。"""
+        old = self._table({str(i): b"row" for i in range(100)})
+        new = self._table({str(i): (b"EDITED" if i < 5 else b"row")
+                           for i in range(100)})
+        self.assertEqual(guard.content_notes("t", "1.4.1", old, new), [])
+
+    def test_wholesale_content_swap_warns(self) -> None:
+        """键数一个没变、内容几乎全换 = 大概率整表换成了另一个来源。"""
+        old = self._table({str(i): b"row" for i in range(100)})
+        new = self._table({str(i): b"OTHER" for i in range(100)})
+        notes = guard.content_notes("t", "1.4.1", old, new)
+        self.assertTrue(any("100/100" in note for note in notes), notes)
+
+    def test_record_count_shrink_warns_regardless_of_ratio(self) -> None:
+        """一键多记录的表里,行没了和键没了是同一类损失;这条不设占比门槛。"""
+        old = self._table({"a": b"r1\nr2\nr3", "b": b"r1"})
+        new = self._table({"a": b"r1\nr2", "b": b"r1"})
+        notes = guard.content_notes("t", "1.4.1", old, new)
+        self.assertEqual(len(notes), 1, notes)
+        self.assertIn("记录条数变少", notes[0])
+        self.assertIn("a(3→2条)", notes[0])
+
+    def test_row_growth_is_not_a_loss(self) -> None:
+        old = self._table({"a": b"r1"})
+        new = self._table({"a": b"r1\nr2"})
+        self.assertEqual(guard.content_notes("t", "1.4.1", old, new), [])
+
+    def test_non_orderedmap_is_silent(self) -> None:
+        """DSL/图片/mp3 解不出键索引,体检直接跳过。"""
+        self.assertEqual(
+            guard.content_notes("t", "1.4.1", b"not-an-orderedmap", b"still-not"),
+            [])
+
+    def test_notes_never_block_publish(self) -> None:
+        """整表换内容必须**放行**——它只是提示,不是闸。"""
+        old = self._table({str(i): b"row" for i in range(100)})
+        new = self._table({str(i): b"OTHER" for i in range(100)})
+        tmp = Path(tempfile.mkdtemp())
+        diff, full = tmp / "d", tmp / "f"
+        diff.mkdir()
+        full.mkdir()
+        _zip_with(diff, "pinball-1.4.1-1.4.2-1-x.zip", "ab/cdef", old)
+        with mock.patch.object(guard, "CDN_COMMON_DIFF", diff), \
+                mock.patch.object(guard, "CDN_COMMON_FULL", full), \
+                mock.patch.object(guard, "protected_keys", lambda: {}):
+            self.assertEqual(guard.check([("ab/cdef", new)], verbose=False), [])
+
+
 if __name__ == "__main__":
     unittest.main()
