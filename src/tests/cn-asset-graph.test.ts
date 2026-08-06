@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import {
     mkdtempSync,
     mkdirSync,
+    readFileSync,
     rmSync,
     unlinkSync,
     writeFileSync,
@@ -10,6 +11,7 @@ import {
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { Open } from "unzipper";
 
 import {
     buildReleaseGraph,
@@ -31,6 +33,69 @@ const DIFF_DIRS = {
 
 function sha256(raw: Buffer): string {
     return createHash("sha256").update(raw).digest("hex");
+}
+
+
+function crc32(raw: Buffer): number {
+    let checksum = 0xffffffff;
+    for (const byte of raw) {
+        checksum ^= byte;
+        for (let bit = 0; bit < 8; bit += 1) {
+            checksum = (checksum >>> 1) ^ (checksum & 1 ? 0xedb88320 : 0);
+        }
+    }
+    return (checksum ^ 0xffffffff) >>> 0;
+}
+
+
+function storedZip(member: string, payload: string): Buffer {
+    const name = Buffer.from(member);
+    const raw = Buffer.from(payload);
+    const checksum = crc32(raw);
+    const local = Buffer.alloc(30);
+    local.writeUInt32LE(0x04034b50, 0);
+    local.writeUInt16LE(20, 4);
+    local.writeUInt16LE(0, 6);
+    local.writeUInt16LE(0, 8);
+    local.writeUInt16LE(0, 10);
+    local.writeUInt16LE(0x21, 12);
+    local.writeUInt32LE(checksum, 14);
+    local.writeUInt32LE(raw.length, 18);
+    local.writeUInt32LE(raw.length, 22);
+    local.writeUInt16LE(name.length, 26);
+    local.writeUInt16LE(0, 28);
+
+    const central = Buffer.alloc(46);
+    central.writeUInt32LE(0x02014b50, 0);
+    central.writeUInt16LE(20, 4);
+    central.writeUInt16LE(20, 6);
+    central.writeUInt16LE(0, 8);
+    central.writeUInt16LE(0, 10);
+    central.writeUInt16LE(0, 12);
+    central.writeUInt16LE(0x21, 14);
+    central.writeUInt32LE(checksum, 16);
+    central.writeUInt32LE(raw.length, 20);
+    central.writeUInt32LE(raw.length, 24);
+    central.writeUInt16LE(name.length, 28);
+    central.writeUInt16LE(0, 30);
+    central.writeUInt16LE(0, 32);
+    central.writeUInt16LE(0, 34);
+    central.writeUInt16LE(0, 36);
+    central.writeUInt32LE(0, 38);
+    central.writeUInt32LE(0, 42);
+
+    const centralSize = central.length + name.length;
+    const centralOffset = local.length + name.length + raw.length;
+    const end = Buffer.alloc(22);
+    end.writeUInt32LE(0x06054b50, 0);
+    end.writeUInt16LE(0, 4);
+    end.writeUInt16LE(0, 6);
+    end.writeUInt16LE(1, 8);
+    end.writeUInt16LE(1, 10);
+    end.writeUInt32LE(centralSize, 12);
+    end.writeUInt32LE(centralOffset, 16);
+    end.writeUInt16LE(0, 20);
+    return Buffer.concat([local, name, raw, central, name, end]);
 }
 
 
@@ -78,6 +143,43 @@ function writeLegacy(
     const name = `pinball-${from}-${to}-1-${label}.zip`;
     writeFileSync(path.join(f.cdnDir, DIFF_DIRS[root], name), Buffer.from(`${root}:${from}:${to}:${label}`));
     return name;
+}
+
+
+function writeSequencedLegacy(
+    f: GraphFixture,
+    from: string,
+    to: string,
+    root: keyof typeof DIFF_DIRS,
+    seq: number,
+    label: string,
+    member: string,
+    payload: string,
+): string {
+    const name = `pinball-${from}-${to}-${seq}-${label}.zip`;
+    writeFileSync(path.join(f.cdnDir, DIFF_DIRS[root], name), storedZip(member, payload));
+    return name;
+}
+
+
+async function replayLegacyArchives(
+    f: GraphFixture,
+    locations: string[],
+): Promise<Map<string, string>> {
+    const baseUrl = "https://fixture.invalid/";
+    const final = new Map<string, string>();
+    for (const location of locations) {
+        assert.ok(location.startsWith(baseUrl));
+        const relative = location.slice(baseUrl.length);
+        const archive = await Open.buffer(
+            readFileSync(path.join(f.cdnDir, ...relative.split("/"))),
+        );
+        for (const entry of archive.files) {
+            if (entry.type !== "File") continue;
+            final.set(entry.path, (await entry.buffer()).toString());
+        }
+    }
+    return final;
 }
 
 
@@ -151,6 +253,58 @@ function build(
         supportedBases,
     });
 }
+
+
+test("archive replay uses root, numeric sequence, and relative path order", async () => {
+    const f = fixture();
+    const from = "1.4.106";
+    const to = "1.4.107";
+    try {
+        for (const seq of [1, 2, 9, 10, 11]) {
+            writeSequencedLegacy(
+                f, from, to, "common", seq, "numeric",
+                "shared-sequence.bin", `seq-${seq}`,
+            );
+        }
+        writeSequencedLegacy(
+            f, from, to, "common", 9, "relative-a",
+            "relative-tie.bin", "relative-a",
+        );
+        writeSequencedLegacy(
+            f, from, to, "common", 9, "relative-z",
+            "relative-tie.bin", "relative-z",
+        );
+        writeSequencedLegacy(
+            f, from, to, "common", 11, "root-common",
+            "root-tie.bin", "common-seq-11",
+        );
+        writeSequencedLegacy(
+            f, from, to, "medium", 1, "root-medium",
+            "root-tie.bin", "medium-seq-1",
+        );
+        const graph = build(f, from);
+        const edge = graph.edges.find(item => item.from === from && item.to === to);
+        assert.ok(edge);
+        assert.deepEqual(
+            edge.archives
+                .filter(archive => archive.relativePath.endsWith("-numeric.zip"))
+                .map(archive => archive.seq),
+            [1, 2, 9, 10, 11],
+        );
+
+        const groups = buildDiffList("https://fixture.invalid", graph);
+        assert.equal(groups.length, 1);
+        const final = await replayLegacyArchives(
+            f,
+            groups[0].archive.map(archive => archive.location),
+        );
+        assert.equal(final.get("shared-sequence.bin"), "seq-11");
+        assert.equal(final.get("relative-tie.bin"), "relative-z");
+        assert.equal(final.get("root-tie.bin"), "medium-seq-1");
+    } finally {
+        f.cleanup();
+    }
+});
 
 
 test("character chain may attach at a reachable earlier node and merge four roots", () => {

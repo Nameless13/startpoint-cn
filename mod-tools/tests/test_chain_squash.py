@@ -93,6 +93,59 @@ class Fixture:
 
 
 class GraphSemanticsTest(SquashCase):
+    def test_replay_uses_root_numeric_sequence_and_stable_fallbacks(self):
+        frm, to = "1.4.106", "1.4.107"
+        for seq in (1, 2, 9, 10, 11):
+            make_zip(
+                self.fx.common / f"pinball-{frm}-{to}-{seq}-numeric.zip",
+                {"shared-sequence.bin": f"seq-{seq}".encode()},
+            )
+        make_zip(
+            self.fx.common / f"pinball-{frm}-{to}-9-relative-a.zip",
+            {"relative-tie.bin": b"relative-a"},
+        )
+        make_zip(
+            self.fx.common / f"pinball-{frm}-{to}-9-relative-z.zip",
+            {"relative-tie.bin": b"relative-z"},
+        )
+        make_zip(
+            self.fx.common / f"pinball-{frm}-{to}-11-root-common.zip",
+            {"root-tie.bin": b"common-seq-11"},
+        )
+        make_zip(
+            self.fx.medium / f"pinball-{frm}-{to}-1-root-medium.zip",
+            {"root-tie.bin": b"medium-seq-1"},
+        )
+
+        graph = squash.build_visible_graph(self.fx.cdn, self.fx.repo)
+        ordered = sorted(graph.edges[(frm, to)], key=squash.VisibleArchive.order_key)
+        self.assertEqual(
+            [archive.seq for archive in ordered if archive.path.name.endswith("-numeric.zip")],
+            [1, 2, 9, 10, 11],
+        )
+        final, _ = squash.replay(graph, [(frm, to)])
+        self.assertEqual(
+            read_zip(final["shared-sequence.bin"].zip_path)["shared-sequence.bin"],
+            b"seq-11",
+        )
+        self.assertEqual(
+            read_zip(final["relative-tie.bin"].zip_path)["relative-tie.bin"],
+            b"relative-z",
+        )
+        self.assertEqual(
+            read_zip(final["root-tie.bin"].zip_path)["root-tie.bin"],
+            b"medium-seq-1",
+        )
+
+        tied = [
+            squash.VisibleArchive("common", Path("x.zip"), "same/path.zip", "legacy:z"),
+            squash.VisibleArchive("common", Path("x.zip"), "same/path.zip", "character:a"),
+        ]
+        self.assertEqual(
+            [archive.source for archive in sorted(tied, key=squash.VisibleArchive.order_key)],
+            ["character:a", "legacy:z"],
+        )
+
     def test_replay_matches_server_visibility_rules(self):
         graph = squash.build_visible_graph(self.fx.cdn, self.fx.repo)
         tail, path_edges = squash.find_path(graph, "1.4.54")

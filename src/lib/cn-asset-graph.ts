@@ -10,6 +10,7 @@ export type ReleaseArchiveRoot = CharacterRoot | "patch";
 export interface ReleaseArchive {
     root: ReleaseArchiveRoot;
     relativePath: string;
+    seq: number;
     size: number;
     sha256: string;
     source: string;
@@ -97,6 +98,7 @@ function edgeKey(from: string, to: string): string {
 
 function archiveOrder(left: ReleaseArchive, right: ReleaseArchive): number {
     return ROOT_ORDER[left.root] - ROOT_ORDER[right.root]
+        || left.seq - right.seq
         || left.relativePath.localeCompare(right.relativePath)
         || left.source.localeCompare(right.source);
 }
@@ -159,11 +161,19 @@ interface EdgeBuilder {
 }
 
 
+function archiveSeq(relativePath: string): number {
+    const normalized = relativePath.replace(/\\/g, "/");
+    const match = ARCHIVE_RE.exec(path.posix.basename(normalized));
+    return match === null ? 1 : Number(match[3]);
+}
+
+
 function archiveFromDisk(
     disk: string,
     root: ReleaseArchiveRoot,
     relativePath: string,
     source: string,
+    seq: number,
 ): ReleaseArchive | null {
     try {
         const stats = statSync(disk);
@@ -171,6 +181,7 @@ function archiveFromDisk(
         return {
             root,
             relativePath: relativePath.replace(/\\/g, "/"),
+            seq,
             size: stats.size,
             sha256: "",
             source,
@@ -374,6 +385,7 @@ export function buildReleaseGraph(input: ReleaseGraphInput): ReleaseGraphSnapsho
                 root,
                 `${relativePrefix}/${name}`,
                 source,
+                Number(match[3]),
             );
             if (!archive) {
                 issues.push(`release archive is missing or empty: ${path.join(directory, name)}`);
@@ -407,6 +419,7 @@ export function buildReleaseGraph(input: ReleaseGraphInput): ReleaseGraphSnapsho
             addArchive(release.from_version, release.version, {
                 root: archive.root,
                 relativePath: archive.relative_path,
+                seq: archiveSeq(archive.relative_path),
                 size: archive.size,
                 sha256: archive.sha256,
                 source: `character:${release.release_id}`,

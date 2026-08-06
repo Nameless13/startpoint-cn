@@ -73,9 +73,14 @@ class VisibleArchive:
     relative: str      # 服务端 relativePath(排序键,posix 斜杠)
     source: str        # legacy:<root> | asset-patch:active | character:<id>
 
-    def order_key(self) -> tuple[int, str, str]:
-        # 复刻服务端 archiveOrder:root 序 → relativePath → source
-        return (ROOT_ORDER[self.root], self.relative, self.source)
+    @property
+    def seq(self) -> int:
+        match = ARCHIVE_RE.fullmatch(self.path.name)
+        return int(match.group(3)) if match else 1
+
+    def order_key(self) -> tuple[int, int, str, str]:
+        # 复刻服务端 archiveOrder:root 序 → 数值 seq → relativePath → source
+        return (ROOT_ORDER[self.root], self.seq, self.relative, self.source)
 
 
 @dataclass
