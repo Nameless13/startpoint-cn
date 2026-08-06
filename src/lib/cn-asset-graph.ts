@@ -1,6 +1,11 @@
 import { existsSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 
+import {
+    declaredPatchEdgeKey,
+    readDeclaredPatchEdges,
+} from "./cn-asset-patch-manifest";
+import type { DeclaredPatchEdges } from "./cn-asset-patch-manifest";
 import { readActiveCharacterReleases, resolveCnCdnDir } from "./cn-character-release";
 import type { CharacterRoot, ValidatedReleaseChain } from "./cn-character-release";
 
@@ -159,6 +164,38 @@ interface EdgeBuilder {
     archives: ReleaseArchive[];
     sources: Set<string>;
     archiveKeys: Set<string>;
+}
+
+
+function matchesDeclaredPatchEdge(
+    edge: ReleaseEdge,
+    declared: DeclaredPatchEdges,
+): boolean {
+    const names = declared.get(declaredPatchEdgeKey(edge.from, edge.to));
+    if (names === undefined || edge.archives.length !== names.size) return false;
+    return edge.archives.every(archive => (
+        archive.source === "asset-patch:active"
+        && names.has(path.posix.basename(archive.relativePath))
+    ));
+}
+
+
+function isDeclaredCompatibilityIngress(
+    candidate: ReleaseEdge,
+    edges: readonly ReleaseEdge[],
+    declared: DeclaredPatchEdges,
+    reachableFromFull: ReadonlyMap<string, ReleaseEdge[]>,
+): boolean {
+    if (
+        !reachableFromFull.has(candidate.to)
+        || !matchesDeclaredPatchEdge(candidate, declared)
+    ) return false;
+    return edges.some(peer => (
+        peer !== candidate
+        && peer.to === candidate.to
+        && reachableFromFull.has(peer.from)
+        && matchesDeclaredPatchEdge(peer, declared)
+    ));
 }
 
 
@@ -478,16 +515,31 @@ export function buildReleaseGraph(input: ReleaseGraphInput): ReleaseGraphSnapsho
     const fullPath = findReleasePath(partial, fullBase);
     partial.tailVersion = fullPath.targetVersion;
 
+    const declaredPatchEdges = readDeclaredPatchEdges(assetPatchRoot);
+    const compatibilityBases: string[] = [];
     for (const edge of edges) {
-        if (!fromFull.has(edge.from)) {
+        if (
+            !fromFull.has(edge.from)
+            && !isDeclaredCompatibilityIngress(
+                edge,
+                edges,
+                declaredPatchEdges,
+                fromFull,
+            )
+        ) {
             issues.push(`isolated/unreachable release edge from ${fullBase}: ${edge.from}->${edge.to}`);
+        } else if (!fromFull.has(edge.from) && !compatibilityBases.includes(edge.from)) {
+            compatibilityBases.push(edge.from);
         }
     }
     if (characterChain.releases.length > 0 && !fromFull.has(characterChain.baseVersion)) {
         issues.push(`character release base is unreachable: ${characterChain.baseVersion}`);
     }
 
-    partial.supported = normalizedBases(fullBase, input.supportedBases).map(baseVersion => {
+    partial.supported = normalizedBases(
+        fullBase,
+        [...(input.supportedBases ?? []), ...compatibilityBases],
+    ).map(baseVersion => {
         if (!VERSION_RE.test(baseVersion)) {
             issues.push(`supported asset base is invalid: ${baseVersion}`);
             return { baseVersion, targetVersion: baseVersion, reachable: false, edgeCount: 0 };

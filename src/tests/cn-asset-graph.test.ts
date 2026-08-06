@@ -103,6 +103,7 @@ interface GraphFixture {
     root: string;
     cdnDir: string;
     assetPatchRoot: string;
+    patchManifest: string;
     activeManifest: string;
     cleanup(): void;
 }
@@ -121,6 +122,7 @@ function fixture(): GraphFixture {
         root,
         cdnDir,
         assetPatchRoot,
+        patchManifest: path.join(assetPatchRoot, "manifest.json"),
         activeManifest: path.join(cdnDir, "character-releases", "active.json"),
         cleanup() {
             const resolved = path.resolve(root);
@@ -187,6 +189,17 @@ function writePatch(f: GraphFixture, from: string, to: string, label = "patch"):
     const name = `pinball-${from}-${to}-1-${label}.zip`;
     writeFileSync(path.join(f.assetPatchRoot, "active", name), Buffer.from(`patch:${from}:${to}:${label}`));
     return name;
+}
+
+
+function writePatchManifest(
+    f: GraphFixture,
+    patches: Array<Record<string, unknown>>,
+): void {
+    writeFileSync(f.patchManifest, JSON.stringify({
+        cdn_version: "1.4.54",
+        patches,
+    }));
 }
 
 
@@ -460,6 +473,81 @@ test("isolated high version is reported without becoming the tail", () => {
         assert.equal(graph.tailVersion, "1.4.1");
         assert.match(graph.issues.join("\n"), /isolated|unreachable/);
         assert.equal(findReleasePath(graph, "1.4.0").targetVersion, "1.4.1");
+    } finally {
+        f.cleanup();
+    }
+});
+
+
+test("manifest-declared compatibility ingress may converge on the reachable tail", () => {
+    const f = fixture();
+    try {
+        const main = writePatch(f, "1.4.277", "1.4.312", "main-backfill");
+        const compatibility = writePatch(f, "1.4.311", "1.4.312", "compatibility");
+        writeLegacy(f, "1.4.54", "1.4.277", "common", "public-main");
+        writePatchManifest(f, [
+            {
+                id: "local-live-main",
+                type: "patch",
+                enabled: true,
+                depends_on: "1.4.277",
+                version: "1.4.312",
+                chain: [main],
+            },
+            {
+                id: "local-live-compatibility",
+                type: "patch",
+                enabled: true,
+                depends_on: "1.4.311",
+                version: "1.4.312",
+                chain: [compatibility],
+            },
+        ]);
+
+        const graph = build(f, "1.4.54");
+        assert.deepEqual(graph.issues, []);
+        assert.ok(graph.supported.some(item => (
+            item.baseVersion === "1.4.311" && item.reachable
+        )));
+        assert.equal(findReleasePath(graph, "1.4.54").targetVersion, "1.4.312");
+        assert.equal(findReleasePath(graph, "1.4.277").targetVersion, "1.4.312");
+        assert.equal(findReleasePath(graph, "1.4.311").targetVersion, "1.4.312");
+    } finally {
+        f.cleanup();
+    }
+});
+
+
+test("undeclared or disconnected compatibility ingress remains isolated", () => {
+    const f = fixture();
+    try {
+        const main = writePatch(f, "1.4.277", "1.4.312", "main-backfill");
+        writePatch(f, "1.4.311", "1.4.312", "undeclared-compatibility");
+        const disconnected = writePatch(f, "9.0.0", "9.0.1", "disconnected");
+        writeLegacy(f, "1.4.54", "1.4.277", "common", "public-main");
+        writePatchManifest(f, [
+            {
+                id: "local-live-main",
+                type: "patch",
+                enabled: true,
+                depends_on: "1.4.277",
+                version: "1.4.312",
+                chain: [main],
+            },
+            {
+                id: "disconnected",
+                type: "patch",
+                enabled: true,
+                depends_on: "9.0.0",
+                version: "9.0.1",
+                chain: [disconnected],
+            },
+        ]);
+
+        const graph = build(f, "1.4.54");
+        const issues = graph.issues.join("\n");
+        assert.match(issues, /1\.4\.311->1\.4\.312/);
+        assert.match(issues, /9\.0\.0->9\.0\.1/);
     } finally {
         f.cleanup();
     }
