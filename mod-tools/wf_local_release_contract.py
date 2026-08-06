@@ -208,11 +208,7 @@ def validate_bundle(bundle: ContractBundle) -> None:
     migration = bundle.migrations.client_tables[0]
     shop_key = ("common", "master/shop/event_item_shop.orderedmap")
     terminal_shop = terminal_tables.get(shop_key, {}).get("abyss_weapons")
-    baseline_shop = next((
-        member for member in bundle.baselines["1.4.311"].members
-        if member.key == shop_key and member.owner == "abyss_weapons"
-    ), None)
-    if terminal_shop is None or baseline_shop is None:
+    if terminal_shop is None:
         raise InventoryError("migration shop contract is missing its endpoint")
     if (
         migration.owner != "abyss_weapons"
@@ -224,12 +220,6 @@ def validate_bundle(bundle: ContractBundle) -> None:
         != _member_source(terminal_shop)
     ):
         raise InventoryError("migration terminal does not match terminal shop claim")
-    if (
-        migration.preimage.projection_sha256 != baseline_shop.projection_sha256
-        or (migration.preimage.source_size, migration.preimage.source_sha256)
-        != _member_source(baseline_shop)
-    ):
-        raise InventoryError("migration preimage does not match baseline 1.4.311 shop")
 
 
 def load_bundle(directory: Path) -> ContractBundle:

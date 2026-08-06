@@ -139,6 +139,37 @@ class LocalLiveReleaseContractTest(unittest.TestCase):
         self.assertEqual(("11", "700099"), shop.selector.path)
         self.assertEqual(15, len(shop.selector.keys))
 
+    def test_shop_live_migration_changes_only_name_not_installed_description(self):
+        import wf_mod_tool as core
+
+        migration = self.bundle.migrations.client_tables[0]
+        baseline_shop = next(
+            member for member in self.bundle.baselines["1.4.311"].members
+            if member.owner == "abyss_weapons"
+            and member.logical_path == migration.logical_path
+        )
+        self.assertNotEqual(
+            baseline_shop.projection_sha256, migration.preimage_sha256
+        )
+        self.assertNotEqual(
+            baseline_shop.source_sha256, migration.preimage.source_sha256
+        )
+        for before, after in zip(migration.preimage.rows, migration.terminal.rows):
+            self.assertEqual(before[:2], after[:2])
+            before_csv = core.read_csv_lines(before[2].decode("utf-8"))[0]
+            after_csv = core.read_csv_lines(after[2].decode("utf-8"))[0]
+            self.assertEqual(
+                [7],
+                [
+                    index for index, (old, new) in enumerate(
+                        zip(before_csv, after_csv)
+                    )
+                    if old != new
+                ],
+            )
+            self.assertEqual(before_csv[11], after_csv[11])
+            self.assertIn("练习关", before_csv[11])
+
     def test_malformed_provenance_and_server_parent_expansion_fail_closed(self):
         provenance_raw = json.loads(
             (CONTRACTS / "local-live-baseline-provenance.json").read_text(
@@ -272,6 +303,7 @@ class LocalLiveReleaseContractTest(unittest.TestCase):
         os.environ.get("WF_REAL_LOCAL_REPO"), "requires explicit local truth root"
     )
     def test_real_baselines_attest_read_only_and_1_4_312_is_still_absent(self):
+        import wf_mod_tool as core
         import wf_release_inventory as inventory
 
         repo = Path(os.environ["WF_REAL_LOCAL_REPO"])
@@ -282,6 +314,27 @@ class LocalLiveReleaseContractTest(unittest.TestCase):
             self.bundle, repo / ".cdn" / "cn", repo
         )
         self.assertEqual((55, 243), tuple(report.member_count for report in reports))
+
+        shop = self.bundle.migrations.client_tables[0]
+        historical_shop = inventory.resolve_allowlisted_members(
+            repo / ".cdn" / "cn", repo,
+            [(shop.root, shop.logical_path)], target_tail="1.4.311",
+        )[(shop.root, shop.logical_path)].raw
+        historical_rows = inventory.project_claim(
+            historical_shop, shop.claim
+        ).rows
+        for historical, terminal in zip(historical_rows, shop.terminal.rows):
+            before_csv = core.read_csv_lines(historical[2].decode("utf-8"))[0]
+            after_csv = core.read_csv_lines(terminal[2].decode("utf-8"))[0]
+            self.assertEqual(
+                [7, 11],
+                [
+                    index for index, (old, new) in enumerate(
+                        zip(before_csv, after_csv)
+                    )
+                    if old != new
+                ],
+            )
         with self.assertRaisesRegex(self.contract.InventoryError, "1.4.312"):
             self.contract.require_release_artifacts(repo / ".cdn" / "cn", "1.4.312")
         for package, owner in (
