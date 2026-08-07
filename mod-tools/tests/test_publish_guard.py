@@ -157,6 +157,19 @@ class ContentNotesTest(unittest.TestCase):
         new = self._table({"a": b"r1\nr2"})
         self.assertEqual(guard.content_notes("t", "1.4.1", old, new), [])
 
+    def test_nested_table_rows_are_not_counted(self) -> None:
+        """nested 表的外层行是二进制块,不能拿 \\n 当「记录条数」。
+
+        rush_event_quest[700099] 就这样被误报成「57→47 条」——那 57/47 只是
+        压缩字节里恰好有多少个 0x0A。2026-08-07 上线当天实测到的假阳性。
+        """
+        import zlib
+        blob_a = zlib.compress(b"x" * 400 + b"\n" * 57, 9)
+        blob_b = zlib.compress(b"y" * 400 + b"\n" * 47, 9)
+        old = self._table({"700099": blob_a})
+        new = self._table({"700099": blob_b})
+        self.assertEqual(guard.content_notes("t", "1.4.1", old, new), [])
+
     def test_non_orderedmap_is_silent(self) -> None:
         """DSL/图片/mp3 解不出键索引,体检直接跳过。"""
         self.assertEqual(

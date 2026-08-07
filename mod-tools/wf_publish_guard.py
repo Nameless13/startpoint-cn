@@ -149,9 +149,22 @@ def _rows_of(blob: bytes) -> dict[str, bytes] | None:
     return out
 
 
-def _row_lines(payload: bytes) -> int:
-    """一个键里装了几条 CSV 记录(一键多记录是常态,ability 最多 9~10 条)。"""
-    return len([ln for ln in payload.split(b"\n") if ln.strip()])
+def _row_lines(payload: bytes) -> int | None:
+    """一个键里装了几条 CSV 记录(一键多记录是常态,ability 最多 9~10 条)。
+
+    **只对 flat 表有意义**。nested 表(rush_event_quest / general_boss / zone /
+    boss_level / general_funnel …)的外层行本身就是一个 orderedmap 二进制块,
+    数里面的 \\n 纯属噪声——`rush_event_quest[700099]` 就这样被误报成
+    「57→47 条」,而它其实是压缩字节里恰好有多少个 0x0A。
+    读不出文本就返回 None,调用方跳过这条判据。"""
+    try:
+        text = payload.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+    # CSV 行里不会有控制字符(制表符除外);有就说明这是二进制块。
+    if any(ch < " " and ch not in "\t\r\n" for ch in text):
+        return None
+    return len([ln for ln in text.splitlines() if ln.strip()])
 
 
 def content_notes(label: str, version: str,
@@ -176,8 +189,11 @@ def content_notes(label: str, version: str,
     if not common:
         return []
     changed = [k for k in common if old_rows[k] != new_rows[k]]
-    shrunk = [k for k in changed
-              if _row_lines(new_rows[k]) < _row_lines(old_rows[k])]
+    shrunk = []
+    for key in changed:
+        before, after = _row_lines(old_rows[key]), _row_lines(new_rows[key])
+        if before is not None and after is not None and after < before:
+            shrunk.append(key)
     notes: list[str] = []
     if changed and len(changed) > 20 and len(changed) / len(common) > 0.25:
         notes.append(
@@ -267,7 +283,10 @@ def check(entries: list[tuple[str, bytes]], *, verbose: bool = True) -> list[str
         # 内容体检:键集合合规不代表内容没被整表换掉。只告警,不进 problems。
         if verbose:
             for note in content_notes(label, version, old, payload):
-                print(f"  [⚠内容] {note}")
+                # 字样必须是 GBK 可编码的:这段会被 wf_publish 的发布预检子进程
+                # 打印,那里的 stdout 是 Windows 活动代码页(cp936)。
+                # 曾用「⚠」(U+26A0)导致 `'gbk' codec can't encode` 直接中止发布。
+                print(f"  [内容告警] {note}")
 
         # 角色包 claims 的行必须还在(链上已有的前提下)
         must = guarded.get(logical or "", set()) & set(old_keys)
