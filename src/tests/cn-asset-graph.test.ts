@@ -558,6 +558,61 @@ test("manifest-declared compatibility ingress may converge on the reachable tail
 });
 
 
+test("a client already on the chain tail only advances through an edge that starts there", () => {
+    // 1.4.312 发布后才发现三张共享表因认领清单漏行而回落基线(暗龙 261089
+    // 停在 ★4 等)。修法不能是「原地重发 1.4.312」——reachablePaths 从
+    // startVersion 起步,已在 1.4.312 的客户端没有出边,同版本号重发对它
+    // 投递为零;把现有两条边的终点改成更高版本同样无效,因为它们的起点
+    // 不是 1.4.312。唯一有效的是新增一条**从 1.4.312 出发**的边。
+    const f = fixture();
+    try {
+        const main = writePatch(f, "1.4.277", "1.4.312", "main-backfill");
+        const compatibility = writePatch(f, "1.4.311", "1.4.312", "compatibility");
+        const fixups = writePatch(f, "1.4.312", "1.4.318", "fixups");
+        writeLegacy(f, "1.4.54", "1.4.277", "common", "public-main");
+        writePatchManifest(f, [
+            {
+                id: "local-live-main",
+                type: "patch",
+                enabled: true,
+                depends_on: "1.4.277",
+                version: "1.4.312",
+                chain: [main],
+            },
+            {
+                id: "local-live-compatibility",
+                type: "patch",
+                enabled: true,
+                depends_on: "1.4.311",
+                version: "1.4.312",
+                chain: [compatibility],
+            },
+            {
+                id: "local-live-fixups",
+                type: "patch",
+                enabled: true,
+                depends_on: "1.4.312",
+                version: "1.4.318",
+                chain: [fixups],
+            },
+        ]);
+
+        const graph = build(f, "1.4.54");
+        assert.deepEqual(graph.issues, []);
+        // 卡在链尾的客户端是这次修复的目标读者。
+        const stranded = findReleasePath(graph, "1.4.312");
+        assert.equal(stranded.targetVersion, "1.4.318");
+        assert.equal(stranded.edges.length, 1);
+        // 更早的客户端顺着原链走到 1.4.312 后继续前进,终态一致。
+        assert.equal(findReleasePath(graph, "1.4.54").targetVersion, "1.4.318");
+        assert.equal(findReleasePath(graph, "1.4.277").targetVersion, "1.4.318");
+        assert.equal(findReleasePath(graph, "1.4.311").targetVersion, "1.4.318");
+    } finally {
+        f.cleanup();
+    }
+});
+
+
 test("undeclared or disconnected compatibility ingress remains isolated", () => {
     const f = fixture();
     try {

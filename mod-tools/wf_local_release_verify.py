@@ -341,8 +341,6 @@ def _verify_manifest(
         != policy.manifest_preimage_patch_count
     ):
         raise model.ReceiptError("manifest policy baseline mismatch")
-    if model._sha(manifest_raw) != evidence["output_sha256"]:
-        raise model.ReceiptError("manifest output sha256 mismatch")
     manifest = model._json(manifest_raw, "manifest")
     if not isinstance(manifest, dict) or manifest.get("cdn_version") != evidence["cdn_version"]:
         raise model.ReceiptError("manifest cdn_version mismatch")
@@ -352,18 +350,35 @@ def _verify_manifest(
     if manifest_raw != rendered_output:
         raise model.ReceiptError("manifest output is not canonical renderer bytes")
     patches, appended = manifest.get("patches"), evidence["appended_patches"]
+    preimage_count = evidence["preimage_patch_count"]
     if (
         not isinstance(patches, list)
         or not isinstance(appended, list)
         or not appended
-        or patches[-len(appended):] != appended
+        or not isinstance(preimage_count, int)
+        or preimage_count < 0
+        or len(patches) < preimage_count + len(appended)
+        # 判据从「必须在末尾」改成「必须在它当初写入的那个位置」。
+        # manifest 是 append-only 的:后续发布会继续往尾部追加(第一例是
+        # 1.4.312→1.4.318 的 local-live-fixups),旧回执不该因此被判失效。
+        # 钉住绝对位置比钉住「末尾」更严——它同时否掉了「插队到前面」。
+        or patches[preimage_count:preimage_count + len(appended)] != appended
     ):
         raise model.ReceiptError("manifest appended patch mismatch")
     if len(appended) != len(edges):
         raise model.ReceiptError("manifest must describe exactly both edges")
-    old_patches = patches[:-len(appended)]
-    if len(old_patches) != evidence["preimage_patch_count"]:
-        raise model.ReceiptError("manifest preimage patch count mismatch")
+    old_patches = patches[:preimage_count]
+    # 回执只对**它自己那次追加**负责,所以 output_sha256 比的是
+    # 「发布当时的 manifest」而不是这个文件的永恒字节。整文件仍然被上面的
+    # canonical-render 检查覆盖,后续追加条目的完整性由 manifest 自己的
+    # archive_integrity + 图侧校验负责。
+    at_release = dict(manifest)
+    at_release["patches"] = patches[:preimage_count + len(appended)]
+    rendered_at_release = (
+        json.dumps(at_release, ensure_ascii=False, indent=1) + "\n"
+    ).encode("utf-8")
+    if model._sha(rendered_at_release) != evidence["output_sha256"]:
+        raise model.ReceiptError("manifest output sha256 mismatch")
     preimage = dict(manifest)
     preimage["patches"] = old_patches
     rendered_preimage = (

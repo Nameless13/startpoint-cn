@@ -310,6 +310,26 @@
     }
    ],
    "created_at": "2026-08-06"
+  },
+  {
+   "id": "local-live-fixups",
+   "type": "patch",
+   "name": "1.4.312→1.4.318 认领缺行补齐",
+   "description": "三张共享表因冻结合同的认领清单漏行,发布时按契约回落基线,收方拿到的不是本服实际内容:①character 261089 暗龙阿鲁玛德乌斯稀有度停在 ★4(本服 ★5)——light_dark_dragons 认领了 6 张表却没认领 character;②character_speech 149999 杰拉德的 21 条日配语音缺失;③ability_soul 451 键里 408 键停在旧值(官方魂珠增强与延续的黄金 100012)。本边直接投递这三张表的本服终态字节,与作者本地链(character/speech 1.4.285、ability_soul 1.4.307)逐字节一致。从 1.4.312 出发单独成边,是因为图的 reachablePaths 只走 from==当前版本 的边:已更新到 1.4.312 的客户端没有出边,原地重发同版本号对他们投递为零。",
+   "version": "1.4.318",
+   "depends_on": "1.4.312",
+   "enabled": true,
+   "chain": [
+    "pinball-1.4.312-1.4.318-1-fixups0807.zip"
+   ],
+   "archive_integrity": [
+    {
+     "name": "pinball-1.4.312-1.4.318-1-fixups0807.zip",
+     "size": 453606,
+     "sha256": "236d27be1a2f95c021ee7a8ac355f972b4719f3c777dafced0ba729b18b8a701"
+    }
+   ],
+   "created_at": "2026-08-07"
   }
  ]
 }
