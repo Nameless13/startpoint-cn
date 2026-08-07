@@ -7313,7 +7313,10 @@ def rogue_drops_save(body: dict, dry_run: bool) -> dict:
     shutil.copy(path, path + time.strftime(".bak-wfmod-rogue-%Y%m%d-%H%M%S"))
     events[ROGUE_EVENT_ID] = cfg
     data["enabled"] = new_enabled
-    with open(path, "w", encoding="utf-8") as fh:
+    # newline="\n":Windows 文本模式默认写 CRLF,git 的 text=auto 会把差异归一化
+    # 掉(status 干净、diff 空),但发布回执的 _server_evidence 哈希原始字节 ⇒
+    # 写过一次之后 verify:local-release 报 "server terminal evidence mismatch"。
+    with open(path, "w", encoding="utf-8", newline="\n") as fh:
         json.dump(data, fh, ensure_ascii=False, indent=1)
     try:
         _server_call("/api/mod-admin/reload_assets", post=True)

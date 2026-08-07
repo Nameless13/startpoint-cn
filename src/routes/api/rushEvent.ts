@@ -144,6 +144,35 @@ export const rushEventFolderMaxRounds: { [key in RushEventFolder]?: number } = {
 
 let lastRogueRerollMs = 0
 
+/**
+ * mod: 「游戏内重置 → 自动重摇塔」的开关。
+ *
+ * 这个钩子会在**服务端所在的机器上** spawn `wf_rogue_reroll.py --apply`:
+ * 重建整座塔、写进那台机器的 .cdn 并推版本号、清掉该服所有存档的爬塔进度。
+ * 对作者本机是「一键重开」的便利,对拿这个仓库自建服的人则是一次预料之外的
+ * 内容改写(而且他们多半没装 mod-tools/python,只会静默失败)。
+ *
+ * 所以 `assets/rogue_event.json` 里的 `reset_rerolls_tower` 保持 null 发布,
+ * 想开的人用环境变量单独开——.env 不进版本库,不会波及别人的服。
+ *
+ *   WF_ROGUE_REROLL_ON_RESET=1                                  # 用默认(30 层)
+ *   WF_ROGUE_REROLL_ON_RESET={"rounds":30,"difficulty":"hell","mix":true}
+ *
+ * 环境变量优先于 rogue_event.json;两者都没有就不触发。
+ */
+function rogueRerollOverride(): { rounds?: number, difficulty?: string, mix?: boolean } | null {
+    const raw = (process.env.WF_ROGUE_REROLL_ON_RESET ?? "").trim()
+    if (raw === "" || raw === "0" || raw.toLowerCase() === "false") return null
+    if (!raw.startsWith("{")) return {}
+    try {
+        const parsed = JSON.parse(raw)
+        return parsed !== null && typeof parsed === "object" ? parsed : {}
+    } catch {
+        console.error("[RUSH] WF_ROGUE_REROLL_ON_RESET is not valid JSON; using defaults")
+        return {}
+    }
+}
+
 function triggerRogueTowerReroll(cfg: { rounds?: number, difficulty?: string, mix?: boolean }): void {
     const now = Date.now()
     if (now - lastRogueRerollMs < 120_000) {
@@ -516,7 +545,8 @@ const routes = async (fastify: FastifyInstance) => {
         // mod: roguelike 塔重摇钩子——整段 folder 重置时按配置拉起重摇
         // (rogue_event.json reset_rerolls_tower;冷却 120s;完成后玩家重启游戏拉新塔)
         try {
-            const rerollCfg = (getRogueEventConfig(eventId) as any)?.reset_rerolls_tower
+            const rerollCfg = rogueRerollOverride()
+                ?? (getRogueEventConfig(eventId) as any)?.reset_rerolls_tower
             if (rerollCfg && questType === ResetQuestType.FOLDER && resetTargetId === undefined) {
                 triggerRogueTowerReroll(rerollCfg)
             }

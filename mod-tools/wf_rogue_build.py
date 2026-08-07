@@ -7723,7 +7723,12 @@ def main() -> int:
     # 清掉多余轮(rounds 缩小时;99=无尽键不在范围内,rounds 上限 98)
     for r in range(args.rounds + 1, 99):
         quest_json.pop(str(700099000 + r), None)
-    with open(quest_json_path, "w", encoding="utf-8") as fh:
+    # newline="\n" 是必须的:Windows 上文本模式默认吐 CRLF,而仓库 .gitattributes
+    # 是全 LF。git 的 text=auto 归一化会把差异藏起来(status 显示干净),但发布回执
+    # 的 _server_evidence 哈希的是**原始字节** ⇒ 跑过一次重摇之后
+    # `npm run verify:local-release` 就红,报 "server terminal evidence mismatch",
+    # 而 git diff 又看不出任何改动。2026-08-07 实测 7 个服务端 json 全中招。
+    with open(quest_json_path, "w", encoding="utf-8", newline="\n") as fh:
         json.dump(quest_json, fh, ensure_ascii=False, indent=1)
 
     folder_json_path = os.path.join(ROOT, "assets", "rush_event_quest_folder.json")
@@ -7732,7 +7737,7 @@ def main() -> int:
     # 保留自定义通关奖励(2026-07-28 起服务端 json 的 700099 奖励由用户定制,
     # 重摇只在条目缺失时才从模板补种)
     folder_json.setdefault(EVENT_ID, {"1": folder_json[TEMPLATE_EVENT]["1"]})
-    with open(folder_json_path, "w", encoding="utf-8") as fh:
+    with open(folder_json_path, "w", encoding="utf-8", newline="\n") as fh:
         json.dump(folder_json, fh, ensure_ascii=False, indent=1)
     print("[OK] 服务端 json 已写入(rush_event_quest / rush_event_quest_folder)——静态 import,须重启服务端")
     save_boss_history(tower_bosses)

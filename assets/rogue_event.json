@@ -28,11 +28,7 @@
      "chance": 0.5
     }
    ],
-   "reset_rerolls_tower": {
-    "rounds": 30,
-    "difficulty": "hell",
-    "mix": true
-   },
+   "reset_rerolls_tower": null,
    "folder_clear_random": [
     {
      "_": "以太:6属性里随机2-3种,每种150-500",
