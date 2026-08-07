@@ -330,6 +330,32 @@
     }
    ],
    "created_at": "2026-08-07"
+  },
+  {
+   "id": "local-live-atlas-fix",
+   "type": "patch",
+   "name": "1.4.318→1.4.323 战斗图集补裁 + 图标同步",
+   "description": "把本地链 1.4.319~1.4.323 五条边合成一条公开边。主项:U_1d93f4(战斗 layer0 4096² 图集溢出)修复 —— 杰拉德 3 张、赛瑞斯 2 张、基诺维 2 张战斗图集按「只裁右下空白」重裁(atlas 坐标零改动,逐 region 像素等价),六个自制角色 layer0 占用 36.6%→31.4%;多人房把三队编成合并进同一张图集,此前三人房带多个自制角色进战即报 U_1d93f4。附带:1.4.320 的 60 个角色图标(medium 根)与 1.4.319/321/322 的表改动一并同步。",
+   "version": "1.4.323",
+   "depends_on": "1.4.318",
+   "enabled": true,
+   "chain": [
+    "pinball-1.4.318-1.4.323-1-atlasfix0807.zip",
+    "pinball-1.4.318-1.4.323-2-atlasfix0807.zip"
+   ],
+   "archive_integrity": [
+    {
+     "name": "pinball-1.4.318-1.4.323-1-atlasfix0807.zip",
+     "size": 4892225,
+     "sha256": "ffc03ae710dc0531ef13782fe6207d692a78f77416ff2fb012a9184b40c18758"
+    },
+    {
+     "name": "pinball-1.4.318-1.4.323-2-atlasfix0807.zip",
+     "size": 4194509,
+     "sha256": "2699229a9f9385959d4a4a0e44f78b189a3d4adb737e6f970b2155d0c6fafc33"
+    }
+   ],
+   "created_at": "2026-08-07"
   }
  ]
 }
