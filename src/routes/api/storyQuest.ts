@@ -1,10 +1,18 @@
 import { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import { getPlayerSingleQuestProgressSync, getPlayerSync, getSession, insertPlayerQuestProgressSync, updatePlayerQuestProgressSync } from "../../data/wdfpData";
+import { getDb } from "../../data/db";
+import { getPlayerCharacterSync } from "../../data/domains/character";
+import { getPlayerSingleQuestProgressSync, insertPlayerQuestProgressSync, updatePlayerQuestProgressSync } from "../../data/domains/quest"
+import { getPlayerSync } from "../../data/domains/player"
+import { getSession } from "../../data/domains/session"
 import { resolvePlayerIdSync } from "../../data/activeAccount";
 import { getQuestFromCategorySync } from "../../lib/assets";
+import { givePlayerCharacterSync } from "../../lib/character";
+import { getMailArrivedSync } from "../../lib/mail-notification";
 import { givePlayerRewardSync } from "../../lib/quest";
-import { generateDataHeaders } from "../../utils";
-import { QuestCategory } from "../../lib/types";
+import { reconcileActiveMissionFacts, reconcileAwakeUnlockCharacterList } from "../../lib/mission";
+import { getQuestJoinCharacterIds } from "../../lib/story-join-character";
+import { generateDataHeaders, getServerTime } from "../../utils";
+import { getContentSnapshot } from "../../content/runtime/content-snapshot";
 
 interface FinishBody {
     party_id: number,
@@ -22,10 +30,7 @@ interface FinishWithSkipBody {
     api_count: number
 }
 
-function processStoryQuestFinish(playerId: number, viewerId: number, questSection: number, questId: number) {
-    const playerData = getPlayerSync(playerId)
-    if (playerData === null) return null
-
+function processStoryQuestFinish(playerId: number, questSection: number, questId: number) {
     const questData = getQuestFromCategorySync(questSection, questId)
     if (questData === null) {
         console.log(`[STORY] quest not found: category=${questSection} questId=${questId}`)
@@ -36,39 +41,72 @@ function processStoryQuestFinish(playerId: number, viewerId: number, questSectio
         return null
     }
 
-    const questProgress = getPlayerSingleQuestProgressSync(playerId, questSection, questId);
-    const finished = questProgress !== null ? questProgress.finished : false
-    const rewardResult = !finished && questData.clearReward !== undefined ? givePlayerRewardSync(playerId, questData.clearReward) : null
+    return getDb().transaction(() => {
+        const playerBefore = getPlayerSync(playerId)
+        if (playerBefore === null) return null
 
-    if (!finished) {
-        if (questProgress === null) {
-            insertPlayerQuestProgressSync(playerId, questSection, {
-                questId: questId,
-                finished: true,
-                clearRank: 5
-            })
-        } else {
-            updatePlayerQuestProgressSync(playerId, questSection, {
-                questId: questId,
-                finished: true,
-                clearRank: 5
-            })
+        const questProgress = getPlayerSingleQuestProgressSync(playerId, questSection, questId)
+        const firstClear = questProgress?.finished !== true
+        const rewardResult = firstClear && questData.clearReward !== undefined
+            ? givePlayerRewardSync(playerId, questData.clearReward)
+            : null
+        const storyJoinCharacterIds: number[] = []
+        const storyCharacterList: Record<string, unknown>[] = []
+
+        if (firstClear) {
+            for (const characterId of getQuestJoinCharacterIds(questSection, questId)) {
+                if (getPlayerCharacterSync(playerId, characterId) !== null) continue
+                const giveResult = givePlayerCharacterSync(playerId, characterId)
+                if (!giveResult?.character) {
+                    throw new Error(`Story join character ${characterId} is missing from character content.`)
+                }
+                storyJoinCharacterIds.push(characterId)
+                storyCharacterList.push(giveResult.character as Record<string, unknown>)
+            }
+
+            if (questProgress === null) {
+                insertPlayerQuestProgressSync(playerId, questSection, {
+                    questId,
+                    finished: true,
+                    clearRank: 5,
+                })
+            } else {
+                updatePlayerQuestProgressSync(playerId, questSection, {
+                    questId,
+                    finished: true,
+                    clearRank: 5,
+                })
+            }
         }
-    }
 
-    return {
-        data: !finished ? {
-            "user_info": {
-                "free_vmoney": playerData.freeVmoney + (rewardResult?.user_info.free_vmoney || 0),
-                "free_mana": playerData.freeMana + (rewardResult?.user_info.free_mana || 0)
+        const playerAfter = getPlayerSync(playerId)
+        if (playerAfter === null) throw new Error(`Player ${playerId} disappeared during story settlement.`)
+        const characterList = reconcileAwakeUnlockCharacterList(playerId, [
+            ...((rewardResult?.character_list ?? []) as Record<string, unknown>[]),
+            ...storyCharacterList,
+        ])
+        const activeMissionList = reconcileActiveMissionFacts({
+            playerId,
+            repository: getContentSnapshot().repository,
+            now: getServerTime() * 1000,
+        })
+        return {
+            user_info: {
+                free_vmoney: playerAfter.freeVmoney,
+                free_mana: playerAfter.freeMana,
+                exp_pool: playerAfter.expPool,
             },
-            "character_list": rewardResult?.character_list || [],
-            "joined_character_id_list": rewardResult?.joined_character_id_list || [],
-            "equipment_list": rewardResult?.equipment_list || [],
-            "items": rewardResult?.items || {},
-            "presigned_quest_category": []
-        } : []
-    }
+            character_list: characterList,
+            joined_character_id_list: rewardResult?.joined_character_id_list ?? [],
+            equipment_list: rewardResult?.equipment_list ?? [],
+            item_list: rewardResult?.items ?? {},
+            story_join_character_id_list: storyJoinCharacterIds,
+            user_notice_list: [],
+            presigned_quest_category: [],
+            active_mission_list: activeMissionList,
+            mail_arrived: getMailArrivedSync(playerId),
+        }
+    })()
 }
 
 const routes = async (fastify: FastifyInstance) => {
@@ -93,7 +131,7 @@ const routes = async (fastify: FastifyInstance) => {
             "message": "No player bound to account."
         })
 
-        const result = processStoryQuestFinish(playerId, viewerId, body.category, body.quest_id)
+        const result = processStoryQuestFinish(playerId, body.category, body.quest_id)
         if (result === null) return reply.status(400).send({
             "error": "Bad Request",
             "message": "Invalid quest ID provided."
@@ -102,7 +140,7 @@ const routes = async (fastify: FastifyInstance) => {
         reply.header("content-type", "application/x-msgpack")
         return reply.status(200).send({
             "data_headers": generateDataHeaders({ viewer_id: viewerId }),
-            "data": result.data
+            "data": result
         })
     })
 
@@ -128,7 +166,7 @@ const routes = async (fastify: FastifyInstance) => {
             "message": "No player bound to account."
         })
 
-        const result = processStoryQuestFinish(playerId, viewerId, body.category, body.quest_id)
+        const result = processStoryQuestFinish(playerId, body.category, body.quest_id)
         if (result === null) return reply.status(400).send({
             "error": "Bad Request",
             "message": "Invalid quest ID provided."
@@ -137,7 +175,7 @@ const routes = async (fastify: FastifyInstance) => {
         reply.header("content-type", "application/x-msgpack")
         return reply.status(200).send({
             "data_headers": generateDataHeaders({ viewer_id: viewerId }),
-            "data": result.data
+            "data": result
         })
     })
 }

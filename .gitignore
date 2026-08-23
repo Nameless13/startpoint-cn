@@ -4,8 +4,8 @@ mitm_redirect
 .database
 scripts/in
 .cdn
+.content/
 .misc
-web/public/tailwind.css
 scripts/__pycache__
 dist
 build
@@ -23,3 +23,8 @@ web/public/comic/
 # mitmproxy traffic captures (may contain real tokens/PII — local only)
 docs/cn-traffic/
 
+scripts/out_new/
+tsconfig.tsbuildinfo
+assets/gacha_odds/
+.cdn/zip_index.json
+tmp/

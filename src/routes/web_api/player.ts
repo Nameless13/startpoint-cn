@@ -1,9 +1,26 @@
 import { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import { getMergedPlayerDataSync, reviveMergedPlayerDates } from "../../data/utils";
-import { validatePlayerField, VALID_CHARACTER_IDS, VALID_ITEM_IDS, MAX_INT } from "./validation";
-import { getAllPlayersSync, replacePlayerDataSync, getPlayerSync, updatePlayerSync, getPlayerCharactersSync, getPlayerItemsSync, getPlayerEquipmentListSync, insertPlayerCharacterSync, insertDefaultPlayerCharacterSync, updatePlayerItemSync, getPlayerDailyChallengePointListSync, insertPlayerDailyChallengePointListSync, updatePlayerDailyChallengePointSync, deleteAllPlayerMailSync, getDb, getDefaultPlayerPartyGroupsSync, insertPlayerPartyGroupListSync } from "../../data/wdfpData";
+import { validatePlayerField, isValidCharacterId, isValidItemId, MAX_INT } from "./validation";
+import { wantsJson } from "./http";
+import { getAllPlayersSync, getDefaultPlayerPartyGroupsSync, getPlayerDailyChallengePointListSync, getPlayerSync, insertPlayerDailyChallengePointListSync, updatePlayerDailyChallengePointSync, updatePlayerSync } from "../../data/domains/player"
+import { deleteAllPlayerMailSync } from "../../data/domains/mail"
+import { getDb } from "../../data/db"
+import { getPlayerCharactersSync, insertDefaultPlayerCharacterSync, insertPlayerCharacterSync } from "../../data/domains/character"
+import { getPlayerEquipmentListSync } from "../../data/domains/equipment"
+import { getPlayerItemsSync, setPlayerItemSync, updatePlayerItemSync } from "../../data/domains/item"
+import { getPlayerQuestProgressSync, getPlayerDrawnQuestsSync } from "../../data/domains/quest"
+import { insertPlayerPartyGroupListSync } from "../../data/domains/party"
 import { PartyCategory } from "../../data/types";
-import dailyChallengePointLookup from "../../../assets/daily_challenge_point_lookup.json";
+import bundledDailyChallengePointLookup from "../../../assets/daily_challenge_point_lookup.json";
+import { getRuntimeContentTableSync } from "../../content/runtime/table-access";
+import {
+    exportPlayerSaveV2Sync,
+    restorePlayerSaveSnapshotSync,
+    validatePlayerSaveSnapshotSync,
+} from "../../data/player-save";
+import {
+    PlayerSaveDownloadTooLargeError,
+    serializePlayerSaveDownload,
+} from "./player-save-download";
 
 interface SaveQuery {
     id: string | undefined
@@ -30,30 +47,124 @@ const routes = async (fastify: FastifyInstance) => {
         return reply.status(200).send(players)
     })
 
+    fastify.get("/:id/detail", async (request: FastifyRequest, reply: FastifyReply) => {
+        const playerId = Number((request.params as any).id)
+        if (isNaN(playerId)) return reply.status(400).send({ error: "Invalid player ID" })
+
+        const player = getPlayerSync(playerId)
+        if (!player) return reply.status(404).send({ error: "Player not found" })
+
+        const characters = getPlayerCharactersSync(playerId)
+        const charList = Object.entries(characters)
+            .map(([code, char]) => ({
+                code: Number(code),
+                joinTime: char.joinTime.toISOString(),
+                entryCount: char.entryCount,
+                evolutionLevel: char.evolutionLevel,
+                overLimitStep: char.overLimitStep,
+                exp: char.exp,
+                stack: char.stack,
+                manaBoardIndex: char.manaBoardIndex,
+            }))
+            .sort((a, b) => new Date(b.joinTime).getTime() - new Date(a.joinTime).getTime())
+
+        const items = getPlayerItemsSync(playerId)
+        const itemList = Object.entries(items).map(([id, count]) => ({ id: Number(id), count }))
+
+        const equipment = getPlayerEquipmentListSync(playerId)
+        const equipList = Object.entries(equipment).map(([id, eq]) => ({
+            id: Number(id),
+            level: eq.level,
+            enhancementLevel: eq.enhancementLevel,
+        }))
+
+        const questProgress = getPlayerQuestProgressSync(playerId)
+        const questList: { section: number; questId: number; finished: boolean; highScore: number | null; clearRank: number | null; bestElapsedTimeMs: number | null }[] = []
+        for (const [section, quests] of Object.entries(questProgress)) {
+            for (const qp of quests) {
+                questList.push({
+                    section: Number(section),
+                    questId: qp.questId,
+                    finished: qp.finished,
+                    highScore: qp.highScore ?? null,
+                    clearRank: qp.clearRank ?? null,
+                    bestElapsedTimeMs: qp.bestElapsedTimeMs ?? null,
+                })
+            }
+        }
+
+        const drawnQuests = getPlayerDrawnQuestsSync(playerId)
+
+        return reply.send({
+            player: {
+                id: player.id,
+                accountId: (getDb().prepare(`SELECT account_id FROM players WHERE id = ?`).get(player.id) as { account_id: number } | undefined)?.account_id ?? 0,
+                name: player.name,
+                comment: player.comment,
+                stamina: player.stamina,
+                boostPoint: player.boostPoint,
+                bossBoostPoint: player.bossBoostPoint,
+                vmoney: player.vmoney,
+                freeVmoney: player.freeVmoney,
+                freeMana: player.freeMana,
+                paidMana: player.paidMana,
+                rankPoint: player.rankPoint,
+                starCrumb: player.starCrumb,
+                bondToken: player.bondToken,
+                expPool: player.expPool,
+                degreeId: player.degreeId,
+                leaderCharacterId: player.leaderCharacterId,
+                birth: player.birth,
+                enableAuto3x: player.enableAuto3x,
+                tutorialStep: player.tutorialStep,
+                lastLoginTime: player.lastLoginTime.toISOString(),
+                staminaHealTime: player.staminaHealTime.toISOString(),
+                expPooledTime: player.expPooledTime.toISOString(),
+            },
+            characters: charList,
+            items: itemList,
+            equipment: equipList,
+            questProgress: questList,
+            drawnQuests: drawnQuests.map(dq => ({
+                categoryId: dq.categoryId,
+                questId: dq.questId,
+                oddsId: dq.oddsId,
+            })),
+        })
+    })
+
     fastify.get("/save", async (request: FastifyRequest, reply: FastifyReply) => {
         const { id } = request.query as SaveQuery
         const playerId = Number(id)
         if (isNaN(playerId)) return reply.redirect("/player");
+        const json = wantsJson(request)
+        if (getPlayerSync(playerId) === null) {
+            return json ? reply.status(404).send({ error: "Player not found" }) : reply.redirect("/player")
+        }
 
-        const data = getMergedPlayerDataSync(playerId)
-        if (data === null) return reply.redirect("/player");
-
-        const snapshot = {
-            schema: "starpoint-cn-save",
-            version: 1,
-            exportedAt: new Date().toISOString(),
-            playerId,
-            data
+        let serialized
+        try {
+            serialized = serializePlayerSaveDownload(exportPlayerSaveV2Sync(playerId))
+        } catch (error: any) {
+            const message = `存档导出失败：${error?.message ?? error}`
+            const status = error instanceof PlayerSaveDownloadTooLargeError ? 413 : 500
+            return json
+                ? reply.status(status).send({ error: message })
+                : reply.redirect(`/player/${playerId}?error=${encodeURIComponent(message)}`)
         }
         reply.header("content-disposition", `attachment; filename="save_${playerId}.json"`)
-        reply.type('application/json').send(JSON.stringify(snapshot))
+        reply.type('application/json').send(serialized)
     })
 
     fastify.post("/save", async (request: FastifyRequest, reply: FastifyReply) => {
         const { id } = request.query as SaveQuery
         const playerId = Number(id)
-        const fail = (msg: string) => reply.redirect(`/player/${id}?error=${encodeURIComponent(msg)}`)
-        if (isNaN(playerId)) return reply.redirect("/player");
+        const json = wantsJson(request)
+        // JSON 客户端返回结构化错误/成功；旧 SSR 页面保留 redirect
+        const fail = (msg: string, code = 400) => json
+            ? reply.status(code).send({ error: msg })
+            : reply.redirect(`/player/${id}?error=${encodeURIComponent(msg)}`)
+        if (isNaN(playerId)) return json ? reply.status(400).send({ error: "无效的玩家 ID" }) : reply.redirect("/player");
 
         try {
             const file = await (request as any).file()
@@ -67,22 +178,16 @@ const routes = async (fastify: FastifyInstance) => {
                 return fail("文件不是有效的 JSON")
             }
 
-            if (parsed === null || typeof parsed !== 'object' || parsed.schema !== 'starpoint-cn-save') {
-                return fail("不是有效的存档快照（schema 不符，请使用本面板导出的存档）")
-            }
-            if (parsed.version !== 1) {
-                return fail(`不支持的存档版本：${parsed.version}`)
-            }
-            const data = parsed.data
-            if (!data || typeof data !== 'object' || !data.player) {
-                return fail("存档数据缺失 player 字段")
+            try {
+                validatePlayerSaveSnapshotSync(parsed)
+            } catch (error: any) {
+                return fail(`存档校验失败：${error?.message ?? error}`)
             }
 
-            reviveMergedPlayerDates(data)
-            data.player.id = playerId
-            replacePlayerDataSync(data)
+            const result = restorePlayerSaveSnapshotSync(parsed, playerId)
+            if (json) return reply.status(200).send({ ok: true, ...result })
         } catch (error: any) {
-            return fail(`恢复失败：${error?.message ?? error}`)
+            return fail(`恢复失败：${error?.message ?? error}`, 500)
         }
         return reply.redirect(`/player/${id}`);
     })
@@ -128,9 +233,17 @@ const routes = async (fastify: FastifyInstance) => {
     // Clear all EX boost data for all characters
     fastify.post("/:id/clear_ex_boost", async (request: FastifyRequest, reply: FastifyReply) => {
         const playerId = Number((request.params as any).id)
-        if (isNaN(playerId)) return reply.status(400).send({ error: "Invalid player ID" })
-        const result = getDb().prepare(`UPDATE players_characters SET ex_boost_status_id = NULL, ex_boost_ability_id_list = NULL WHERE player_id = ?`).run(playerId)
-        return reply.redirect(`/player/${playerId}#actions`)
+        if (!Number.isSafeInteger(playerId) || playerId <= 0) {
+            return reply.status(400).send({ error: "Invalid player ID" })
+        }
+        if (!getPlayerSync(playerId)) return reply.status(404).send({ error: "Player not found" })
+        const result = getDb().prepare(`
+            UPDATE players_characters
+            SET ex_boost_status_id = NULL, ex_boost_ability_id_list = NULL
+            WHERE player_id = ?
+              AND (ex_boost_status_id IS NOT NULL OR ex_boost_ability_id_list IS NOT NULL)
+        `).run(playerId)
+        return reply.status(200).send({ ok: true, clearedCharacters: result.changes })
     })
 
     // Reset parties to defaults
@@ -140,14 +253,7 @@ const routes = async (fastify: FastifyInstance) => {
         getDb().prepare(`DELETE FROM players_parties WHERE player_id = ?`).run(playerId)
         getDb().prepare(`DELETE FROM players_party_groups WHERE player_id = ?`).run(playerId)
         insertPlayerPartyGroupListSync(playerId, getDefaultPlayerPartyGroupsSync(PartyCategory.NORMAL))
-        return reply.redirect(`/player/${playerId}#actions`)
-    })
-
-    // Clear all mails
-    fastify.post("/:id/clear_mail", async (request: FastifyRequest, reply: FastifyReply) => {
-        const playerId = Number((request.params as any).id)
-        if (isNaN(playerId)) return reply.status(400).send({ error: "Invalid player ID" })
-        deleteAllPlayerMailSync(playerId)
+        if (wantsJson(request)) return reply.status(200).send({ ok: true })
         return reply.redirect(`/player/${playerId}#actions`)
     })
 
@@ -156,6 +262,7 @@ const routes = async (fastify: FastifyInstance) => {
         const playerId = Number((request.params as any).id)
         if (isNaN(playerId)) return reply.status(400).send({ error: "Invalid player ID" })
         getDb().prepare(`DELETE FROM players_receive_history WHERE player_id = ?`).run(playerId)
+        if (wantsJson(request)) return reply.status(200).send({ ok: true })
         return reply.redirect(`/player/${playerId}#actions`)
     })
 
@@ -168,7 +275,7 @@ const routes = async (fastify: FastifyInstance) => {
         const body = request.body as Record<string, any> || {}
         const code = Number(body.code || body.character_id)
         if (isNaN(code)) return reply.status(400).send({ error: "Missing code (business code)" })
-        if (!VALID_CHARACTER_IDS.has(code)) return reply.status(400).send({ error: `角色 ID ${code} 不存在于资源表中` })
+        if (!isValidCharacterId(code)) return reply.status(400).send({ error: `角色 ID ${code} 不存在于资源表中` })
 
         try {
             insertDefaultPlayerCharacterSync(playerId, code)
@@ -212,11 +319,11 @@ const routes = async (fastify: FastifyInstance) => {
         const itemId = Number(body.id || body.itemId)
         const count = Number(body.count || 1)
         if (isNaN(itemId) || isNaN(count)) return reply.status(400).send({ error: "Missing id or count" })
-        if (!VALID_ITEM_IDS.has(itemId)) return reply.status(400).send({ error: `道具 ID ${itemId} 不存在于资源表中` })
+        if (!isValidItemId(itemId)) return reply.status(400).send({ error: `道具 ID ${itemId} 不存在于资源表中` })
         if (count < 0 || count > MAX_INT) return reply.status(400).send({ error: `count 超出范围（需 0 ~ ${MAX_INT}）` })
 
         try {
-            updatePlayerItemSync(playerId, itemId, count)
+            setPlayerItemSync(playerId, itemId, count)
             return reply.status(200).send({ ok: true, itemId, count })
         } catch (e: any) {
             return reply.status(500).send({ error: e.message })
@@ -293,7 +400,10 @@ const routes = async (fastify: FastifyInstance) => {
         if (isNaN(playerId)) return reply.status(400).send({ error: "Invalid params" })
         try {
             const entries = getPlayerDailyChallengePointListSync(playerId)
-            const lookup = dailyChallengePointLookup as Record<string, { maxPoint: number }>
+            const lookup = getRuntimeContentTableSync(
+                "daily_challenge_point_lookup.json",
+                bundledDailyChallengePointLookup as Record<string, { maxPoint: number }>,
+            )
             if (entries.length === 0) {
                 // No entries yet — create all 282 from CDN
                 const defaults = Object.entries(lookup).map(([idStr, data]) => ({
@@ -324,6 +434,7 @@ const routes = async (fastify: FastifyInstance) => {
             return reply.status(500).send({ error: e.message })
         }
     })
+
 }
 
 export default routes;

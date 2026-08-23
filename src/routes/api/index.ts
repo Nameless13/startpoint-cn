@@ -1,7 +1,19 @@
 import { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { SessionType } from "../../data/types";
 import { getClientSerializedData, serializePlayerData } from "../../data/utils";
-import { collectPlayerDataPooledExpSync, collectPlayerPooledExpSync, dailyResetPlayerDataSync, getPlayerActiveMissionsSync, getPlayerBoxGachasSync, getPlayerCharactersManaNodesSync, getPlayerCharactersSync, getPlayerClearedRegularMissionListSync, getPlayerDailyChallengePointListSync, getPlayerDrawnQuestsSync, getPlayerEquipmentListSync, getPlayerGachaInfoListSync, getPlayerItemsSync, getPlayerMultiSpecialExchangeCampaignsSync, getPlayerOptionsSync, getPlayerPartyGroupListSync, getPlayerPeriodicRewardPointsSync, getPlayerQuestProgressSync, getPlayerStartDashExchangeCampaignsSync, getPlayerSync, getPlayerTriggeredTutorialsSync, getSession, updatePlayerSync } from "../../data/wdfpData";
+import { collectPlayerDataPooledExpSync, collectPlayerPooledExpSync, dailyResetPlayerDataSync, getPlayerDailyChallengePointListSync, getPlayerSync, updatePlayerSync } from "../../data/domains/player"
+import { getPlayerActiveMissionsSync, getPlayerClearedRegularMissionListSync } from "../../data/domains/mission"
+import { getPlayerBoxGachasSync } from "../../data/domains/boxGacha"
+import { getPlayerCharactersManaNodesSync, getPlayerCharactersSync } from "../../data/domains/character"
+import { getPlayerDrawnQuestsSync, getPlayerQuestProgressSync } from "../../data/domains/quest"
+import { getPlayerEquipmentListSync } from "../../data/domains/equipment"
+import { getPlayerGachaInfoListSync } from "../../data/domains/gacha"
+import { getPlayerItemsSync } from "../../data/domains/item"
+import { getPlayerMultiSpecialExchangeCampaignsSync, getPlayerPeriodicRewardPointsSync, getPlayerStartDashExchangeCampaignsSync } from "../../data/domains/campaign"
+import { getPlayerOptionsSync } from "../../data/domains/option"
+import { getPlayerPartyGroupListSync } from "../../data/domains/party"
+import { getPlayerTriggeredTutorialsSync } from "../../data/domains/tutorial"
+import { getSession } from "../../data/domains/session"
 import { resolvePlayerIdSync } from "../../data/activeAccount";
 import { generateDataHeaders } from "../../utils";
 

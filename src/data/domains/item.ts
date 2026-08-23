@@ -46,6 +46,43 @@ export function getPlayerItemsSync(
     return output
 }
 
+export function getPlayerCollectedItemTotalSync(
+    playerId: number,
+    itemId: number | string
+): number {
+    const row = getDb().prepare(`
+    SELECT total_obtained
+    FROM players_collected_items
+    WHERE player_id = ? AND item_id = ?
+    `).get(playerId, Number(itemId)) as { total_obtained: number } | undefined
+    return row?.total_obtained ?? 0
+}
+
+export function getPlayerCollectedItemTotalsSync(
+    playerId: number
+): Record<string, number> {
+    const rows = getDb().prepare(`
+    SELECT item_id, total_obtained
+    FROM players_collected_items
+    WHERE player_id = ?
+    `).all(playerId) as { item_id: number; total_obtained: number }[]
+    return Object.fromEntries(rows.map(row => [String(row.item_id), row.total_obtained]))
+}
+
+function recordPlayerCollectedItemSync(
+    playerId: number,
+    itemId: number | string,
+    obtainedAmount: number
+): void {
+    if (!Number.isSafeInteger(obtainedAmount) || obtainedAmount <= 0) return
+    getDb().prepare(`
+    INSERT INTO players_collected_items (player_id, item_id, total_obtained)
+    VALUES (?, ?, ?)
+    ON CONFLICT(player_id, item_id) DO UPDATE SET
+        total_obtained = total_obtained + excluded.total_obtained
+    `).run(playerId, Number(itemId), obtainedAmount)
+}
+
 /**
  * Inserts a singular item into the player's inventory.
  * 
@@ -104,6 +141,30 @@ export function updatePlayerItemSync(
 }
 
 /**
+ * Sets a player's item to an exact amount, inserting the row first if the player does not yet
+ * own the item.
+ *
+ * updatePlayerItemSync on its own is a bare UPDATE that silently affects zero rows when the
+ * player does not already own the item, so callers that mean "add or set this item" (e.g. the
+ * web admin's POST /:id/item) would return success while writing nothing for a not-yet-owned item.
+ *
+ * @param playerId The ID of the player.
+ * @param itemId The item's ID.
+ * @param amount The exact amount the item should have.
+ */
+export function setPlayerItemSync(
+    playerId: number,
+    itemId: string | number,
+    amount: number
+) {
+    if (getPlayerItemSync(playerId, itemId) === null) {
+        insertPlayerItemSync(playerId, itemId, amount)
+    } else {
+        updatePlayerItemSync(playerId, itemId, amount)
+    }
+}
+
+/**
  * Gives a player giveAmount of an item.
  * 
  * @param playerId The ID of the player.
@@ -116,14 +177,27 @@ export function givePlayerItemSync(
     itemId: string | number,
     giveAmount: number
 ): number {
-    // check if the player owns the item
-    const ownedAmount = getPlayerItemSync(playerId, itemId)
-    if (ownedAmount === null) {
-        insertPlayerItemSync(playerId, itemId, giveAmount)
-        return giveAmount
-    } else {
-        const newAmount = ownedAmount + giveAmount
-        updatePlayerItemSync(playerId, itemId, newAmount)
-        return newAmount
+    return getDb().transaction(() => (
+        givePlayerItemWithinTransactionSync(playerId, itemId, giveAmount)
+    ))()
+}
+
+/**
+ * Gives an item while the caller owns the surrounding database transaction.
+ * Keep the transaction boundary in givePlayerItemSync for ordinary callers.
+ */
+export function givePlayerItemWithinTransactionSync(
+    playerId: number,
+    itemId: string | number,
+    giveAmount: number,
+): number {
+    if (!getDb().inTransaction) {
+        throw new Error("givePlayerItemWithinTransactionSync requires an active caller transaction")
     }
+    const ownedAmount = getPlayerItemSync(playerId, itemId)
+    const newAmount = (ownedAmount ?? 0) + giveAmount
+    if (ownedAmount === null) insertPlayerItemSync(playerId, itemId, newAmount)
+    else updatePlayerItemSync(playerId, itemId, newAmount)
+    recordPlayerCollectedItemSync(playerId, itemId, giveAmount)
+    return newAmount
 }

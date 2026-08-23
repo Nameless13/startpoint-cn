@@ -1,0 +1,27 @@
+{
+  "1": {
+    "dissolve_craft": 1,
+    "awakening_craft": 5,
+    "dissolve_star": 0
+  },
+  "2": {
+    "dissolve_craft": 2,
+    "awakening_craft": 10,
+    "dissolve_star": 0
+  },
+  "3": {
+    "dissolve_craft": 3,
+    "awakening_craft": 15,
+    "dissolve_star": 1
+  },
+  "4": {
+    "dissolve_craft": 4,
+    "awakening_craft": 20,
+    "dissolve_star": 5
+  },
+  "5": {
+    "dissolve_craft": 5,
+    "awakening_craft": 25,
+    "dissolve_star": 15
+  }
+}

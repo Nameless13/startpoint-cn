@@ -2,10 +2,13 @@
 // Private server: accepts any valid request, no real payment validation.
 
 import { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import { getPlayerSync, getSession, updatePlayerSync } from "../../data/wdfpData";
+import { getPlayerSync, updatePlayerSync } from "../../data/domains/player"
+import { getSession } from "../../data/domains/session"
 import { resolvePlayerIdSync } from "../../data/activeAccount";
 import { generateDataHeaders, getServerTime } from "../../utils";
 import { getConfigSync } from "../../lib/assets";
+import { setPlayerPassCardPurchasedSync } from "../../data/domains/pass-card";
+import { getActivePassCardEventDefinitionAt } from "../../lib/pass-card";
 import paymentProducts from "../../../assets/payment_products.json";
 
 interface PaymentProduct {
@@ -22,6 +25,7 @@ const PRODUCTS: Record<string, PaymentProduct> = paymentProducts as Record<strin
 
 // In-memory purchase tracking (resets on server restart)
 const purchaseHistory: Record<string, number> = {}
+const pendingProducts: Record<string, string> = {}
 
 const routes = async (fastify: FastifyInstance) => {
     fastify.post("/item_list", async (request: FastifyRequest, reply: FastifyReply) => {
@@ -36,11 +40,12 @@ const routes = async (fastify: FastifyInstance) => {
             "error": "Bad Request", "message": "Invalid viewer id."
         })
 
-        // Payment disabled on private server — return empty list
         reply.header("content-type", "application/x-msgpack")
         return reply.status(200).send({
             "data_headers": generateDataHeaders({ viewer_id: viewerId }),
             "data": {
+                // Payment SDK is intentionally unavailable in the private server.
+                // Keep the route compatible, but do not advertise Pass purchases.
                 "payment_item_list": [],
                 "refund_penalty_status": null
             }
@@ -86,6 +91,10 @@ const routes = async (fastify: FastifyInstance) => {
         }
 
         console.log(`[PAYMENT-START] viewer ${viewerId}, product: ${productId} (paid=${product.charge_vmoney_num} free=${product.free_vmoney_num})`)
+        const playerId = resolvePlayerIdSync(session.accountId)
+        if (playerId !== null && playerId !== undefined) {
+            pendingProducts[String(playerId)] = productId
+        }
 
         reply.header("content-type", "application/x-msgpack")
         return reply.status(200).send({
@@ -102,6 +111,7 @@ const routes = async (fastify: FastifyInstance) => {
             receipt?: string
             signature?: string
             payment?: {
+                product_id?: string
                 original_receipt?: string
                 signature?: string
                 currency_code?: string
@@ -139,7 +149,12 @@ const routes = async (fastify: FastifyInstance) => {
         if (!player) return reply.status(500).send({ "error": "Internal Server Error", "message": "Player not found." })
 
         // Determine product_id from pending payment
-        const productId = body.product_id || ""
+        const pendingProductKey = String(playerId)
+        const productId = body.product_id
+            || body.payment?.product_id
+            || pendingProducts[pendingProductKey]
+            || ""
+        delete pendingProducts[pendingProductKey]
         const product = PRODUCTS[productId]
         if (!product) {
             console.warn(`[PAYMENT-FINISH] unknown product: ${productId}, receipt: ${receipt}`)
@@ -167,6 +182,11 @@ const routes = async (fastify: FastifyInstance) => {
             vmoney: afterPaid,
             freeVmoney: afterFree
         })
+
+        if (productId === "com.leiting.wf.pass_card") {
+            const activeEvent = getActivePassCardEventDefinitionAt(new Date(getServerTime() * 1000))
+            if (activeEvent) setPlayerPassCardPurchasedSync(playerId, activeEvent.eventId)
+        }
 
         // Track purchase count per player+product
         const purchaseKey = `${playerId}_${productId}`

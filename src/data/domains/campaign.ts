@@ -6,8 +6,123 @@ import {
     RawPlayerStartDashExchangeCampaign,
     RawPlayerMultiSpecialExchangeCampaign,
 } from "../types";
+import bundledHardMultiEvents from "../../../assets/hard_multi_event.json";
+import bundledHardMultiQuests from "../../../assets/hard_multi_event_quest.json";
+import bundledPeriodicRewardPoints from "../../../assets/periodic_reward_point.json";
+import { getRuntimeContentTableSync } from "../../content/runtime/table-access";
 
 // ─── Periodic Reward Points ───
+
+interface HardMultiEventDefinition {
+    periodicPointId?: number
+}
+
+interface HardMultiQuestDefinition {
+    periodicRewardGroupId?: number
+}
+
+interface PeriodicRewardPointDefinition {
+    maxPoint: number
+    recoveryPoint: number
+    recoveryCycle: number
+}
+
+const FINAL_OPERATION_EVENT_IDS = new Set([1001, 1002, 1003, 1004, 1005, 1006])
+
+function getActivityPeriodicRewardDefinitions(): ReadonlyMap<
+    number,
+    PeriodicRewardPointDefinition
+> {
+    const events = getRuntimeContentTableSync(
+        "hard_multi_event.json",
+        bundledHardMultiEvents as Record<string, HardMultiEventDefinition>,
+    )
+    const points = getRuntimeContentTableSync(
+        "periodic_reward_point.json",
+        bundledPeriodicRewardPoints as Record<string, PeriodicRewardPointDefinition>,
+    )
+    const quests = getRuntimeContentTableSync(
+        "hard_multi_event_quest.json",
+        bundledHardMultiQuests as Record<string, HardMultiQuestDefinition>,
+    )
+    const definitions = new Map<number, PeriodicRewardPointDefinition>()
+    for (const event of Object.values(events)) {
+        if (event.periodicPointId === undefined) continue
+        const definition = points[String(event.periodicPointId)]
+        if (definition !== undefined) definitions.set(event.periodicPointId, definition)
+    }
+    for (const [questId, quest] of Object.entries(quests)) {
+        if (!FINAL_OPERATION_EVENT_IDS.has(Math.floor(Number(questId) / 1000))) continue
+        const pointId = quest.periodicRewardGroupId
+        if (pointId === undefined || definitions.has(pointId)) continue
+        const definition = points[String(pointId)]
+        if (definition !== undefined) definitions.set(pointId, definition)
+    }
+    return definitions
+}
+
+function getStoredPlayerPeriodicRewardPointsSync(
+    playerId: number,
+): PlayerPeriodicRewardPoint[] {
+    return getDb().prepare(`
+    SELECT id, point
+    FROM players_periodic_reward_points
+    WHERE player_id = ?
+    ORDER BY id
+    `).all(playerId) as PlayerPeriodicRewardPoint[]
+}
+
+export function ensureActivityPeriodicRewardPointsSync(playerId: number): void {
+    const existingIds = new Set(
+        getStoredPlayerPeriodicRewardPointsSync(playerId).map(entry => entry.id),
+    )
+    const insert = getDb().prepare(`
+    INSERT OR IGNORE INTO players_periodic_reward_points (id, point, player_id)
+    VALUES (?, ?, ?)
+    `)
+    for (const [id, definition] of getActivityPeriodicRewardDefinitions()) {
+        if (existingIds.has(id)) continue
+        insert.run(id, definition.recoveryPoint, playerId)
+    }
+}
+
+export function recoverActivityPeriodicRewardPointsSync(playerId: number): void {
+    const definitions = getActivityPeriodicRewardDefinitions()
+    const existing = getStoredPlayerPeriodicRewardPointsSync(playerId)
+    ensureActivityPeriodicRewardPointsSync(playerId)
+    const update = getDb().prepare(`
+    UPDATE players_periodic_reward_points
+    SET point = ?
+    WHERE player_id = ? AND id = ?
+    `)
+    for (const entry of existing) {
+        const definition = definitions.get(entry.id)
+        if (definition === undefined || definition.recoveryCycle !== 0) continue
+        update.run(
+            Math.min(definition.maxPoint, entry.point + definition.recoveryPoint),
+            playerId,
+            entry.id,
+        )
+    }
+}
+
+export function consumePeriodicRewardPointSync(
+    playerId: number,
+    periodicRewardPointId: number,
+): number | null {
+    const result = getDb().prepare(`
+    UPDATE players_periodic_reward_points
+    SET point = point - 1
+    WHERE player_id = ? AND id = ? AND point > 0
+    `).run(playerId, periodicRewardPointId)
+    if (result.changes !== 1) return null
+    const row = getDb().prepare(`
+    SELECT point
+    FROM players_periodic_reward_points
+    WHERE player_id = ? AND id = ?
+    `).get(playerId, periodicRewardPointId) as { point: number }
+    return row.point
+}
 
 /**
  * Gets all of a player's periodic reward points.
@@ -18,12 +133,8 @@ import {
 export function getPlayerPeriodicRewardPointsSync(
     playerId: number
 ): PlayerPeriodicRewardPoint[] {
-    const db = getDb();
-    return db.prepare(`
-    SELECT id, point
-    FROM players_periodic_reward_points
-    WHERE player_id = ?
-    `).all(playerId) as PlayerPeriodicRewardPoint[]
+    ensureActivityPeriodicRewardPointsSync(playerId)
+    return getStoredPlayerPeriodicRewardPointsSync(playerId)
 }
 
 function insertPlayerPeriodicRewardPointsSync(

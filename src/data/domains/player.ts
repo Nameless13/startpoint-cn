@@ -1,14 +1,24 @@
 import { getDb } from "../db";
 import { Player, RawPlayer, MergedPlayerData, PartyCategory, PlayerPartyGroup, Account, PlayerParty, DailyChallengePointListEntry, DailyChallengePointListCampaign, RawDailyChallengePointListEntry, RawDailyChallengePointListCampaign, PlayerRushEventPlayedParty, RawPlayerRushEventPlayedParty, UserRushEventPlayedParty } from "../types";
 import { getServerTime, getServerDate } from "../../utils";
-import { getDefaultPlayerData, deserializeBoolean, serializeBoolean } from "../utils";
+import { getDefaultPlayerData } from "../utils/default-player";
+import { deserializeBoolean, serializeBoolean } from "../utils/primitives";
 import { getAccountSync } from "./account";
-import dailyChallengePointLookup from "../../../assets/daily_challenge_point_lookup.json";
+import { getPlayerQuestProgressSync } from "./quest";
+import { isNewDay, isNewWeek } from "../../lib/time-utils";
+import { buildPeriodicSnapshotData, getPassWeekSnapshotType, getSnapshot, initializePeriodicMissionSnapshots, takeSnapshot } from "../../lib/mission/snapshot";
+import { getMissionMasterDefinitions, isMissionDefinitionEnabledAt } from "../../lib/mission/master-data";
+import { ensurePlayerPassCardLoginProgressSync } from "./pass-card";
+import bundledDailyChallengePointLookup from "../../../assets/daily_challenge_point_lookup.json";
+import { getRuntimeContentTableSync } from "../../content/runtime/table-access";
 
 type DailyChallengePointLookup = Record<string, { maxPoint: number, isRecovery: boolean, name: string }>
 
 function getDailyChallengePointDefaults(): DailyChallengePointListEntry[] {
-    const lookup = dailyChallengePointLookup as DailyChallengePointLookup
+    const lookup = getRuntimeContentTableSync(
+        "daily_challenge_point_lookup.json",
+        bundledDailyChallengePointLookup as DailyChallengePointLookup,
+    )
     const entries: DailyChallengePointListEntry[] = []
     for (const [idStr, data] of Object.entries(lookup)) {
         entries.push({
@@ -20,19 +30,68 @@ function getDailyChallengePointDefaults(): DailyChallengePointListEntry[] {
     return entries
 }
 
-const expPoolMax = 100000;
+function initializeCurrentPassWeekSnapshot(
+    playerId: number,
+    player: Pick<Player, "totalStaminaUsed" | "totalDashes" | "totalPowerflips" | "totalLoginDays">,
+    evaluationTime: Date,
+    questClears: number,
+): void {
+    const eventId = getMissionMasterDefinitions(7).find(definition =>
+        definition.eventId !== undefined
+        && isMissionDefinitionEnabledAt(definition, evaluationTime)
+    )?.eventId
+    if (eventId === undefined) return
+    const snapshotType = getPassWeekSnapshotType(eventId)
+    if (getSnapshot(playerId, snapshotType)) return
+    takeSnapshot(
+        playerId,
+        snapshotType,
+        buildPeriodicSnapshotData(playerId, player, questClears),
+    )
+}
+
+function recordCurrentPassLogin(
+    playerId: number,
+    totalLoginDays: number,
+    evaluationTime: Date,
+): void {
+    const eventIds = new Set(
+        getMissionMasterDefinitions(8)
+            .filter(definition =>
+                definition.patternType === 0
+                && definition.eventId !== undefined
+                && isMissionDefinitionEnabledAt(definition, evaluationTime)
+            )
+            .map(definition => definition.eventId!),
+    )
+    for (const eventId of eventIds) {
+        ensurePlayerPassCardLoginProgressSync(playerId, eventId, totalLoginDays)
+    }
+}
+
 import { insertPlayerTriggeredTutorialsSync } from "./tutorial";
 import { insertPlayerOptionsSync } from "./option";
 import { insertPlayerItemsSync } from "./item";
 import { insertPlayerEquipmentListSync } from "./equipment";
 import { insertPlayerPartyGroupListSync } from "./party";
-import { insertPlayerCharactersSync, insertPlayerCharactersManaNodesSync } from "./character";
+import { getPartyGroupLimit } from "../../lib/special-event-parties";
+import { insertPlayerCharactersSync, insertPlayerCharactersManaNodesSync, updatePlayerCharactersManaNodeAwakeLevelsSync } from "./character";
+import { insertPlayerCharacterAwakeUnlocksSync } from "./character_awake";
 import { insertPlayerDrawnQuestsSync, insertPlayerQuestProgressListSync } from "./quest";
 import { insertPlayerGachaInfoListSync, insertPlayerGachaCampaignListSync , getPlayerGachaInfoListSync, updatePlayerGachaInfoSync, getPlayerGachaCampaignListSync, updatePlayerGachaCampaignSync } from "./gacha";
 import { insertPlayerBoxGachasSync } from "./boxGacha";
 import { insertPlayerRushEventListSync, insertPlayerRushEventClearedFolderListSync, insertPlayerRushEventPlayedPartyListSync } from "./rushEvent";
-import { insertPlayerClearedRegularMissionListSync, insertPlayerActiveMissionsSync } from "./mission";
-import { insertPlayerPeriodicRewardPointsListSync, insertPlayerStartDashExchangeCampaignsSync, insertPlayerMultiSpecialExchangeCampaignsSync } from "./campaign";
+import { deletePlayerCategoryMissionsSync, insertPlayerCategoryMissionListSync, insertPlayerClearedRegularMissionListSync, insertPlayerActiveMissionsSync } from "./mission";
+import { ensureActivityPeriodicRewardPointsSync, insertPlayerPeriodicRewardPointsListSync, insertPlayerStartDashExchangeCampaignsSync, insertPlayerMultiSpecialExchangeCampaignsSync, recoverActivityPeriodicRewardPointsSync } from "./campaign";
+import { insertCarnivalSaveStateSync } from "../../lib/carnival-save-state";
+
+const expPoolMax = 100000;
+
+function assertValidExpPool(expPool: number, context: string): void {
+    if (!Number.isSafeInteger(expPool) || expPool < 0) {
+        throw new Error(`[PLAYER] invalid exp_pool=${String(expPool)} during ${context}`)
+    }
+}
 
 /**
  * Gets a player's daily challenge point list based on their id.
@@ -319,6 +378,12 @@ function buildPlayer(
         freeMana: raw.free_mana,
         paidMana: raw.paid_mana,
         enableAuto3x: deserializeBoolean(raw.enable_auto_3x),
+        totalStaminaUsed: raw.total_stamina_used || 0,
+        totalPowerflips: raw.total_powerflips || 0,
+        totalDashes: raw.total_dashes || 0,
+        totalManaObtained: raw.total_mana_obtained || 0,
+        maxComboAchieved: raw.max_combo_achieved || 0,
+        totalLoginDays: raw.total_login_days || 0,
         tutorialStep: raw.tutorial_step,
         tutorialSkipFlag: raw.tutorial_skip_flag === null ? null : deserializeBoolean(raw.tutorial_skip_flag),
         tutorialGachaCharacterId: raw.tutorial_gacha_character_id,
@@ -333,7 +398,7 @@ export function getPlayerSync(
         transition_state, role, name, last_login_time, comment,
         vmoney, free_vmoney, rank_point, star_crumb,
         bond_token, exp_pool, exp_pooled_time, leader_character_id, party_slot,
-        degree_id, birth, free_mana, paid_mana, enable_auto_3x, tutorial_step, tutorial_skip_flag, tutorial_gacha_character_id
+        degree_id, birth, free_mana, paid_mana, enable_auto_3x, total_stamina_used, total_powerflips, total_dashes, total_mana_obtained, max_combo_achieved, total_login_days, tutorial_step, tutorial_skip_flag, tutorial_gacha_character_id
     FROM players
     WHERE id = ?    
     `).get(playerId) as RawPlayer | undefined
@@ -352,7 +417,7 @@ export function getAllPlayersSync(
         transition_state, role, name, last_login_time, comment,
         vmoney, free_vmoney, rank_point, star_crumb,
         bond_token, exp_pool, exp_pooled_time, leader_character_id, party_slot,
-        degree_id, birth, free_mana, paid_mana, enable_auto_3x, tutorial_step, tutorial_skip_flag, tutorial_gacha_character_id
+        degree_id, birth, free_mana, paid_mana, enable_auto_3x, total_stamina_used, total_powerflips, total_dashes, total_mana_obtained, max_combo_achieved, total_login_days, tutorial_step, tutorial_skip_flag, tutorial_gacha_character_id
     FROM players
     LIMIT ?
     OFFSET ?
@@ -374,48 +439,68 @@ export function insertPlayerSync(
 ): number {
     const playerId = player.id
     const playerIdGiven = playerId !== undefined
+    assertValidExpPool(player.expPool, "insert")
 
-    const values = [
-        player.stamina,
-        player.staminaHealTime.toISOString(),
-        player.boostPoint,
-        player.bossBoostPoint,
-        player.transitionState,
-        player.role,
-        player.name,
-        player.lastLoginTime.toISOString(),
-        player.comment,
-        player.vmoney,
-        player.freeVmoney,
-        player.rankPoint,
-        player.starCrumb,
-        player.bondToken,
-        player.expPool,
-        player.expPooledTime.toISOString(),
-        player.leaderCharacterId,
-        player.partySlot,
-        player.degreeId,
-        player.birth,
-        player.freeMana,
-        player.paidMana,
-        serializeBoolean(player.enableAuto3x),
-        accountId,
-        player.tutorialStep === null ? null : player.tutorialStep,
-        player.tutorialSkipFlag === null ? null : serializeBoolean(player.tutorialSkipFlag),
-        player.tutorialGachaCharacterId === undefined ? null : player.tutorialGachaCharacterId
-    ]
+    const params: Record<string, any> = {
+        stamina: player.stamina,
+        stamina_heal_time: player.staminaHealTime.toISOString(),
+        boost_point: player.boostPoint,
+        boss_boost_point: player.bossBoostPoint,
+        transition_state: player.transitionState,
+        role: player.role,
+        name: player.name,
+        last_login_time: player.lastLoginTime.toISOString(),
+        comment: player.comment,
+        vmoney: player.vmoney,
+        free_vmoney: player.freeVmoney,
+        rank_point: player.rankPoint,
+        star_crumb: player.starCrumb,
+        bond_token: player.bondToken,
+        exp_pool: player.expPool,
+        exp_pooled_time: player.expPooledTime.toISOString(),
+        leader_character_id: player.leaderCharacterId,
+        party_slot: player.partySlot,
+        degree_id: player.degreeId,
+        birth: player.birth,
+        free_mana: player.freeMana,
+        paid_mana: player.paidMana,
+        enable_auto_3x: serializeBoolean(player.enableAuto3x),
+        total_stamina_used: player.totalStaminaUsed ?? 0,
+        total_powerflips: player.totalPowerflips ?? 0,
+        total_dashes: player.totalDashes ?? 0,
+        total_mana_obtained: player.totalManaObtained ?? 0,
+        max_combo_achieved: player.maxComboAchieved ?? 0,
+        total_login_days: player.totalLoginDays ?? 0,
+        account_id: accountId,
+        tutorial_step: player.tutorialStep ?? null,
+        tutorial_skip_flag: player.tutorialSkipFlag !== null ? serializeBoolean(player.tutorialSkipFlag) : null,
+        tutorial_gacha_character_id: player.tutorialGachaCharacterId ?? null,
+        time_offset: player.timeOffset ?? null,
+    }
 
     if (playerIdGiven)
-        values.push(playerId);
+        params.id = playerId
+
+    const idCol = playerIdGiven ? ', id' : ''
+    const idVal = playerIdGiven ? ', @id' : ''
 
     const insert = getDb().prepare(`
     INSERT INTO players (stamina, stamina_heal_time, boost_point, boss_boost_point,
         transition_state, role, name, last_login_time, comment, vmoney, free_vmoney,
         rank_point, star_crumb, bond_token, exp_pool, exp_pooled_time, leader_character_id,
-        party_slot, degree_id, birth, free_mana, paid_mana, enable_auto_3x, account_id, 
-        tutorial_step, tutorial_skip_flag, tutorial_gacha_character_id${playerIdGiven ? ', id' : ''})
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?${playerIdGiven ? ', ?' : ''})
-    `).run(values)
+        party_slot, degree_id, birth, free_mana, paid_mana, enable_auto_3x,
+        total_stamina_used, total_powerflips, total_dashes, total_mana_obtained, max_combo_achieved, total_login_days, account_id,
+        tutorial_step, tutorial_skip_flag, tutorial_gacha_character_id,
+        time_offset${idCol})
+    VALUES (@stamina, @stamina_heal_time, @boost_point, @boss_boost_point,
+        @transition_state, @role, @name, @last_login_time, @comment,
+        @vmoney, @free_vmoney, @rank_point, @star_crumb, @bond_token,
+        @exp_pool, @exp_pooled_time, @leader_character_id, @party_slot,
+        @degree_id, @birth, @free_mana, @paid_mana, @enable_auto_3x,
+        @total_stamina_used, @total_powerflips, @total_dashes, @total_mana_obtained, @max_combo_achieved, @total_login_days, @account_id,
+        @tutorial_step, @tutorial_skip_flag, @tutorial_gacha_character_id,
+        @time_offset${idVal})
+    `).run(params)
 
     // return
     return Number(insert.lastInsertRowid)
@@ -440,6 +525,12 @@ export function insertMergedPlayerDataSync(
     insertPlayerClearedRegularMissionListSync(playerId, toInsert.clearedRegularMissionList)
     insertPlayerCharactersSync(playerId, toInsert.characterList)
     insertPlayerCharactersManaNodesSync(playerId, toInsert.characterManaNodeList)
+    if (toInsert.characterManaNodeAwakeLevels !== undefined) {
+        updatePlayerCharactersManaNodeAwakeLevelsSync(playerId, toInsert.characterManaNodeAwakeLevels)
+    }
+    if (toInsert.characterAwakeUnlocks !== undefined) {
+        insertPlayerCharacterAwakeUnlocksSync(playerId, toInsert.characterAwakeUnlocks)
+    }
     insertPlayerPartyGroupListSync(playerId, toInsert.partyGroupList)
     insertPlayerItemsSync(playerId, toInsert.itemList)
     insertPlayerEquipmentListSync(playerId, toInsert.equipmentList)
@@ -449,10 +540,14 @@ export function insertMergedPlayerDataSync(
     insertPlayerDrawnQuestsSync(playerId, toInsert.drawnQuestList)
     insertPlayerPeriodicRewardPointsListSync(playerId, toInsert.periodicRewardPointList)
     insertPlayerActiveMissionsSync(playerId, toInsert.allActiveMissionList)
+    if (toInsert.categoryMissionList) {
+        insertPlayerCategoryMissionListSync(playerId, toInsert.categoryMissionList)
+    }
     insertPlayerBoxGachasSync(playerId, toInsert.boxGachaList)
     insertPlayerStartDashExchangeCampaignsSync(playerId, toInsert.startDashExchangeCampaignList)
     insertPlayerMultiSpecialExchangeCampaignsSync(playerId, toInsert.multiSpecialExchangeCampaignList)
     insertPlayerOptionsSync(playerId, toInsert.userOption)
+    insertCarnivalSaveStateSync(getDb(), playerId, toInsert)
 
     // insert data that could be undefined.
     const rushEventList = toInsert.rushEventList
@@ -469,6 +564,7 @@ export function insertMergedPlayerDataSync(
     if (rushEventPlayedPartyList !== undefined) {
         insertPlayerRushEventPlayedPartyListSync(playerId, rushEventPlayedPartyList)
     }
+    initializePeriodicMissionSnapshots(playerId, player)
 }
 
 export function getDefaultPlayerPartyGroupsSync(
@@ -478,7 +574,7 @@ export function getDefaultPlayerPartyGroupsSync(
     const partyGroups: Record<string, PlayerPartyGroup> = {}
 
     const partyNames = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J"]
-    const groupCount = 12  // CN version: 12 groups × 10 slots = 120 parties
+    const groupCount = getPartyGroupLimit(partyType)
 
     const character1 = characterIds[0]
     const character2 = characterIds[1]
@@ -525,7 +621,9 @@ export function insertDefaultPlayerSync(
 ): Player {
     const player: Omit<Player, 'id'> = getDefaultPlayerData()
 
-    const playerId = insertPlayerSync(accountId, player)
+    const db = getDb()
+    const insertAll = db.transaction((): number => {
+        const playerId = insertPlayerSync(accountId, player)
 
     // daily challenge point list — initialize all 282 CDN entries
     insertPlayerDailyChallengePointListSync(playerId, getDailyChallengePointDefaults())
@@ -921,25 +1019,8 @@ export function insertDefaultPlayerSync(
         },
     ])
 
-    // insert periodicReward
-    insertPlayerPeriodicRewardPointsListSync(playerId, [
-        {
-            id: 1,
-            point: 22,
-        },
-        {
-            id: 2,
-            point: 2,
-        },
-        {
-            id: 3,
-            point: 2,
-        },
-        {
-            id: 10000000,
-            point: 2,
-        },
-    ])
+    // Initialize activity periodic rewards from the active Content Snapshot.
+    ensureActivityPeriodicRewardPointsSync(playerId)
 
     // insert active missions
     insertPlayerActiveMissionsSync(playerId, {})
@@ -991,8 +1072,17 @@ export function insertDefaultPlayerSync(
         }
     ])
 
+        initializePeriodicMissionSnapshots(playerId, player, {
+            countCurrentLoginDay: true,
+        })
+        initializeCurrentPassWeekSnapshot(playerId, player, getServerDate(), 0)
+        recordCurrentPassLogin(playerId, player.totalLoginDays ?? 0, getServerDate())
+        return playerId
+    })
+
+    const finalPlayerId = insertAll()
     const finalPlayer = player as Player
-    finalPlayer.id = playerId
+    finalPlayer.id = finalPlayerId
     return finalPlayer
 }
 
@@ -1005,6 +1095,10 @@ export function updatePlayerSync(
     player: Partial<Player> & Pick<Player, 'id'>
 ) {
     const id = player.id
+
+    if (player.expPool !== undefined) {
+        assertValidExpPool(player.expPool, "update")
+    }
 
     const fieldMap: Record<string, string> = {
         'stamina': 'stamina',
@@ -1030,6 +1124,12 @@ export function updatePlayerSync(
         'freeMana': 'free_mana',
         'paidMana': 'paid_mana',
         'enableAuto3x': 'enable_auto_3x',
+        'totalStaminaUsed': 'total_stamina_used',
+        'totalPowerflips': 'total_powerflips',
+        'totalDashes': 'total_dashes',
+        'totalManaObtained': 'total_mana_obtained',
+        'maxComboAchieved': 'max_combo_achieved',
+        'totalLoginDays': 'total_login_days',
         'tutorialStep': 'tutorial_step',
         'tutorialSkipFlag': 'tutorial_skip_flag',
         'tutorialGachaCharacterId': 'tutorial_gacha_character_id'
@@ -1068,17 +1168,14 @@ export function replacePlayerDataSync(
     replaceWith: MergedPlayerData
 ) {
     try {
-        const playerId = replaceWith.player.id
+        getDb().transaction(() => {
+            const playerId = replaceWith.player.id
+            const account = getAccountFromPlayerIdSync(playerId)
+            if (account === null) throw new Error("No account tied to player id.")
 
-        const account = getAccountFromPlayerIdSync(playerId)
-        if (account === null)
-            throw new Error("No account tied to player id.");
-
-        // delete player
-        deletePlayerSync(playerId)
-
-        // insert new
-        insertMergedPlayerDataSync(account.id, replaceWith)
+            deletePlayerSync(playerId)
+            insertMergedPlayerDataSync(account.id, replaceWith)
+        })()
     } catch (error: Error | any) {
         console.error(error)
         throw error
@@ -1138,65 +1235,108 @@ export function collectPlayerPooledExpSync(
  */
 export function dailyResetPlayerDataSync(
     player: Player,
-    loginDate: Date = new Date()
+    loginDate: Date = new Date(),
+    resetHour = 5,
 ): boolean {
     const lastLoginTime = player.lastLoginTime
     const playerId = player.id
-    if ((loginDate.getUTCFullYear() > lastLoginTime.getUTCFullYear()) || (loginDate.getUTCMonth() > lastLoginTime.getUTCMonth()) || (loginDate.getUTCDate() > lastLoginTime.getUTCDate())) {
-        // TODO: daily reset logic.
-        updatePlayerSync({
-            id: playerId,
-            lastLoginTime: loginDate,
-            bossBoostPoint: 3,
-            boostPoint: 3
-        })
+    const crossedDay = isNewDay(loginDate, lastLoginTime, resetHour)
+    const crossedWeek = isNewWeek(loginDate, lastLoginTime, resetHour)
 
-        // Reset daily challenge points — sync with CDN and rebuild if missing
-        const dcEntries = getPlayerDailyChallengePointListSync(playerId)
-        const defaults = getDailyChallengePointDefaults()
-        if (dcEntries.length === 0) {
-            insertPlayerDailyChallengePointListSync(playerId, defaults)
-        } else {
-            // Reset existing entries to CDN max
-            for (const entry of dcEntries) {
-                const cdn = (dailyChallengePointLookup as DailyChallengePointLookup)[String(entry.id)]
-                const maxPoint = cdn?.maxPoint ?? entry.point
-                updatePlayerDailyChallengePointSync(playerId, entry.id, maxPoint + entry.campaignList.reduce((s, c) => s + c.additionalPoint, 0))
-            }
-            // Add any new CDN entries not yet in player's list
-            const existingIds = new Set(dcEntries.map(e => e.id))
-            const missing = defaults.filter(e => !existingIds.has(e.id))
-            if (missing.length > 0) {
-                insertPlayerDailyChallengePointListSync(playerId, missing)
-            }
-        }
-
-        // reset gacha "isDailyFirst" values.
-        const gachaInfo = getPlayerGachaInfoListSync(playerId)
-        for (const gacha of gachaInfo) {
-            updatePlayerGachaInfoSync(playerId, {
-                gachaId: gacha.gachaId,
-                isDailyFirst: true
+    if (crossedDay) {
+        return getDb().transaction(() => {
+            updatePlayerSync({
+                id: playerId,
+                lastLoginTime: loginDate,
+                bossBoostPoint: 3,
+                boostPoint: 3,
+                totalLoginDays: (player.totalLoginDays ?? 0) + 1
             })
-        }
+            recordCurrentPassLogin(
+                playerId,
+                (player.totalLoginDays ?? 0) + 1,
+                loginDate,
+            )
 
-        // reset campaigns
-        const gachaCampaigns = getPlayerGachaCampaignListSync(playerId)
-        for (const campaign of gachaCampaigns) {
-            updatePlayerGachaCampaignSync(playerId, campaign.gachaId, campaign.campaignId, 1)
-        }
+            // Reset daily challenge points — sync with CDN and rebuild if missing
+            const dcEntries = getPlayerDailyChallengePointListSync(playerId)
+            const defaults = getDailyChallengePointDefaults()
+            if (dcEntries.length === 0) {
+                insertPlayerDailyChallengePointListSync(playerId, defaults)
+            } else {
+                // Reset existing entries to CDN max
+                for (const entry of dcEntries) {
+                    const cdn = getRuntimeContentTableSync(
+                        "daily_challenge_point_lookup.json",
+                        bundledDailyChallengePointLookup as DailyChallengePointLookup,
+                    )[String(entry.id)]
+                    const maxPoint = cdn?.maxPoint ?? entry.point
+                    updatePlayerDailyChallengePointSync(playerId, entry.id, maxPoint + entry.campaignList.reduce((s, c) => s + c.additionalPoint, 0))
+                }
+                // Add any new CDN entries not yet in player's list
+                const existingIds = new Set(dcEntries.map(e => e.id))
+                const missing = defaults.filter(e => !existingIds.has(e.id))
+                if (missing.length > 0) {
+                    insertPlayerDailyChallengePointListSync(playerId, missing)
+                }
+            }
 
-        // weekly reset
-        if (loginDate.getUTCDay() === 0) {
+            // reset gacha "isDailyFirst" values.
+            const gachaInfo = getPlayerGachaInfoListSync(playerId)
+            for (const gacha of gachaInfo) {
+                updatePlayerGachaInfoSync(playerId, {
+                    gachaId: gacha.gachaId,
+                    isDailyFirst: true
+                })
+            }
 
-        }
+            // reset campaigns
+            const gachaCampaigns = getPlayerGachaCampaignListSync(playerId)
+            for (const campaign of gachaCampaigns) {
+                updatePlayerGachaCampaignSync(playerId, campaign.gachaId, campaign.campaignId, 1)
+            }
 
-        // monthly reset
-        if (loginDate.getUTCDate() === 1) {
+            recoverActivityPeriodicRewardPointsSync(playerId)
 
-        }
+            // Daily mission reset: take snapshot + wipe cache
+            const questProgress = getPlayerQuestProgressSync(playerId)
+            let totalClears = 0, ss = 0, s = 0, a = 0, b = 0
+            for (const [section, quests] of Object.entries(questProgress)) {
+                for (const qp of quests) {
+                    if (qp.finished) {
+                        totalClears++
+                        if (qp.clearRank === 5) ss++
+                        else if (qp.clearRank === 4) s++
+                        else if (qp.clearRank === 3) a++
+                        else if (qp.clearRank === 2) b++
+                    }
+                }
+            }
+            const periodicBaseline = buildPeriodicSnapshotData(playerId, player, totalClears)
+            takeSnapshot(playerId, 'daily', periodicBaseline)
+            deletePlayerCategoryMissionsSync(playerId, 2)
+            deletePlayerCategoryMissionsSync(playerId, 6)
 
-        return true
+            const activePassWeekEventId = getMissionMasterDefinitions(7).find(definition =>
+                definition.eventId !== undefined
+                && isMissionDefinitionEnabledAt(definition, loginDate)
+            )?.eventId
+            if (activePassWeekEventId !== undefined) {
+                const snapshotType = getPassWeekSnapshotType(activePassWeekEventId)
+                if (crossedWeek || !getSnapshot(playerId, snapshotType)) {
+                    takeSnapshot(playerId, snapshotType, periodicBaseline)
+                }
+            }
+
+            // weekly reset
+            if (crossedWeek) {
+                takeSnapshot(playerId, 'weekly', periodicBaseline)
+                deletePlayerCategoryMissionsSync(playerId, 7)
+                deletePlayerCategoryMissionsSync(playerId, 10)
+            }
+
+            return true
+        })()
     } else {
         updatePlayerSync({
             id: playerId,
@@ -1213,10 +1353,11 @@ export function dailyResetPlayerDataSync(
  * @returns A boolean; whether the daily reset was performed
  */
 export function dailyResetPlayerSync(
-    playerId: number
+    playerId: number,
+    resetHour = 5,
 ): boolean {
     const playerData = getPlayerSync(playerId)
     if (!playerData) return false;
 
-    return dailyResetPlayerDataSync(playerData)
+    return dailyResetPlayerDataSync(playerData, new Date(), resetHour)
 }

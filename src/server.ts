@@ -5,7 +5,10 @@ import { pack, unpack } from "msgpackr";
 import path from "path";
 // api routes
 import apiPlugin from "./routes/api";
-import assetApiPlugin from "./routes/api/asset";
+import assetApiPlugin, {
+    getLegacyAvailableAssetVersion,
+    initializeLegacyAssetState,
+} from "./routes/api/asset";
 import toolApiPlugin from "./routes/api/tool";
 import reproduceApiPlugin from "./routes/api/reproduce"
 import tutorialApiPlugin from "./routes/api/tutorial"
@@ -15,7 +18,7 @@ import expodApiPlugin from "./routes/api/expod"
 import storyQuestApiPlugin from "./routes/api/storyQuest"
 import optionApiPlugin from "./routes/api/option"
 import singleBattleQuestApiPlugin from "./routes/api/singleBattleQuest"
-import multiBattleQuestApiPlugin from "./routes/api/multiBattleQuest"
+import { createEmbeddedMultiHttpContext, multiBattleRoutes } from "./multi"
 import attentionApiPlugin from "./routes/api/attention"
 import characterApiPlugin from "./routes/api/character"
 import partyGroupApiPlugin from "./routes/api/partyGroup"
@@ -31,13 +34,16 @@ import paymentApiPlugin from "./routes/api/payment"
 import newsApiPlugin from "./routes/api/news"
 import raidEventApiPlugin from "./routes/api/raidEvent"
 import rushEventApiPlugin from "./routes/api/rushEvent"
-// web routes
-import indexWebPlugin from "./routes/web"
+import characterElectionApiPlugin from "./routes/api/characterElection"
 // web api routes
 import indexWebApiPlugin from "./routes/web_api"
 // misc routes
 import openapiPlugin from "./routes/openapi";
 import infodeskPlugin from "./routes/infodesk";
+import { initializeContentSnapshot } from "./content/runtime/content-snapshot";
+import { initializeDatabase } from "./data";
+import { configureSerializedAssetVersionProvider } from "./data/utils/serialized-asset-version";
+import { registerAdminUi } from "./runtime/admin";
 
 // gc-openapi-zinny3.kakaogames.com
 // gc-infodesk-zinny3.kakaogames.com
@@ -47,6 +53,8 @@ import infodeskPlugin from "./routes/infodesk";
 const fastify = Fastify({
     logger: false
 })
+const projectRoot = path.resolve(__dirname, "..")
+configureSerializedAssetVersionProvider(getLegacyAvailableAssetVersion)
 
 // serializers
 fastify.addHook('onSend', (_, reply, payload, done) => {
@@ -94,6 +102,7 @@ fastify.addContentTypeParser('application/json', { parseAs: 'string' }, jsonPars
 
 //api
 const apiPrefix = "/latest/api/index.php"
+const multiHttpContext = createEmbeddedMultiHttpContext()
 fastify.register(apiPlugin, { prefix: apiPrefix })
 fastify.register(assetApiPlugin, { prefix: `${apiPrefix}/asset` })
 fastify.register(toolApiPlugin, { prefix: `${apiPrefix}/tool` })
@@ -105,7 +114,10 @@ fastify.register(expodApiPlugin, { prefix: `${apiPrefix}/expod` })
 fastify.register(storyQuestApiPlugin, { prefix: `${apiPrefix}/story_quest` })
 fastify.register(optionApiPlugin, { prefix: `${apiPrefix}/option` })
 fastify.register(singleBattleQuestApiPlugin, { prefix: `${apiPrefix}/single_battle_quest` })
-fastify.register(multiBattleQuestApiPlugin, { prefix: `${apiPrefix}/multi_battle_quest` })
+fastify.register(multiBattleRoutes, {
+    prefix: `${apiPrefix}/multi_battle_quest`,
+    context: multiHttpContext,
+})
 fastify.register(attentionApiPlugin, { prefix: `${apiPrefix}/attention` })
 fastify.register(characterApiPlugin, { prefix: `${apiPrefix}/character` })
 fastify.register(partyGroupApiPlugin, { prefix: `${apiPrefix}/party_group` })
@@ -121,6 +133,7 @@ fastify.register(paymentApiPlugin, { prefix: `${apiPrefix}/payment` })
 fastify.register(newsApiPlugin, { prefix: `${apiPrefix}/news` })
 fastify.register(raidEventApiPlugin, { prefix: `${apiPrefix}/event/raid` })
 fastify.register(rushEventApiPlugin, { prefix: `${apiPrefix}/event/rush` })
+fastify.register(characterElectionApiPlugin, { prefix: `${apiPrefix}/character_election` })
 
 // openapi
 fastify.register(openapiPlugin, { prefix: "/openapi/service" })
@@ -128,18 +141,10 @@ fastify.register(openapiPlugin, { prefix: "/openapi/service" })
 // infodesk
 fastify.register(infodeskPlugin, { prefix: "/infodesk" })
 
-// web routes
-fastify.register(indexWebPlugin, { prefix: "/" })
-
 // web api routes
 fastify.register(indexWebApiPlugin, { prefix: "/api" })
 
-// web static
-fastify.register(fastifyStatic, {
-    root: path.join(__dirname, "..", "web/public"),
-    prefix: "/public",
-    decorateReply: false
-})
+registerAdminUi(fastify, { projectRoot })
 
 // static CDN
 const cdnDir = process.env.CDN_DIR || ".cdn"
@@ -154,11 +159,17 @@ const listenHost = process.env.LISTEN_HOST ?? "localhost"
 
 const envListenPort = process.env.LISTEN_PORT === undefined ? 8000 : Number.parseInt(process.env.LISTEN_PORT)
 const listenPort = isNaN(envListenPort) ? 8000 : envListenPort
-fastify.listen({ port: listenPort, host: listenHost }, (err, address) => {
-    if (err) {
-        console.error(err)
-        fastify.log.error(err)
-        process.exit(1)
-    }
+
+async function bootstrap(): Promise<void> {
+    initializeDatabase()
+    initializeLegacyAssetState()
+    await initializeContentSnapshot()
+    await fastify.listen({ port: listenPort, host: listenHost })
     console.log(`StarPoint is listening on http://${listenHost}:${listenPort}`)
+}
+
+void bootstrap().catch(error => {
+    console.error(error)
+    fastify.log.error(error)
+    process.exit(1)
 })

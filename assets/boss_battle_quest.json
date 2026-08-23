@@ -11,7 +11,8 @@
         "rankPointReward": 14,
         "characterExpReward": 26,
         "manaReward": 135,
-        "poolExpReward": 26
+        "poolExpReward": 26,
+        "element": 0
     },
     "1001002": {
         "name": "",
@@ -25,7 +26,9 @@
         "rankPointReward": 399,
         "characterExpReward": 1415,
         "manaReward": 1290,
-        "poolExpReward": 1415
+        "poolExpReward": 1415,
+        "element": 0,
+        "isBothBoss": true
     },
     "1001003": {
         "name": "",
@@ -39,7 +42,9 @@
         "rankPointReward": 468,
         "characterExpReward": 1620,
         "manaReward": 1560,
-        "poolExpReward": 1620
+        "poolExpReward": 1620,
+        "element": 0,
+        "isBothBoss": true
     },
     "1001004": {
         "name": "",
@@ -53,7 +58,8 @@
         "rankPointReward": 468,
         "characterExpReward": 1620,
         "manaReward": 1560,
-        "poolExpReward": 1620
+        "poolExpReward": 1620,
+        "element": 0
     },
     "1001005": {
         "name": "",
@@ -67,7 +73,8 @@
         "rankPointReward": 468,
         "characterExpReward": 1620,
         "manaReward": 1560,
-        "poolExpReward": 1620
+        "poolExpReward": 1620,
+        "element": 0
     },
     "1001006": {
         "name": "",
@@ -81,7 +88,8 @@
         "rankPointReward": 468,
         "characterExpReward": 1620,
         "manaReward": 1560,
-        "poolExpReward": 1620
+        "poolExpReward": 1620,
+        "element": 0
     },
     "1001007": {
         "name": "",
@@ -95,7 +103,8 @@
         "rankPointReward": 468,
         "characterExpReward": 1620,
         "manaReward": 1560,
-        "poolExpReward": 1620
+        "poolExpReward": 1620,
+        "element": 0
     },
     "1001008": {
         "name": "",
@@ -109,7 +118,8 @@
         "rankPointReward": 468,
         "characterExpReward": 1620,
         "manaReward": 1560,
-        "poolExpReward": 1620
+        "poolExpReward": 1620,
+        "element": 0
     },
     "1001009": {
         "name": "",
@@ -123,7 +133,8 @@
         "rankPointReward": 468,
         "characterExpReward": 1620,
         "manaReward": 1560,
-        "poolExpReward": 1620
+        "poolExpReward": 1620,
+        "element": 0
     },
     "1001010": {
         "name": "",
@@ -137,7 +148,8 @@
         "rankPointReward": 468,
         "characterExpReward": 1620,
         "manaReward": 1560,
-        "poolExpReward": 1620
+        "poolExpReward": 1620,
+        "element": 0
     },
     "1001011": {
         "name": "",
@@ -151,7 +163,8 @@
         "rankPointReward": 468,
         "characterExpReward": 1620,
         "manaReward": 1560,
-        "poolExpReward": 1620
+        "poolExpReward": 1620,
+        "element": 0
     },
     "1001012": {
         "name": "",
@@ -165,7 +178,8 @@
         "rankPointReward": 399,
         "characterExpReward": 1415,
         "manaReward": 1290,
-        "poolExpReward": 1415
+        "poolExpReward": 1415,
+        "element": 0
     },
     "1001013": {
         "name": "",
@@ -179,7 +193,8 @@
         "rankPointReward": 399,
         "characterExpReward": 1415,
         "manaReward": 1290,
-        "poolExpReward": 1415
+        "poolExpReward": 1415,
+        "element": 0
     },
     "1001014": {
         "name": "",
@@ -193,7 +208,8 @@
         "rankPointReward": 399,
         "characterExpReward": 1415,
         "manaReward": 1290,
-        "poolExpReward": 1415
+        "poolExpReward": 1415,
+        "element": 0
     },
     "1001015": {
         "name": "",
@@ -207,7 +223,8 @@
         "rankPointReward": 399,
         "characterExpReward": 1415,
         "manaReward": 1290,
-        "poolExpReward": 1415
+        "poolExpReward": 1415,
+        "element": 0
     },
     "1001016": {
         "name": "",
@@ -221,7 +238,8 @@
         "rankPointReward": 399,
         "characterExpReward": 1415,
         "manaReward": 1290,
-        "poolExpReward": 1415
+        "poolExpReward": 1415,
+        "element": 0
     },
     "1001017": {
         "name": "",
@@ -235,7 +253,8 @@
         "rankPointReward": 399,
         "characterExpReward": 1415,
         "manaReward": 1290,
-        "poolExpReward": 1415
+        "poolExpReward": 1415,
+        "element": 0
     },
     "1001018": {
         "name": "",
@@ -249,7 +268,8 @@
         "rankPointReward": 399,
         "characterExpReward": 1415,
         "manaReward": 1290,
-        "poolExpReward": 1415
+        "poolExpReward": 1415,
+        "element": 0
     },
     "1001019": {
         "name": "",
@@ -263,7 +283,8 @@
         "rankPointReward": 399,
         "characterExpReward": 1415,
         "manaReward": 1290,
-        "poolExpReward": 1415
+        "poolExpReward": 1415,
+        "element": 0
     },
     "1002001": {
         "name": "",
@@ -277,7 +298,8 @@
         "rankPointReward": 36,
         "characterExpReward": 103,
         "manaReward": 360,
-        "poolExpReward": 103
+        "poolExpReward": 103,
+        "element": 3
     },
     "1002002": {
         "name": "",
@@ -291,7 +313,8 @@
         "rankPointReward": 186,
         "characterExpReward": 360,
         "manaReward": 840,
-        "poolExpReward": 360
+        "poolExpReward": 360,
+        "element": 3
     },
     "1002003": {
         "name": "",
@@ -305,7 +328,8 @@
         "rankPointReward": 357,
         "characterExpReward": 1240,
         "manaReward": 1200,
-        "poolExpReward": 1240
+        "poolExpReward": 1240,
+        "element": 3
     },
     "1002004": {
         "name": "",
@@ -319,7 +343,8 @@
         "rankPointReward": 419,
         "characterExpReward": 1420,
         "manaReward": 1440,
-        "poolExpReward": 1420
+        "poolExpReward": 1420,
+        "element": 3
     },
     "1003001": {
         "name": "",
@@ -333,7 +358,8 @@
         "rankPointReward": 38,
         "characterExpReward": 117,
         "manaReward": 390,
-        "poolExpReward": 117
+        "poolExpReward": 117,
+        "element": 0
     },
     "1003002": {
         "name": "",
@@ -347,7 +373,8 @@
         "rankPointReward": 207,
         "characterExpReward": 410,
         "manaReward": 900,
-        "poolExpReward": 410
+        "poolExpReward": 410,
+        "element": 0
     },
     "1003003": {
         "name": "",
@@ -361,7 +388,8 @@
         "rankPointReward": 399,
         "characterExpReward": 1415,
         "manaReward": 1290,
-        "poolExpReward": 1415
+        "poolExpReward": 1415,
+        "element": 0
     },
     "1003004": {
         "name": "",
@@ -375,7 +403,8 @@
         "rankPointReward": 468,
         "characterExpReward": 1620,
         "manaReward": 1560,
-        "poolExpReward": 1620
+        "poolExpReward": 1620,
+        "element": 0
     },
     "1005001": {
         "name": "",
@@ -389,7 +418,8 @@
         "rankPointReward": 36,
         "characterExpReward": 103,
         "manaReward": 360,
-        "poolExpReward": 103
+        "poolExpReward": 103,
+        "element": 1
     },
     "1005002": {
         "name": "",
@@ -403,7 +433,8 @@
         "rankPointReward": 200,
         "characterExpReward": 395,
         "manaReward": 870,
-        "poolExpReward": 395
+        "poolExpReward": 395,
+        "element": 1
     },
     "1005003": {
         "name": "",
@@ -417,7 +448,8 @@
         "rankPointReward": 357,
         "characterExpReward": 1240,
         "manaReward": 1200,
-        "poolExpReward": 1240
+        "poolExpReward": 1240,
+        "element": 1
     },
     "1005004": {
         "name": "",
@@ -431,7 +463,8 @@
         "rankPointReward": 419,
         "characterExpReward": 1420,
         "manaReward": 1440,
-        "poolExpReward": 1420
+        "poolExpReward": 1420,
+        "element": 1
     },
     "1006001": {
         "name": "",
@@ -445,7 +478,8 @@
         "rankPointReward": 38,
         "characterExpReward": 117,
         "manaReward": 390,
-        "poolExpReward": 117
+        "poolExpReward": 117,
+        "element": 1
     },
     "1006002": {
         "name": "",
@@ -459,7 +493,8 @@
         "rankPointReward": 223,
         "characterExpReward": 450,
         "manaReward": 960,
-        "poolExpReward": 450
+        "poolExpReward": 450,
+        "element": 1
     },
     "1006004": {
         "name": "",
@@ -473,7 +508,8 @@
         "rankPointReward": 399,
         "characterExpReward": 1415,
         "manaReward": 1290,
-        "poolExpReward": 1415
+        "poolExpReward": 1415,
+        "element": 1
     },
     "1006003": {
         "name": "",
@@ -487,7 +523,8 @@
         "rankPointReward": 468,
         "characterExpReward": 1620,
         "manaReward": 1560,
-        "poolExpReward": 1620
+        "poolExpReward": 1620,
+        "element": 1
     },
     "1009001": {
         "name": "",
@@ -501,7 +538,8 @@
         "rankPointReward": 36,
         "characterExpReward": 103,
         "manaReward": 360,
-        "poolExpReward": 103
+        "poolExpReward": 103,
+        "element": 2
     },
     "1009002": {
         "name": "",
@@ -515,7 +553,8 @@
         "rankPointReward": 200,
         "characterExpReward": 395,
         "manaReward": 870,
-        "poolExpReward": 395
+        "poolExpReward": 395,
+        "element": 2
     },
     "1009003": {
         "name": "",
@@ -529,7 +568,8 @@
         "rankPointReward": 357,
         "characterExpReward": 1240,
         "manaReward": 1200,
-        "poolExpReward": 1240
+        "poolExpReward": 1240,
+        "element": 2
     },
     "1009004": {
         "name": "",
@@ -543,7 +583,8 @@
         "rankPointReward": 419,
         "characterExpReward": 1420,
         "manaReward": 1440,
-        "poolExpReward": 1420
+        "poolExpReward": 1420,
+        "element": 2
     },
     "1010001": {
         "name": "",
@@ -557,7 +598,8 @@
         "rankPointReward": 36,
         "characterExpReward": 103,
         "manaReward": 360,
-        "poolExpReward": 103
+        "poolExpReward": 103,
+        "element": 2
     },
     "1010002": {
         "name": "",
@@ -571,7 +613,8 @@
         "rankPointReward": 200,
         "characterExpReward": 395,
         "manaReward": 870,
-        "poolExpReward": 395
+        "poolExpReward": 395,
+        "element": 2
     },
     "1010003": {
         "name": "",
@@ -585,7 +628,8 @@
         "rankPointReward": 357,
         "characterExpReward": 1240,
         "manaReward": 1200,
-        "poolExpReward": 1240
+        "poolExpReward": 1240,
+        "element": 2
     },
     "1010004": {
         "name": "",
@@ -599,7 +643,8 @@
         "rankPointReward": 419,
         "characterExpReward": 1420,
         "manaReward": 1440,
-        "poolExpReward": 1420
+        "poolExpReward": 1420,
+        "element": 2
     },
     "1012001": {
         "name": "",
@@ -613,7 +658,8 @@
         "rankPointReward": 42,
         "characterExpReward": 145,
         "manaReward": 450,
-        "poolExpReward": 145
+        "poolExpReward": 145,
+        "element": 4
     },
     "1012002": {
         "name": "",
@@ -627,7 +673,8 @@
         "rankPointReward": 240,
         "characterExpReward": 850,
         "manaReward": 1020,
-        "poolExpReward": 850
+        "poolExpReward": 850,
+        "element": 4
     },
     "1012003": {
         "name": "",
@@ -641,7 +688,8 @@
         "rankPointReward": 399,
         "characterExpReward": 1415,
         "manaReward": 1290,
-        "poolExpReward": 1415
+        "poolExpReward": 1415,
+        "element": 4
     },
     "1012004": {
         "name": "",
@@ -655,7 +703,8 @@
         "rankPointReward": 468,
         "characterExpReward": 1620,
         "manaReward": 1560,
-        "poolExpReward": 1620
+        "poolExpReward": 1620,
+        "element": 4
     },
     "1013001": {
         "name": "",
@@ -669,7 +718,8 @@
         "rankPointReward": 39,
         "characterExpReward": 128,
         "manaReward": 420,
-        "poolExpReward": 128
+        "poolExpReward": 128,
+        "element": 0
     },
     "1013002": {
         "name": "",
@@ -683,7 +733,8 @@
         "rankPointReward": 215,
         "characterExpReward": 745,
         "manaReward": 930,
-        "poolExpReward": 745
+        "poolExpReward": 745,
+        "element": 0
     },
     "1013003": {
         "name": "",
@@ -697,7 +748,8 @@
         "rankPointReward": 357,
         "characterExpReward": 1240,
         "manaReward": 1200,
-        "poolExpReward": 1240
+        "poolExpReward": 1240,
+        "element": 0
     },
     "1013004": {
         "name": "",
@@ -711,7 +763,8 @@
         "rankPointReward": 419,
         "characterExpReward": 1420,
         "manaReward": 1440,
-        "poolExpReward": 1420
+        "poolExpReward": 1420,
+        "element": 0
     },
     "1014001": {
         "name": "",
@@ -725,7 +778,8 @@
         "rankPointReward": 42,
         "characterExpReward": 145,
         "manaReward": 450,
-        "poolExpReward": 145
+        "poolExpReward": 145,
+        "element": 3
     },
     "1014002": {
         "name": "",
@@ -739,7 +793,8 @@
         "rankPointReward": 240,
         "characterExpReward": 850,
         "manaReward": 1020,
-        "poolExpReward": 850
+        "poolExpReward": 850,
+        "element": 3
     },
     "1014003": {
         "name": "",
@@ -753,7 +808,8 @@
         "rankPointReward": 399,
         "characterExpReward": 1415,
         "manaReward": 1290,
-        "poolExpReward": 1415
+        "poolExpReward": 1415,
+        "element": 3
     },
     "1014004": {
         "name": "",
@@ -767,7 +823,8 @@
         "rankPointReward": 468,
         "characterExpReward": 1620,
         "manaReward": 1560,
-        "poolExpReward": 1620
+        "poolExpReward": 1620,
+        "element": 3
     },
     "1016001": {
         "name": "",
@@ -781,7 +838,8 @@
         "rankPointReward": 39,
         "characterExpReward": 128,
         "manaReward": 420,
-        "poolExpReward": 128
+        "poolExpReward": 128,
+        "element": 5
     },
     "1016002": {
         "name": "",
@@ -795,7 +853,8 @@
         "rankPointReward": 215,
         "characterExpReward": 745,
         "manaReward": 930,
-        "poolExpReward": 745
+        "poolExpReward": 745,
+        "element": 5
     },
     "1016003": {
         "name": "",
@@ -809,7 +868,8 @@
         "rankPointReward": 357,
         "characterExpReward": 1240,
         "manaReward": 1200,
-        "poolExpReward": 1240
+        "poolExpReward": 1240,
+        "element": 5
     },
     "1016004": {
         "name": "",
@@ -823,7 +883,8 @@
         "rankPointReward": 419,
         "characterExpReward": 1420,
         "manaReward": 1440,
-        "poolExpReward": 1420
+        "poolExpReward": 1420,
+        "element": 5
     },
     "1017001": {
         "name": "",
@@ -837,7 +898,8 @@
         "rankPointReward": 42,
         "characterExpReward": 145,
         "manaReward": 450,
-        "poolExpReward": 145
+        "poolExpReward": 145,
+        "element": 5
     },
     "1017002": {
         "name": "",
@@ -851,7 +913,8 @@
         "rankPointReward": 240,
         "characterExpReward": 850,
         "manaReward": 1020,
-        "poolExpReward": 850
+        "poolExpReward": 850,
+        "element": 5
     },
     "1017003": {
         "name": "",
@@ -865,7 +928,8 @@
         "rankPointReward": 399,
         "characterExpReward": 1415,
         "manaReward": 1290,
-        "poolExpReward": 1415
+        "poolExpReward": 1415,
+        "element": 5
     },
     "1017004": {
         "name": "",
@@ -879,7 +943,8 @@
         "rankPointReward": 468,
         "characterExpReward": 1620,
         "manaReward": 1560,
-        "poolExpReward": 1620
+        "poolExpReward": 1620,
+        "element": 5
     },
     "1019001": {
         "name": "",
@@ -893,7 +958,8 @@
         "rankPointReward": 39,
         "characterExpReward": 128,
         "manaReward": 420,
-        "poolExpReward": 128
+        "poolExpReward": 128,
+        "element": 4
     },
     "1019002": {
         "name": "",
@@ -907,7 +973,8 @@
         "rankPointReward": 215,
         "characterExpReward": 745,
         "manaReward": 930,
-        "poolExpReward": 745
+        "poolExpReward": 745,
+        "element": 4
     },
     "1019003": {
         "name": "",
@@ -921,7 +988,8 @@
         "rankPointReward": 357,
         "characterExpReward": 1240,
         "manaReward": 1200,
-        "poolExpReward": 1240
+        "poolExpReward": 1240,
+        "element": 4
     },
     "1019004": {
         "name": "",
@@ -935,7 +1003,8 @@
         "rankPointReward": 419,
         "characterExpReward": 1420,
         "manaReward": 1440,
-        "poolExpReward": 1420
+        "poolExpReward": 1420,
+        "element": 4
     },
     "1020001": {
         "name": "",
@@ -949,7 +1018,8 @@
         "rankPointReward": 379,
         "characterExpReward": 1410,
         "manaReward": 1140,
-        "poolExpReward": 1410
+        "poolExpReward": 1410,
+        "element": 4
     },
     "1020002": {
         "name": "",
@@ -963,7 +1033,8 @@
         "rankPointReward": 473,
         "characterExpReward": 1760,
         "manaReward": 1430,
-        "poolExpReward": 1760
+        "poolExpReward": 1760,
+        "element": 4
     },
     "1020003": {
         "name": "",
@@ -977,7 +1048,8 @@
         "rankPointReward": 1013,
         "characterExpReward": 2435,
         "manaReward": 2490,
-        "poolExpReward": 2435
+        "poolExpReward": 2435,
+        "element": 4
     },
     "1022001": {
         "name": "",
@@ -991,7 +1063,8 @@
         "rankPointReward": 42,
         "characterExpReward": 145,
         "manaReward": 450,
-        "poolExpReward": 145
+        "poolExpReward": 145,
+        "element": 2
     },
     "1022002": {
         "name": "",
@@ -1005,7 +1078,8 @@
         "rankPointReward": 240,
         "characterExpReward": 850,
         "manaReward": 1020,
-        "poolExpReward": 850
+        "poolExpReward": 850,
+        "element": 2
     },
     "1022003": {
         "name": "",
@@ -1019,7 +1093,8 @@
         "rankPointReward": 399,
         "characterExpReward": 1415,
         "manaReward": 1290,
-        "poolExpReward": 1415
+        "poolExpReward": 1415,
+        "element": 2
     },
     "1022004": {
         "name": "",
@@ -1033,7 +1108,8 @@
         "rankPointReward": 468,
         "characterExpReward": 1620,
         "manaReward": 1560,
-        "poolExpReward": 1620
+        "poolExpReward": 1620,
+        "element": 2
     },
     "1023001": {
         "name": "",
@@ -1047,7 +1123,8 @@
         "rankPointReward": 42,
         "characterExpReward": 145,
         "manaReward": 450,
-        "poolExpReward": 145
+        "poolExpReward": 145,
+        "element": 2
     },
     "1023002": {
         "name": "",
@@ -1061,7 +1138,8 @@
         "rankPointReward": 240,
         "characterExpReward": 850,
         "manaReward": 1020,
-        "poolExpReward": 850
+        "poolExpReward": 850,
+        "element": 2
     },
     "1023003": {
         "name": "",
@@ -1075,7 +1153,8 @@
         "rankPointReward": 399,
         "characterExpReward": 1415,
         "manaReward": 1290,
-        "poolExpReward": 1415
+        "poolExpReward": 1415,
+        "element": 2
     },
     "1023004": {
         "name": "",
@@ -1089,7 +1168,8 @@
         "rankPointReward": 468,
         "characterExpReward": 1620,
         "manaReward": 1560,
-        "poolExpReward": 1620
+        "poolExpReward": 1620,
+        "element": 2
     },
     "1024001": {
         "name": "",
@@ -1103,7 +1183,8 @@
         "rankPointReward": 42,
         "characterExpReward": 145,
         "manaReward": 450,
-        "poolExpReward": 145
+        "poolExpReward": 145,
+        "element": 1
     },
     "1024002": {
         "name": "",
@@ -1117,7 +1198,8 @@
         "rankPointReward": 240,
         "characterExpReward": 850,
         "manaReward": 1020,
-        "poolExpReward": 850
+        "poolExpReward": 850,
+        "element": 1
     },
     "1024003": {
         "name": "",
@@ -1131,7 +1213,8 @@
         "rankPointReward": 399,
         "characterExpReward": 1415,
         "manaReward": 1290,
-        "poolExpReward": 1415
+        "poolExpReward": 1415,
+        "element": 1
     },
     "1024004": {
         "name": "",
@@ -1145,7 +1228,8 @@
         "rankPointReward": 468,
         "characterExpReward": 1620,
         "manaReward": 1560,
-        "poolExpReward": 1620
+        "poolExpReward": 1620,
+        "element": 1
     },
     "1025001": {
         "name": "",
@@ -1159,7 +1243,8 @@
         "rankPointReward": 38,
         "characterExpReward": 117,
         "manaReward": 390,
-        "poolExpReward": 117
+        "poolExpReward": 117,
+        "element": 3
     },
     "1025002": {
         "name": "",
@@ -1173,7 +1258,8 @@
         "rankPointReward": 207,
         "characterExpReward": 410,
         "manaReward": 900,
-        "poolExpReward": 410
+        "poolExpReward": 410,
+        "element": 3
     },
     "1025003": {
         "name": "",
@@ -1187,7 +1273,8 @@
         "rankPointReward": 399,
         "characterExpReward": 1415,
         "manaReward": 1290,
-        "poolExpReward": 1415
+        "poolExpReward": 1415,
+        "element": 3
     },
     "1025004": {
         "name": "",
@@ -1201,7 +1288,8 @@
         "rankPointReward": 468,
         "characterExpReward": 1620,
         "manaReward": 1560,
-        "poolExpReward": 1620
+        "poolExpReward": 1620,
+        "element": 3
     },
     "1026001": {
         "name": "",
@@ -1215,7 +1303,8 @@
         "rankPointReward": 38,
         "characterExpReward": 117,
         "manaReward": 390,
-        "poolExpReward": 117
+        "poolExpReward": 117,
+        "element": 1
     },
     "1026002": {
         "name": "",
@@ -1229,7 +1318,8 @@
         "rankPointReward": 207,
         "characterExpReward": 410,
         "manaReward": 900,
-        "poolExpReward": 410
+        "poolExpReward": 410,
+        "element": 1
     },
     "1026003": {
         "name": "",
@@ -1243,7 +1333,8 @@
         "rankPointReward": 399,
         "characterExpReward": 1415,
         "manaReward": 1290,
-        "poolExpReward": 1415
+        "poolExpReward": 1415,
+        "element": 1
     },
     "1026004": {
         "name": "",
@@ -1257,7 +1348,8 @@
         "rankPointReward": 468,
         "characterExpReward": 1620,
         "manaReward": 1560,
-        "poolExpReward": 1620
+        "poolExpReward": 1620,
+        "element": 1
     },
     "1027001": {
         "name": "",
@@ -1271,7 +1363,8 @@
         "rankPointReward": 38,
         "characterExpReward": 117,
         "manaReward": 390,
-        "poolExpReward": 117
+        "poolExpReward": 117,
+        "element": 2
     },
     "1027002": {
         "name": "",
@@ -1285,7 +1378,8 @@
         "rankPointReward": 207,
         "characterExpReward": 410,
         "manaReward": 900,
-        "poolExpReward": 410
+        "poolExpReward": 410,
+        "element": 2
     },
     "1027003": {
         "name": "",
@@ -1299,7 +1393,8 @@
         "rankPointReward": 399,
         "characterExpReward": 1415,
         "manaReward": 1290,
-        "poolExpReward": 1415
+        "poolExpReward": 1415,
+        "element": 2
     },
     "1027004": {
         "name": "",
@@ -1313,7 +1408,8 @@
         "rankPointReward": 468,
         "characterExpReward": 1620,
         "manaReward": 1560,
-        "poolExpReward": 1620
+        "poolExpReward": 1620,
+        "element": 2
     },
     "1028001": {
         "name": "",
@@ -1327,7 +1423,8 @@
         "rankPointReward": 38,
         "characterExpReward": 117,
         "manaReward": 390,
-        "poolExpReward": 117
+        "poolExpReward": 117,
+        "element": 0
     },
     "1028002": {
         "name": "",
@@ -1341,7 +1438,8 @@
         "rankPointReward": 207,
         "characterExpReward": 410,
         "manaReward": 900,
-        "poolExpReward": 410
+        "poolExpReward": 410,
+        "element": 0
     },
     "1028003": {
         "name": "",
@@ -1355,7 +1453,8 @@
         "rankPointReward": 399,
         "characterExpReward": 1415,
         "manaReward": 1290,
-        "poolExpReward": 1415
+        "poolExpReward": 1415,
+        "element": 0
     },
     "1028004": {
         "name": "",
@@ -1369,7 +1468,8 @@
         "rankPointReward": 468,
         "characterExpReward": 1620,
         "manaReward": 1560,
-        "poolExpReward": 1620
+        "poolExpReward": 1620,
+        "element": 0
     },
     "1029001": {
         "name": "",
@@ -1383,7 +1483,8 @@
         "rankPointReward": 38,
         "characterExpReward": 117,
         "manaReward": 390,
-        "poolExpReward": 117
+        "poolExpReward": 117,
+        "element": 5
     },
     "1029002": {
         "name": "",
@@ -1397,7 +1498,8 @@
         "rankPointReward": 207,
         "characterExpReward": 410,
         "manaReward": 900,
-        "poolExpReward": 410
+        "poolExpReward": 410,
+        "element": 5
     },
     "1029003": {
         "name": "",
@@ -1411,7 +1513,8 @@
         "rankPointReward": 399,
         "characterExpReward": 1415,
         "manaReward": 1290,
-        "poolExpReward": 1415
+        "poolExpReward": 1415,
+        "element": 5
     },
     "1029004": {
         "name": "",
@@ -1425,7 +1528,8 @@
         "rankPointReward": 468,
         "characterExpReward": 1620,
         "manaReward": 1560,
-        "poolExpReward": 1620
+        "poolExpReward": 1620,
+        "element": 5
     },
     "1030001": {
         "name": "",
@@ -1439,7 +1543,8 @@
         "rankPointReward": 38,
         "characterExpReward": 117,
         "manaReward": 390,
-        "poolExpReward": 117
+        "poolExpReward": 117,
+        "element": 4
     },
     "1030002": {
         "name": "",
@@ -1453,7 +1558,8 @@
         "rankPointReward": 207,
         "characterExpReward": 410,
         "manaReward": 900,
-        "poolExpReward": 410
+        "poolExpReward": 410,
+        "element": 4
     },
     "1030003": {
         "name": "",
@@ -1467,7 +1573,8 @@
         "rankPointReward": 399,
         "characterExpReward": 1415,
         "manaReward": 1290,
-        "poolExpReward": 1415
+        "poolExpReward": 1415,
+        "element": 4
     },
     "1030004": {
         "name": "",
@@ -1481,7 +1588,8 @@
         "rankPointReward": 468,
         "characterExpReward": 1620,
         "manaReward": 1560,
-        "poolExpReward": 1620
+        "poolExpReward": 1620,
+        "element": 4
     },
     "1031001": {
         "name": "",
@@ -1495,7 +1603,8 @@
         "rankPointReward": 42,
         "characterExpReward": 145,
         "manaReward": 450,
-        "poolExpReward": 145
+        "poolExpReward": 145,
+        "element": 1
     },
     "1031002": {
         "name": "",
@@ -1509,7 +1618,8 @@
         "rankPointReward": 240,
         "characterExpReward": 850,
         "manaReward": 1020,
-        "poolExpReward": 850
+        "poolExpReward": 850,
+        "element": 1
     },
     "1031003": {
         "name": "",
@@ -1523,7 +1633,8 @@
         "rankPointReward": 399,
         "characterExpReward": 1415,
         "manaReward": 1290,
-        "poolExpReward": 1415
+        "poolExpReward": 1415,
+        "element": 1
     },
     "1031004": {
         "name": "",
@@ -1537,7 +1648,8 @@
         "rankPointReward": 468,
         "characterExpReward": 1620,
         "manaReward": 1560,
-        "poolExpReward": 1620
+        "poolExpReward": 1620,
+        "element": 1
     },
     "1032001": {
         "name": "",
@@ -1551,7 +1663,8 @@
         "rankPointReward": 42,
         "characterExpReward": 145,
         "manaReward": 450,
-        "poolExpReward": 145
+        "poolExpReward": 145,
+        "element": 1
     },
     "1032002": {
         "name": "",
@@ -1565,7 +1678,8 @@
         "rankPointReward": 240,
         "characterExpReward": 850,
         "manaReward": 1020,
-        "poolExpReward": 850
+        "poolExpReward": 850,
+        "element": 1
     },
     "1032003": {
         "name": "",
@@ -1579,7 +1693,8 @@
         "rankPointReward": 399,
         "characterExpReward": 1415,
         "manaReward": 1290,
-        "poolExpReward": 1415
+        "poolExpReward": 1415,
+        "element": 1
     },
     "1032004": {
         "name": "",
@@ -1593,7 +1708,8 @@
         "rankPointReward": 468,
         "characterExpReward": 1620,
         "manaReward": 1560,
-        "poolExpReward": 1620
+        "poolExpReward": 1620,
+        "element": 1
     },
     "1033001": {
         "name": "",
@@ -1607,7 +1723,8 @@
         "rankPointReward": 42,
         "characterExpReward": 145,
         "manaReward": 450,
-        "poolExpReward": 145
+        "poolExpReward": 145,
+        "element": 4
     },
     "1033002": {
         "name": "",
@@ -1621,7 +1738,8 @@
         "rankPointReward": 240,
         "characterExpReward": 850,
         "manaReward": 1020,
-        "poolExpReward": 850
+        "poolExpReward": 850,
+        "element": 4
     },
     "1033003": {
         "name": "",
@@ -1635,7 +1753,8 @@
         "rankPointReward": 399,
         "characterExpReward": 1415,
         "manaReward": 1290,
-        "poolExpReward": 1415
+        "poolExpReward": 1415,
+        "element": 4
     },
     "1033004": {
         "name": "",
@@ -1649,7 +1768,8 @@
         "rankPointReward": 468,
         "characterExpReward": 1620,
         "manaReward": 1560,
-        "poolExpReward": 1620
+        "poolExpReward": 1620,
+        "element": 4
     },
     "1034001": {
         "name": "",
@@ -1663,7 +1783,8 @@
         "rankPointReward": 42,
         "characterExpReward": 145,
         "manaReward": 450,
-        "poolExpReward": 145
+        "poolExpReward": 145,
+        "element": 0
     },
     "1034002": {
         "name": "",
@@ -1677,7 +1798,8 @@
         "rankPointReward": 240,
         "characterExpReward": 850,
         "manaReward": 1020,
-        "poolExpReward": 850
+        "poolExpReward": 850,
+        "element": 0
     },
     "1034003": {
         "name": "",
@@ -1691,7 +1813,8 @@
         "rankPointReward": 399,
         "characterExpReward": 1415,
         "manaReward": 1290,
-        "poolExpReward": 1415
+        "poolExpReward": 1415,
+        "element": 0
     },
     "1034004": {
         "name": "",
@@ -1705,7 +1828,8 @@
         "rankPointReward": 468,
         "characterExpReward": 1620,
         "manaReward": 1560,
-        "poolExpReward": 1620
+        "poolExpReward": 1620,
+        "element": 0
     },
     "1034005": {
         "name": "",
@@ -1719,7 +1843,8 @@
         "rankPointReward": 702,
         "characterExpReward": 2430,
         "manaReward": 2340,
-        "poolExpReward": 2430
+        "poolExpReward": 2430,
+        "element": 0
     },
     "1036001": {
         "name": "",
@@ -1733,7 +1858,8 @@
         "rankPointReward": 42,
         "characterExpReward": 145,
         "manaReward": 450,
-        "poolExpReward": 145
+        "poolExpReward": 145,
+        "element": 0
     },
     "1036002": {
         "name": "",
@@ -1747,7 +1873,8 @@
         "rankPointReward": 240,
         "characterExpReward": 850,
         "manaReward": 1020,
-        "poolExpReward": 850
+        "poolExpReward": 850,
+        "element": 0
     },
     "1036003": {
         "name": "",
@@ -1761,7 +1888,8 @@
         "rankPointReward": 399,
         "characterExpReward": 1415,
         "manaReward": 1290,
-        "poolExpReward": 1415
+        "poolExpReward": 1415,
+        "element": 0
     },
     "1036004": {
         "name": "",
@@ -1775,7 +1903,8 @@
         "rankPointReward": 468,
         "characterExpReward": 1620,
         "manaReward": 1560,
-        "poolExpReward": 1620
+        "poolExpReward": 1620,
+        "element": 0
     },
     "1036005": {
         "name": "",
@@ -1789,7 +1918,8 @@
         "rankPointReward": 702,
         "characterExpReward": 2430,
         "manaReward": 2340,
-        "poolExpReward": 2430
+        "poolExpReward": 2430,
+        "element": 0
     },
     "1061001": {
         "name": "",
@@ -1803,7 +1933,8 @@
         "rankPointReward": 47,
         "characterExpReward": 117,
         "manaReward": 390,
-        "poolExpReward": 117
+        "poolExpReward": 117,
+        "element": 1
     },
     "1061002": {
         "name": "",
@@ -1817,7 +1948,8 @@
         "rankPointReward": 290,
         "characterExpReward": 410,
         "manaReward": 900,
-        "poolExpReward": 410
+        "poolExpReward": 410,
+        "element": 1
     },
     "1061003": {
         "name": "",
@@ -1831,7 +1963,8 @@
         "rankPointReward": 569,
         "characterExpReward": 1415,
         "manaReward": 1290,
-        "poolExpReward": 1415
+        "poolExpReward": 1415,
+        "element": 1
     },
     "1061004": {
         "name": "",
@@ -1845,7 +1978,8 @@
         "rankPointReward": 1013,
         "characterExpReward": 2435,
         "manaReward": 2490,
-        "poolExpReward": 2435
+        "poolExpReward": 2435,
+        "element": 1
     },
     "1062001": {
         "name": "",
@@ -1859,7 +1993,8 @@
         "rankPointReward": 47,
         "characterExpReward": 117,
         "manaReward": 390,
-        "poolExpReward": 117
+        "poolExpReward": 117,
+        "element": 2
     },
     "1062002": {
         "name": "",
@@ -1873,7 +2008,8 @@
         "rankPointReward": 290,
         "characterExpReward": 410,
         "manaReward": 900,
-        "poolExpReward": 410
+        "poolExpReward": 410,
+        "element": 2
     },
     "1062003": {
         "name": "",
@@ -1887,7 +2023,8 @@
         "rankPointReward": 569,
         "characterExpReward": 1415,
         "manaReward": 1290,
-        "poolExpReward": 1415
+        "poolExpReward": 1415,
+        "element": 2
     },
     "1062004": {
         "name": "",
@@ -1901,7 +2038,8 @@
         "rankPointReward": 1013,
         "characterExpReward": 2435,
         "manaReward": 2490,
-        "poolExpReward": 2435
+        "poolExpReward": 2435,
+        "element": 2
     },
     "1063001": {
         "name": "",
@@ -1915,7 +2053,8 @@
         "rankPointReward": 47,
         "characterExpReward": 117,
         "manaReward": 390,
-        "poolExpReward": 117
+        "poolExpReward": 117,
+        "element": 3
     },
     "1063002": {
         "name": "",
@@ -1929,7 +2068,8 @@
         "rankPointReward": 290,
         "characterExpReward": 410,
         "manaReward": 900,
-        "poolExpReward": 410
+        "poolExpReward": 410,
+        "element": 3
     },
     "1063003": {
         "name": "",
@@ -1943,7 +2083,8 @@
         "rankPointReward": 569,
         "characterExpReward": 1415,
         "manaReward": 1290,
-        "poolExpReward": 1415
+        "poolExpReward": 1415,
+        "element": 3
     },
     "1063004": {
         "name": "",
@@ -1957,7 +2098,8 @@
         "rankPointReward": 1013,
         "characterExpReward": 2435,
         "manaReward": 2490,
-        "poolExpReward": 2435
+        "poolExpReward": 2435,
+        "element": 3
     },
     "1064001": {
         "name": "",
@@ -1971,7 +2113,8 @@
         "rankPointReward": 47,
         "characterExpReward": 117,
         "manaReward": 390,
-        "poolExpReward": 117
+        "poolExpReward": 117,
+        "element": 0
     },
     "1064002": {
         "name": "",
@@ -1985,7 +2128,8 @@
         "rankPointReward": 290,
         "characterExpReward": 410,
         "manaReward": 900,
-        "poolExpReward": 410
+        "poolExpReward": 410,
+        "element": 0
     },
     "1064003": {
         "name": "",
@@ -1999,7 +2143,8 @@
         "rankPointReward": 569,
         "characterExpReward": 1415,
         "manaReward": 1290,
-        "poolExpReward": 1415
+        "poolExpReward": 1415,
+        "element": 0
     },
     "1064004": {
         "name": "",
@@ -2013,7 +2158,8 @@
         "rankPointReward": 1013,
         "characterExpReward": 2435,
         "manaReward": 2490,
-        "poolExpReward": 2435
+        "poolExpReward": 2435,
+        "element": 0
     },
     "1065001": {
         "name": "",
@@ -2027,7 +2173,8 @@
         "rankPointReward": 47,
         "characterExpReward": 117,
         "manaReward": 390,
-        "poolExpReward": 117
+        "poolExpReward": 117,
+        "element": 5
     },
     "1065002": {
         "name": "",
@@ -2041,7 +2188,8 @@
         "rankPointReward": 290,
         "characterExpReward": 410,
         "manaReward": 900,
-        "poolExpReward": 410
+        "poolExpReward": 410,
+        "element": 5
     },
     "1065003": {
         "name": "",
@@ -2055,7 +2203,8 @@
         "rankPointReward": 569,
         "characterExpReward": 1415,
         "manaReward": 1290,
-        "poolExpReward": 1415
+        "poolExpReward": 1415,
+        "element": 5
     },
     "1065004": {
         "name": "",
@@ -2069,7 +2218,8 @@
         "rankPointReward": 1013,
         "characterExpReward": 2435,
         "manaReward": 2490,
-        "poolExpReward": 2435
+        "poolExpReward": 2435,
+        "element": 5
     },
     "1066001": {
         "name": "",
@@ -2083,7 +2233,8 @@
         "rankPointReward": 47,
         "characterExpReward": 117,
         "manaReward": 390,
-        "poolExpReward": 117
+        "poolExpReward": 117,
+        "element": 4
     },
     "1066002": {
         "name": "",
@@ -2097,7 +2248,8 @@
         "rankPointReward": 290,
         "characterExpReward": 410,
         "manaReward": 900,
-        "poolExpReward": 410
+        "poolExpReward": 410,
+        "element": 4
     },
     "1066003": {
         "name": "",
@@ -2111,7 +2263,8 @@
         "rankPointReward": 569,
         "characterExpReward": 1415,
         "manaReward": 1290,
-        "poolExpReward": 1415
+        "poolExpReward": 1415,
+        "element": 4
     },
     "1066004": {
         "name": "",
@@ -2125,7 +2278,8 @@
         "rankPointReward": 1013,
         "characterExpReward": 2435,
         "manaReward": 2490,
-        "poolExpReward": 2435
+        "poolExpReward": 2435,
+        "element": 4
     },
     "1060001": {
         "name": "",
@@ -2139,7 +2293,8 @@
         "rankPointReward": 47,
         "characterExpReward": 117,
         "manaReward": 390,
-        "poolExpReward": 117
+        "poolExpReward": 117,
+        "element": 4
     },
     "1060002": {
         "name": "",
@@ -2153,7 +2308,8 @@
         "rankPointReward": 290,
         "characterExpReward": 410,
         "manaReward": 900,
-        "poolExpReward": 410
+        "poolExpReward": 410,
+        "element": 4
     },
     "1060003": {
         "name": "",
@@ -2167,7 +2323,8 @@
         "rankPointReward": 569,
         "characterExpReward": 1415,
         "manaReward": 1290,
-        "poolExpReward": 1415
+        "poolExpReward": 1415,
+        "element": 4
     },
     "1060004": {
         "name": "",
@@ -2181,7 +2338,8 @@
         "rankPointReward": 1013,
         "characterExpReward": 2435,
         "manaReward": 2490,
-        "poolExpReward": 2435
+        "poolExpReward": 2435,
+        "element": 4
     },
     "1060005": {
         "name": "",
@@ -2195,7 +2353,8 @@
         "rankPointReward": 1190,
         "characterExpReward": 2600,
         "manaReward": 2590,
-        "poolExpReward": 2600
+        "poolExpReward": 2600,
+        "element": 4
     },
     "1051001": {
         "name": "",
@@ -2209,7 +2368,8 @@
         "rankPointReward": 47,
         "characterExpReward": 117,
         "manaReward": 390,
-        "poolExpReward": 117
+        "poolExpReward": 117,
+        "element": 1
     },
     "1051002": {
         "name": "",
@@ -2223,7 +2383,8 @@
         "rankPointReward": 290,
         "characterExpReward": 410,
         "manaReward": 900,
-        "poolExpReward": 410
+        "poolExpReward": 410,
+        "element": 1
     },
     "1051003": {
         "name": "",
@@ -2237,7 +2398,8 @@
         "rankPointReward": 569,
         "characterExpReward": 1415,
         "manaReward": 1290,
-        "poolExpReward": 1415
+        "poolExpReward": 1415,
+        "element": 1
     },
     "1051004": {
         "name": "",
@@ -2251,7 +2413,8 @@
         "rankPointReward": 1013,
         "characterExpReward": 2435,
         "manaReward": 2490,
-        "poolExpReward": 2435
+        "poolExpReward": 2435,
+        "element": 1
     },
     "1051005": {
         "name": "",
@@ -2265,7 +2428,8 @@
         "rankPointReward": 1190,
         "characterExpReward": 2600,
         "manaReward": 2590,
-        "poolExpReward": 2600
+        "poolExpReward": 2600,
+        "element": 1
     },
     "1052001": {
         "name": "",
@@ -2279,7 +2443,8 @@
         "rankPointReward": 47,
         "characterExpReward": 117,
         "manaReward": 390,
-        "poolExpReward": 117
+        "poolExpReward": 117,
+        "element": 2
     },
     "1052002": {
         "name": "",
@@ -2293,7 +2458,8 @@
         "rankPointReward": 290,
         "characterExpReward": 410,
         "manaReward": 900,
-        "poolExpReward": 410
+        "poolExpReward": 410,
+        "element": 2
     },
     "1052003": {
         "name": "",
@@ -2307,7 +2473,8 @@
         "rankPointReward": 569,
         "characterExpReward": 1415,
         "manaReward": 1290,
-        "poolExpReward": 1415
+        "poolExpReward": 1415,
+        "element": 2
     },
     "1052004": {
         "name": "",
@@ -2321,7 +2488,8 @@
         "rankPointReward": 1013,
         "characterExpReward": 2435,
         "manaReward": 2490,
-        "poolExpReward": 2435
+        "poolExpReward": 2435,
+        "element": 2
     },
     "1052005": {
         "name": "",
@@ -2335,7 +2503,8 @@
         "rankPointReward": 1190,
         "characterExpReward": 2600,
         "manaReward": 2590,
-        "poolExpReward": 2600
+        "poolExpReward": 2600,
+        "element": 2
     },
     "1053001": {
         "name": "",
@@ -2349,7 +2518,8 @@
         "rankPointReward": 47,
         "characterExpReward": 117,
         "manaReward": 390,
-        "poolExpReward": 117
+        "poolExpReward": 117,
+        "element": 3
     },
     "1053002": {
         "name": "",
@@ -2363,7 +2533,8 @@
         "rankPointReward": 290,
         "characterExpReward": 410,
         "manaReward": 900,
-        "poolExpReward": 410
+        "poolExpReward": 410,
+        "element": 3
     },
     "1053003": {
         "name": "",
@@ -2377,7 +2548,8 @@
         "rankPointReward": 569,
         "characterExpReward": 1415,
         "manaReward": 1290,
-        "poolExpReward": 1415
+        "poolExpReward": 1415,
+        "element": 3
     },
     "1053004": {
         "name": "",
@@ -2391,7 +2563,8 @@
         "rankPointReward": 1013,
         "characterExpReward": 2435,
         "manaReward": 2490,
-        "poolExpReward": 2435
+        "poolExpReward": 2435,
+        "element": 3
     },
     "1053005": {
         "name": "",
@@ -2405,7 +2578,8 @@
         "rankPointReward": 1190,
         "characterExpReward": 2600,
         "manaReward": 2590,
-        "poolExpReward": 2600
+        "poolExpReward": 2600,
+        "element": 3
     },
     "1054001": {
         "name": "",
@@ -2419,7 +2593,8 @@
         "rankPointReward": 47,
         "characterExpReward": 117,
         "manaReward": 390,
-        "poolExpReward": 117
+        "poolExpReward": 117,
+        "element": 0
     },
     "1054002": {
         "name": "",
@@ -2433,7 +2608,8 @@
         "rankPointReward": 290,
         "characterExpReward": 410,
         "manaReward": 900,
-        "poolExpReward": 410
+        "poolExpReward": 410,
+        "element": 0
     },
     "1054003": {
         "name": "",
@@ -2447,7 +2623,8 @@
         "rankPointReward": 569,
         "characterExpReward": 1415,
         "manaReward": 1290,
-        "poolExpReward": 1415
+        "poolExpReward": 1415,
+        "element": 0
     },
     "1054004": {
         "name": "",
@@ -2461,7 +2638,8 @@
         "rankPointReward": 1013,
         "characterExpReward": 2435,
         "manaReward": 2490,
-        "poolExpReward": 2435
+        "poolExpReward": 2435,
+        "element": 0
     },
     "1054005": {
         "name": "",
@@ -2475,7 +2653,8 @@
         "rankPointReward": 1190,
         "characterExpReward": 2600,
         "manaReward": 2590,
-        "poolExpReward": 2600
+        "poolExpReward": 2600,
+        "element": 0
     },
     "1055001": {
         "name": "",
@@ -2489,7 +2668,8 @@
         "rankPointReward": 47,
         "characterExpReward": 117,
         "manaReward": 390,
-        "poolExpReward": 117
+        "poolExpReward": 117,
+        "element": 5
     },
     "1055002": {
         "name": "",
@@ -2503,7 +2683,8 @@
         "rankPointReward": 290,
         "characterExpReward": 410,
         "manaReward": 900,
-        "poolExpReward": 410
+        "poolExpReward": 410,
+        "element": 5
     },
     "1055003": {
         "name": "",
@@ -2517,7 +2698,8 @@
         "rankPointReward": 569,
         "characterExpReward": 1415,
         "manaReward": 1290,
-        "poolExpReward": 1415
+        "poolExpReward": 1415,
+        "element": 5
     },
     "1055004": {
         "name": "",
@@ -2531,7 +2713,8 @@
         "rankPointReward": 1013,
         "characterExpReward": 2435,
         "manaReward": 2490,
-        "poolExpReward": 2435
+        "poolExpReward": 2435,
+        "element": 5
     },
     "1055005": {
         "name": "",
@@ -2545,7 +2728,8 @@
         "rankPointReward": 1190,
         "characterExpReward": 2600,
         "manaReward": 2590,
-        "poolExpReward": 2600
+        "poolExpReward": 2600,
+        "element": 5
     },
     "1056001": {
         "name": "",
@@ -2559,7 +2743,8 @@
         "rankPointReward": 47,
         "characterExpReward": 117,
         "manaReward": 390,
-        "poolExpReward": 117
+        "poolExpReward": 117,
+        "element": 4
     },
     "1056002": {
         "name": "",
@@ -2573,7 +2758,8 @@
         "rankPointReward": 290,
         "characterExpReward": 410,
         "manaReward": 900,
-        "poolExpReward": 410
+        "poolExpReward": 410,
+        "element": 4
     },
     "1056003": {
         "name": "",
@@ -2587,7 +2773,8 @@
         "rankPointReward": 569,
         "characterExpReward": 1415,
         "manaReward": 1290,
-        "poolExpReward": 1415
+        "poolExpReward": 1415,
+        "element": 4
     },
     "1056004": {
         "name": "",
@@ -2601,7 +2788,8 @@
         "rankPointReward": 1013,
         "characterExpReward": 2435,
         "manaReward": 2490,
-        "poolExpReward": 2435
+        "poolExpReward": 2435,
+        "element": 4
     },
     "1056005": {
         "name": "",
@@ -2615,7 +2803,8 @@
         "rankPointReward": 1190,
         "characterExpReward": 2600,
         "manaReward": 2590,
-        "poolExpReward": 2600
+        "poolExpReward": 2600,
+        "element": 4
     },
     "1057001": {
         "name": "",
@@ -2629,7 +2818,8 @@
         "rankPointReward": 47,
         "characterExpReward": 117,
         "manaReward": 390,
-        "poolExpReward": 117
+        "poolExpReward": 117,
+        "element": 5
     },
     "1057002": {
         "name": "",
@@ -2643,7 +2833,8 @@
         "rankPointReward": 290,
         "characterExpReward": 410,
         "manaReward": 900,
-        "poolExpReward": 410
+        "poolExpReward": 410,
+        "element": 5
     },
     "1057003": {
         "name": "",
@@ -2657,7 +2848,8 @@
         "rankPointReward": 569,
         "characterExpReward": 1415,
         "manaReward": 1290,
-        "poolExpReward": 1415
+        "poolExpReward": 1415,
+        "element": 5
     },
     "1057004": {
         "name": "",
@@ -2671,7 +2863,8 @@
         "rankPointReward": 1013,
         "characterExpReward": 2435,
         "manaReward": 2490,
-        "poolExpReward": 2435
+        "poolExpReward": 2435,
+        "element": 5
     },
     "1058001": {
         "name": "",
@@ -2685,7 +2878,8 @@
         "rankPointReward": 47,
         "characterExpReward": 117,
         "manaReward": 390,
-        "poolExpReward": 117
+        "poolExpReward": 117,
+        "element": 0
     },
     "1058002": {
         "name": "",
@@ -2699,7 +2893,8 @@
         "rankPointReward": 290,
         "characterExpReward": 410,
         "manaReward": 900,
-        "poolExpReward": 410
+        "poolExpReward": 410,
+        "element": 0
     },
     "1058003": {
         "name": "",
@@ -2713,7 +2908,8 @@
         "rankPointReward": 569,
         "characterExpReward": 1415,
         "manaReward": 1290,
-        "poolExpReward": 1415
+        "poolExpReward": 1415,
+        "element": 0
     },
     "1058004": {
         "name": "",
@@ -2727,7 +2923,8 @@
         "rankPointReward": 1013,
         "characterExpReward": 2435,
         "manaReward": 2490,
-        "poolExpReward": 2435
+        "poolExpReward": 2435,
+        "element": 0
     },
     "1058005": {
         "name": "",
@@ -2741,7 +2938,8 @@
         "rankPointReward": 1190,
         "characterExpReward": 2600,
         "manaReward": 2590,
-        "poolExpReward": 2600
+        "poolExpReward": 2600,
+        "element": 0
     },
     "1070001": {
         "name": "",
@@ -2755,7 +2953,8 @@
         "rankPointReward": 47,
         "characterExpReward": 117,
         "manaReward": 390,
-        "poolExpReward": 117
+        "poolExpReward": 117,
+        "element": 4
     },
     "1070002": {
         "name": "",
@@ -2769,7 +2968,8 @@
         "rankPointReward": 290,
         "characterExpReward": 410,
         "manaReward": 900,
-        "poolExpReward": 410
+        "poolExpReward": 410,
+        "element": 4
     },
     "1070003": {
         "name": "",
@@ -2783,7 +2983,8 @@
         "rankPointReward": 569,
         "characterExpReward": 1415,
         "manaReward": 1290,
-        "poolExpReward": 1415
+        "poolExpReward": 1415,
+        "element": 4
     },
     "1070004": {
         "name": "",
@@ -2797,7 +2998,8 @@
         "rankPointReward": 1013,
         "characterExpReward": 2435,
         "manaReward": 2490,
-        "poolExpReward": 2435
+        "poolExpReward": 2435,
+        "element": 4
     },
     "1035001": {
         "name": "",
@@ -2811,7 +3013,8 @@
         "rankPointReward": 42,
         "characterExpReward": 145,
         "manaReward": 450,
-        "poolExpReward": 145
+        "poolExpReward": 145,
+        "element": 2
     },
     "1035002": {
         "name": "",
@@ -2825,7 +3028,8 @@
         "rankPointReward": 240,
         "characterExpReward": 850,
         "manaReward": 1020,
-        "poolExpReward": 850
+        "poolExpReward": 850,
+        "element": 2
     },
     "1035003": {
         "name": "",
@@ -2839,7 +3043,8 @@
         "rankPointReward": 399,
         "characterExpReward": 1415,
         "manaReward": 1290,
-        "poolExpReward": 1415
+        "poolExpReward": 1415,
+        "element": 2
     },
     "1035004": {
         "name": "",
@@ -2853,7 +3058,8 @@
         "rankPointReward": 468,
         "characterExpReward": 1620,
         "manaReward": 1560,
-        "poolExpReward": 1620
+        "poolExpReward": 1620,
+        "element": 2
     },
     "1037001": {
         "name": "",
@@ -2867,7 +3073,8 @@
         "rankPointReward": 42,
         "characterExpReward": 145,
         "manaReward": 450,
-        "poolExpReward": 145
+        "poolExpReward": 145,
+        "element": 1
     },
     "1037002": {
         "name": "",
@@ -2881,7 +3088,8 @@
         "rankPointReward": 240,
         "characterExpReward": 850,
         "manaReward": 1020,
-        "poolExpReward": 850
+        "poolExpReward": 850,
+        "element": 1
     },
     "1037003": {
         "name": "",
@@ -2895,7 +3103,8 @@
         "rankPointReward": 399,
         "characterExpReward": 1415,
         "manaReward": 1290,
-        "poolExpReward": 1415
+        "poolExpReward": 1415,
+        "element": 1
     },
     "1037004": {
         "name": "",
@@ -2909,7 +3118,8 @@
         "rankPointReward": 468,
         "characterExpReward": 1620,
         "manaReward": 1560,
-        "poolExpReward": 1620
+        "poolExpReward": 1620,
+        "element": 1
     },
     "1038001": {
         "name": "",
@@ -2923,7 +3133,8 @@
         "rankPointReward": 42,
         "characterExpReward": 145,
         "manaReward": 450,
-        "poolExpReward": 145
+        "poolExpReward": 145,
+        "element": 0
     },
     "1038002": {
         "name": "",
@@ -2937,7 +3148,8 @@
         "rankPointReward": 240,
         "characterExpReward": 850,
         "manaReward": 1020,
-        "poolExpReward": 850
+        "poolExpReward": 850,
+        "element": 0
     },
     "1038003": {
         "name": "",
@@ -2951,7 +3163,8 @@
         "rankPointReward": 399,
         "characterExpReward": 1415,
         "manaReward": 1290,
-        "poolExpReward": 1415
+        "poolExpReward": 1415,
+        "element": 0
     },
     "1038004": {
         "name": "",
@@ -2965,7 +3178,8 @@
         "rankPointReward": 468,
         "characterExpReward": 1620,
         "manaReward": 1560,
-        "poolExpReward": 1620
+        "poolExpReward": 1620,
+        "element": 0
     },
     "1038005": {
         "name": "",
@@ -2979,7 +3193,8 @@
         "rankPointReward": 702,
         "characterExpReward": 2430,
         "manaReward": 2340,
-        "poolExpReward": 2430
+        "poolExpReward": 2430,
+        "element": 0
     },
     "1039001": {
         "name": "",
@@ -2993,7 +3208,8 @@
         "rankPointReward": 42,
         "characterExpReward": 145,
         "manaReward": 450,
-        "poolExpReward": 145
+        "poolExpReward": 145,
+        "element": 5
     },
     "1039002": {
         "name": "",
@@ -3007,7 +3223,8 @@
         "rankPointReward": 240,
         "characterExpReward": 850,
         "manaReward": 1020,
-        "poolExpReward": 850
+        "poolExpReward": 850,
+        "element": 5
     },
     "1039003": {
         "name": "",
@@ -3021,7 +3238,8 @@
         "rankPointReward": 399,
         "characterExpReward": 1415,
         "manaReward": 1290,
-        "poolExpReward": 1415
+        "poolExpReward": 1415,
+        "element": 5
     },
     "1039004": {
         "name": "",
@@ -3035,7 +3253,8 @@
         "rankPointReward": 468,
         "characterExpReward": 1620,
         "manaReward": 1560,
-        "poolExpReward": 1620
+        "poolExpReward": 1620,
+        "element": 5
     },
     "1039005": {
         "name": "",
@@ -3049,7 +3268,8 @@
         "rankPointReward": 702,
         "characterExpReward": 2430,
         "manaReward": 2340,
-        "poolExpReward": 2430
+        "poolExpReward": 2430,
+        "element": 5
     },
     "1040001": {
         "name": "",
@@ -3063,7 +3283,8 @@
         "rankPointReward": 42,
         "characterExpReward": 145,
         "manaReward": 450,
-        "poolExpReward": 145
+        "poolExpReward": 145,
+        "element": 3
     },
     "1040002": {
         "name": "",
@@ -3077,7 +3298,8 @@
         "rankPointReward": 240,
         "characterExpReward": 850,
         "manaReward": 1020,
-        "poolExpReward": 850
+        "poolExpReward": 850,
+        "element": 3
     },
     "1040003": {
         "name": "",
@@ -3091,7 +3313,8 @@
         "rankPointReward": 399,
         "characterExpReward": 1415,
         "manaReward": 1290,
-        "poolExpReward": 1415
+        "poolExpReward": 1415,
+        "element": 3
     },
     "1040004": {
         "name": "",
@@ -3105,7 +3328,8 @@
         "rankPointReward": 468,
         "characterExpReward": 1620,
         "manaReward": 1560,
-        "poolExpReward": 1620
+        "poolExpReward": 1620,
+        "element": 3
     },
     "1040005": {
         "name": "",
@@ -3119,7 +3343,8 @@
         "rankPointReward": 702,
         "characterExpReward": 2430,
         "manaReward": 2340,
-        "poolExpReward": 2430
+        "poolExpReward": 2430,
+        "element": 3
     },
     "1041001": {
         "name": "",
@@ -3133,7 +3358,8 @@
         "rankPointReward": 42,
         "characterExpReward": 145,
         "manaReward": 450,
-        "poolExpReward": 145
+        "poolExpReward": 145,
+        "element": 4
     },
     "1041002": {
         "name": "",
@@ -3147,7 +3373,8 @@
         "rankPointReward": 240,
         "characterExpReward": 850,
         "manaReward": 1020,
-        "poolExpReward": 850
+        "poolExpReward": 850,
+        "element": 4
     },
     "1041003": {
         "name": "",
@@ -3161,7 +3388,8 @@
         "rankPointReward": 399,
         "characterExpReward": 1415,
         "manaReward": 1290,
-        "poolExpReward": 1415
+        "poolExpReward": 1415,
+        "element": 4
     },
     "1041004": {
         "name": "",
@@ -3175,7 +3403,8 @@
         "rankPointReward": 468,
         "characterExpReward": 1620,
         "manaReward": 1560,
-        "poolExpReward": 1620
+        "poolExpReward": 1620,
+        "element": 4
     },
     "1041005": {
         "name": "",
@@ -3189,7 +3418,8 @@
         "rankPointReward": 702,
         "characterExpReward": 2430,
         "manaReward": 2340,
-        "poolExpReward": 2430
+        "poolExpReward": 2430,
+        "element": 4
     },
     "1071001": {
         "name": "",
@@ -3203,7 +3433,8 @@
         "rankPointReward": 42,
         "characterExpReward": 145,
         "manaReward": 450,
-        "poolExpReward": 145
+        "poolExpReward": 145,
+        "element": 1
     },
     "1071002": {
         "name": "",
@@ -3217,7 +3448,8 @@
         "rankPointReward": 240,
         "characterExpReward": 850,
         "manaReward": 1020,
-        "poolExpReward": 850
+        "poolExpReward": 850,
+        "element": 1
     },
     "1071003": {
         "name": "",
@@ -3231,7 +3463,8 @@
         "rankPointReward": 399,
         "characterExpReward": 1415,
         "manaReward": 1290,
-        "poolExpReward": 1415
+        "poolExpReward": 1415,
+        "element": 1
     },
     "1071004": {
         "name": "",
@@ -3245,6 +3478,7 @@
         "rankPointReward": 468,
         "characterExpReward": 1620,
         "manaReward": 1560,
-        "poolExpReward": 1620
+        "poolExpReward": 1620,
+        "element": 1
     }
 }

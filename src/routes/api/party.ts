@@ -1,8 +1,20 @@
 import { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import { getPlayerSync, getSession, playerOwnsCharacterSync, playerOwnsEquipmentSync, updatePlayerPartySync, updatePlayerSync } from "../../data/wdfpData";
-import { generateDataHeaders } from "../../utils";
+import { getPlayerSync, updatePlayerSync } from "../../data/domains/player"
+import { getSession } from "../../data/domains/session"
+import { playerOwnsCharacterSync } from "../../data/domains/character"
+import { getPlayerEquipmentListSync } from "../../data/domains/equipment"
+import { getPlayerItemsSync } from "../../data/domains/item"
+import { getPlayerPartyLoadoutSync, updatePlayerPartySync } from "../../data/domains/party"
+import { getDb } from "../../data/db"
+import { incrementActiveMissionPartyActionCountsSync } from "../../data/domains/active_mission_counters"
+import { generateDataHeaders, getServerTime } from "../../utils";
 import { PartyCategory } from "../../data/types";
 import { resolvePlayerIdSync } from "../../data/activeAccount";
+import { hasValidPartyCategory, isGlobalPartyIdAllowedForCategory, parseGlobalPartyId } from "../../lib/special-event-parties";
+import { getMailArrivedSync } from "../../lib/mail-notification";
+import { recordRaidSetEditMissionFactsSync } from "../../lib/mission/event-entry-facts";
+import { validatePartyLoadouts } from "../../lib/party-loadout-validation";
+import { recordAbilitySoulEquipFactsSync } from "../../lib/mission/degree-operation-facts";
 
 interface PartyInfoListItem {
     party_edited: boolean
@@ -414,6 +426,18 @@ const routes = async (fastify: FastifyInstance) => {
             "error": "Bad Request",
             "message": "Invalid request body."
         })
+        if (!Array.isArray(body.party_info_list)
+            || body.party_info_list.some(info => !hasValidPartyCategory(info)
+                || parseGlobalPartyId((info as PartyInfoListItem).party_id) === null
+                || !isGlobalPartyIdAllowedForCategory(
+                    (info as PartyInfoListItem).party_category as PartyCategory,
+                    (info as PartyInfoListItem).party_id,
+                ))) {
+            return reply.status(400).send({
+                "error": "Bad Request",
+                "message": "Invalid party category or party ID."
+            })
+        }
 
         const viewerIdSession = await getSession(viewerId.toString())
         if (!viewerIdSession) return reply.status(400).send({
@@ -430,24 +454,8 @@ const routes = async (fastify: FastifyInstance) => {
             "message": "No players bound to account."
         })
 
-        // parse global PartyId: (groupIndex * 10 + slot), groupIndex 0-based
-        const parsePartyId = (partyId: number) => {
-            const gIdx = Math.floor((partyId - 1) / 10)
-            const s = ((partyId - 1) % 10) + 1
-            return { groupIndex: gIdx, groupId: gIdx + 1, slot: s }
-        }
-
-        // store full global PartyId so /load returns the correct group+slot combo
-        if (player.partySlot !== body.main_party_id) {
-            updatePlayerSync({
-                id: playerId,
-                partySlot: body.main_party_id
-            })
-        }
-
         // update each slot
         const characterOwnedMap: Record<number, boolean> = {}
-        const equipmentOwnedMap: Record<number, boolean> = {}
         const editCategories: number[] = []
         for (const updateInfo of body.party_info_list) {
             editCategories.push(updateInfo.party_category)
@@ -464,37 +472,88 @@ const routes = async (fastify: FastifyInstance) => {
             return isOwned ? characterId : null
         }
 
-        const mapOwnedEquipment = (equipmentId: number | null): number | null => {
-            let isOwned = equipmentId === null ? false : equipmentOwnedMap[equipmentId]
-            if (isOwned === undefined) {
-                isOwned = playerOwnsEquipmentSync(playerId, equipmentId as number)
-                equipmentOwnedMap[equipmentId as number] = isOwned
+        const existingLoadouts = body.party_info_list.map(updateInfo => {
+            const parsed = parseGlobalPartyId(updateInfo.party_id)!
+            const existing = getPlayerPartyLoadoutSync(
+                playerId,
+                parsed.groupId,
+                parsed.slot,
+                updateInfo.party_category as PartyCategory,
+            )
+            return {
+                equipment_ids: existing?.equipmentIds ?? [],
+                ability_soul_ids: existing?.abilitySoulIds ?? [],
             }
-            
-            return isOwned ? equipmentId : null
+        })
+        const loadoutValidation = validatePartyLoadouts(body.party_info_list, {
+            equipments: getPlayerEquipmentListSync(playerId),
+            items: getPlayerItemsSync(playerId),
+        }, existingLoadouts)
+        if (!loadoutValidation.ok) {
+            console.warn(
+                `[PARTY] edit rejected: viewer=${viewerId}`
+                + ` reason=${loadoutValidation.reason} id=${loadoutValidation.id}`,
+            )
+            return reply.status(400).send({
+                "error": "Bad Request",
+                "message": "Invalid party equipment or ability soul inventory.",
+            })
         }
 
-        for (const updateInfo of body.party_info_list) {
-                const parsed = parsePartyId(updateInfo.party_id)
+        const mappedParties = body.party_info_list.map(updateInfo => {
+            const parsed = parseGlobalPartyId(updateInfo.party_id)!
             console.log(`[PARTY] edit: player=${playerId} id=${updateInfo.party_id} -> group=${parsed.groupId} slot=${parsed.slot} name="${updateInfo.party_name}" chars=${updateInfo.character_ids?.filter(Boolean).length || 0}`)
-            updatePlayerPartySync(
-                playerId,
-                parsed.slot,
-                {
+            return {
+                parsed,
+                party: {
                     name: updateInfo.party_name,
                     unisonCharacterIds: updateInfo.unison_character_ids.map(mapOwnedCharacters),
                     characterIds: updateInfo.character_ids.map(mapOwnedCharacters),
-                    equipmentIds: updateInfo.equipment_ids.map(mapOwnedEquipment), // TODO: Implement stack checking, to see if more equipment is being equipped than is owned.
+                    equipmentIds: [...updateInfo.equipment_ids],
                     abilitySoulIds: updateInfo.ability_soul_ids,
                     options: { allowOtherPlayersToHealMe: updateInfo.options.allow_other_players_to_heal_me },
                     edited: updateInfo.party_edited,
-                    category: updateInfo.party_category === 3 ? 4 : updateInfo.party_category,
+                    category: updateInfo.party_category as PartyCategory,
                     currentBattlePower: updateInfo.current_battle_power ?? 0,
-                    beforeBattlePower: updateInfo.before_battle_power ?? 0
+                    beforeBattlePower: updateInfo.before_battle_power ?? 0,
                 },
-                parsed.groupId
+            }
+        })
+
+        getDb().transaction(() => {
+            // store full global PartyId so /load returns the correct group+slot combo
+            if (player.partySlot !== body.main_party_id) {
+                updatePlayerSync({
+                    id: playerId,
+                    partySlot: body.main_party_id,
+                })
+            }
+            for (const { parsed, party } of mappedParties) {
+                updatePlayerPartySync(playerId, parsed.slot, party, parsed.groupId)
+            }
+            recordAbilitySoulEquipFactsSync(
+                playerId,
+                existingLoadouts.map(loadout => ({
+                    abilitySoulIds: loadout.ability_soul_ids,
+                })),
+                mappedParties.map(({ party }) => ({ abilitySoulIds: party.abilitySoulIds })),
             )
-        }
+            incrementActiveMissionPartyActionCountsSync(playerId, {
+                equipmentEquipCount: mappedParties.some(({ party }) => party.equipmentIds.some(id => id !== null)) ? 1 : 0,
+                unisonSetCount: mappedParties.some(({ party }) => party.unisonCharacterIds.some(id => id !== null)) ? 1 : 0,
+                partyCharacterSetCount: mappedParties.some(({ party }) => party.characterIds.some(id => id !== null)) ? 1 : 0,
+            })
+            recordRaidSetEditMissionFactsSync(
+                playerId,
+                body.use_party_group_edit,
+                mappedParties.map(({ parsed, party }) => ({
+                    category: party.category,
+                    groupId: parsed.groupId,
+                    slot: parsed.slot,
+                })),
+                new Date(getServerTime() * 1000),
+            )
+        })()
 
         reply.header("content-type", "application/x-msgpack")
         return reply.status(200).send({
@@ -502,7 +561,7 @@ const routes = async (fastify: FastifyInstance) => {
                 viewer_id: viewerId
             }),
             "data": {
-                "mail_arrived": false
+                "mail_arrived": getMailArrivedSync(playerId)
             }
         })
     })

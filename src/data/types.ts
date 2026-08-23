@@ -135,6 +135,7 @@ export interface PlayerCharacter {
 
 export interface RawPlayerCharacterManaNode {
     value: number,
+    awake_level: number,
     character_id: number
 }
 
@@ -142,9 +143,10 @@ export interface RawPlayerCharacterManaNode {
 export enum PartyCategory {
     EMPTY,
     NORMAL,
-    EMPTY2,
-    EMPTY3,
-    EVENT
+    CARNIVAL,
+    RAID,
+    RUSH,
+    EVENT = RUSH
 }
 
 export interface RawPlayerPartyOptions {
@@ -225,6 +227,9 @@ export interface RawPlayerQuestProgress {
     high_score?: number
     clear_rank?: number
     best_elapsed_time_ms?: number
+    leader_character_id?: number
+    multi_clear_count?: number
+    host_finished?: number | null
 }
 
 export interface PlayerQuestProgress {
@@ -233,7 +238,10 @@ export interface PlayerQuestProgress {
     highScore?: number
     clearRank?: number
     bestElapsedTimeMs?: number
+    leaderCharacterId?: number
+    multiClearCount?: number
     unlocked?: boolean
+    hostFinished?: boolean
 }
 
 export interface RawPlayerGachaInfo {
@@ -479,6 +487,12 @@ export interface RawPlayer {
     free_mana: number
     paid_mana: number
     enable_auto_3x: number
+    total_stamina_used: number
+    total_powerflips: number
+    total_dashes: number
+    total_mana_obtained: number
+    max_combo_achieved: number
+    total_login_days: number
     tutorial_step: number | null
     tutorial_skip_flag: number | null
     tutorial_gacha_character_id: number | null
@@ -510,6 +524,12 @@ export interface Player {
     freeMana: number
     paidMana: number
     enableAuto3x: boolean
+    totalStaminaUsed: number
+    totalPowerflips: number
+    totalDashes: number
+    totalManaObtained: number
+    maxComboAchieved: number
+    totalLoginDays: number
     tutorialStep: number | null
     tutorialSkipFlag: boolean | null
     tutorialGachaCharacterId: number | null
@@ -583,6 +603,7 @@ export interface UserCharacter {
     stack: number
     bond_token_list: UserCharacterBondTokenStatus[]
     mana_board_index: number
+    mana_board_awake?: Record<number, number>
     ex_boost?: UserCharacterExBoost
     illustration_settings?: number[]
 }
@@ -623,6 +644,7 @@ export interface UserQuestProgress {
     high_score?: number
     best_elapsed_time_ms?: number
     clear_rank?: number
+    host_finished?: boolean
 }
 
 export interface UserGachaInfo {
@@ -696,7 +718,7 @@ export interface ClientPlayerData {
     mail_arrived: boolean
     user_periodic_reward_point_list: PlayerPeriodicRewardPoint[]
     all_active_mission_list: Record<string, PlayerActiveMission>
-    cleared_collect_item_event_mission_list: unknown[]
+    cleared_collect_item_event_mission_list: Record<string, number>
     box_gacha_list: Record<string, UserBoxGacha[]>
     gacha_campaign_list: UserGachaCampaign[]
     purchased_times_list: Object
@@ -717,6 +739,9 @@ export interface MergedPlayerData {
     clearedRegularMissionList: Record<string, number>,
     characterList: Record<string, PlayerCharacter>,
     characterManaNodeList: Record<string, number[]>,
+    characterManaNodeAwakeLevels?: Record<string, Record<number, number>>,
+    characterAwakeUnlocks?: Record<string, Record<number, number>>,
+    manaBoardAwakeMap?: Map<string, Record<number, number>>,
     partyGroupList: Record<string, PlayerPartyGroup>,
     itemList: Record<string, number>,
     equipmentList: Record<string, PlayerEquipment>,
@@ -726,6 +751,7 @@ export interface MergedPlayerData {
     drawnQuestList: PlayerDrawnQuest[],
     periodicRewardPointList: PlayerPeriodicRewardPoint[],
     allActiveMissionList: Record<string, PlayerActiveMission>,
+    categoryMissionList?: Record<string, Record<string, PlayerActiveMission>>,
     boxGachaList: Record<string, PlayerBoxGacha[]>,
     purchasedTimesList: Record<string, number>,
     startDashExchangeCampaignList: PlayerStartDashExchangeCampaign[],
@@ -734,7 +760,10 @@ export interface MergedPlayerData {
     // rush event data
     rushEventList?: PlayerRushEvent[],
     rushEventClearedFolderList?: Record<string, PlayerRushEventClearedFolders>,
-    rushEventPlayedPartyList?: Record<string, PlayerRushEventPlayedParty[]>
+    rushEventPlayedPartyList?: Record<string, PlayerRushEventPlayedParty[]>,
+    carnivalEventRecords?: PlayerCarnivalEventRecord[],
+    carnivalRewardClaims?: PlayerCarnivalRewardClaim[],
+    degreeIds?: number[]
 }
 
 export interface RawPlayerCarnivalEventRecord {
@@ -756,6 +785,11 @@ export interface PlayerCarnivalEventRecord {
     previousUnisonCharacterIds: (number | null)[] | null
 }
 
+export interface PlayerCarnivalRewardClaim {
+    eventId: number
+    rewardId: number
+}
+
 // Active quest (unfinished battle recovery)
 export interface RawPlayerActiveQuest {
     player_id: number
@@ -766,8 +800,11 @@ export interface RawPlayerActiveQuest {
     use_boost_point: number
     is_auto_start_mode: number
     is_multi: number
+    coordinator_origin: "remote" | "local" | null
     room_number: string | null
+    battle_session_id: string | null
     entry_item_id: number | null
+    entry_item_count: number | null
     event_id: number | null
     continue_count: number
 }
@@ -781,8 +818,11 @@ export interface PlayerActiveQuest {
     useBoostPoint: boolean
     isAutoStartMode: boolean
     isMulti: boolean
+    coordinatorOrigin: "remote" | "local" | null
     roomNumber: string | null
+    battleSessionId: string | null
     entryItemId: number | null
+    entryItemCount: number | null
     eventId: number | null
     continueCount: number
 }

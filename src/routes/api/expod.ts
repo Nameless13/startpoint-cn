@@ -1,13 +1,21 @@
 // Handles the insertion of mana into characters.
 
 import { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import { getAccountPlayers, getPlayerCharacterSync, getPlayerCharactersSync, getPlayerItemsSync, getPlayerSync, getSession, givePlayerItemSync, updatePlayerCharacterSync, updatePlayerSync } from "../../data/wdfpData";
+import { getAccountPlayers } from "../../data/domains/account"
+import { getPlayerCharacterSync, getPlayerCharactersSync, updatePlayerCharacterSync } from "../../data/domains/character"
+import { getPlayerItemsSync, givePlayerItemSync } from "../../data/domains/item"
+import { getPlayerSync, updatePlayerSync } from "../../data/domains/player"
+import { getSession } from "../../data/domains/session"
 import { characterMaxOverLimits } from "./character";
 import { givePlayerCharactersExpSync } from "../../lib/character";
 import { generateDataHeaders, getServerTime } from "../../utils";
 import { getCharacterDataSync } from "../../lib/assets";
 import { clientSerializeDate } from "../../data/utils";
 import { resolvePlayerIdSync } from "../../data/activeAccount";
+import { getDb } from "../../data/db";
+import { incrementActiveMissionInjectedExpCountSync } from "../../data/domains/active_mission_counters"
+import { validateCharacterStackConversion } from "../../lib/character-stack";
+import { getMailArrivedSync } from "../../lib/mail-notification";
 
 interface InjectExpBody {
     character_id: number,
@@ -26,6 +34,11 @@ interface StackToExpBody {
 interface BulkStackToExpBody {
     viewer_id: number
     api_count: number
+}
+
+interface BulkStackConversionPlan {
+    characterId: number
+    character: ReturnType<typeof getPlayerCharacterSync> & {}
 }
 
 const rarityStackConvertItemCount: Record<number, number> = {
@@ -52,7 +65,7 @@ const routes = async (fastify: FastifyInstance) => {
         const viewerId = body.viewer_id
         const characterId = body.character_id
         const convertCount = body.number
-        if (isNaN(viewerId) || isNaN(characterId) || isNaN(convertCount)) return reply.status(400).send({
+        if (isNaN(viewerId) || isNaN(characterId)) return reply.status(400).send({
             "error": "Bad Request",
             "message": "Invalid request body."
         })
@@ -85,12 +98,17 @@ const routes = async (fastify: FastifyInstance) => {
             "error": "Bad Request",
             "message": "Player does not own character."
         })
+
+        const validationError = validateCharacterStackConversion(character.stack, convertCount, character.protection)
+        if (validationError) {
+            console.warn(`[EXPOD] stack_to_exp rejected viewer=${viewerId} char=${characterId} count=${convertCount} reason=${validationError}`)
+            return reply.status(400).send({
+                "error": "Bad Request",
+                "message": validationError
+            })
+        }
         
         const afterStack = character.stack - convertCount
-        if (0 > afterStack) return reply.status(400).send({
-            "error": "Bad Request",
-            "message": "Not enough stack."
-        })
 
         // get amounts to add
         const rarity = characterAssetData.rarity
@@ -99,14 +117,16 @@ const routes = async (fastify: FastifyInstance) => {
 
         const afterExp = player.expPool + increaseExp
 
-        // update player
-        updatePlayerSync({
-            id: playerId,
-            expPool: afterExp
-        })
-
-        // add item
-        const afterItemCount = givePlayerItemSync(playerId, rewardItemId, increaseItemCount)
+        let afterItemCount = 0
+        getDb().transaction(() => {
+            updatePlayerCharacterSync(playerId, characterId, { stack: afterStack })
+            updatePlayerSync({
+                id: playerId,
+                expPool: afterExp
+            })
+            afterItemCount = givePlayerItemSync(playerId, rewardItemId, increaseItemCount)
+        })()
+        console.log(`[EXPOD] stack_to_exp viewer=${viewerId} char=${characterId} count=${convertCount} stack=${character.stack}->${afterStack}`)
 
         reply.header("content-type", "application/x-msgpack")
         return reply.status(200).send({
@@ -126,7 +146,7 @@ const routes = async (fastify: FastifyInstance) => {
                         "exp": character.exp,
                         "exp_total": character.exp,
                         "create_time": clientSerializeDate(character.joinTime),
-                        "update_time": clientSerializeDate(character.updateTime),
+                        "update_time": clientSerializeDate(new Date()),
                         "join_time": clientSerializeDate(character.joinTime)
                     }
                 ],
@@ -136,7 +156,7 @@ const routes = async (fastify: FastifyInstance) => {
                 "item_list": {
                     [rewardItemId]: afterItemCount
                 },
-                "mail_arrived": false
+                "mail_arrived": getMailArrivedSync(playerId)
             }
         })
     })
@@ -164,10 +184,9 @@ const routes = async (fastify: FastifyInstance) => {
         })
 
         const allCharacters = getPlayerCharactersSync(playerId)
-        const modifiedCharacters: Object[] = []
+        const conversionPlan: BulkStackConversionPlan[] = []
         let totalExp = 0
         let totalStarGrains = 0
-        let processedCount = 0
 
         for (const [characterIdStr, character] of Object.entries(allCharacters)) {
             const characterId = parseInt(characterIdStr)
@@ -186,25 +205,10 @@ const routes = async (fastify: FastifyInstance) => {
 
             totalExp += addExp
             totalStarGrains += addStarGrain
-
-            updatePlayerCharacterSync(playerId, characterId, { stack: 0 })
-            character.stack = 0
-
-            modifiedCharacters.push({
-                "viewer_id": viewerId,
-                "character_id": characterId,
-                "stack": 0,
-                "over_limit_step": character.overLimitStep,
-                "exp": character.exp,
-                "exp_total": character.exp,
-                "create_time": clientSerializeDate(character.joinTime),
-                "update_time": clientSerializeDate(character.updateTime),
-                "join_time": clientSerializeDate(character.joinTime)
-            })
-            processedCount++
+            conversionPlan.push({ characterId, character })
         }
 
-        if (processedCount === 0) {
+        if (conversionPlan.length === 0) {
             reply.header("content-type", "application/x-msgpack")
             return reply.status(200).send({
                 "data_headers": generateDataHeaders({ viewer_id: viewerId }),
@@ -216,25 +220,40 @@ const routes = async (fastify: FastifyInstance) => {
                         "exp_pool": player.expPool,
                         "exp_pooled_time": getServerTime(player.expPooledTime)
                     },
-                    "mail_arrived": false
+                    "mail_arrived": getMailArrivedSync(playerId)
                 }
             })
         }
 
         const newExpPool = player.expPool + totalExp
-        updatePlayerSync({ id: playerId, expPool: newExpPool })
+        const newStarGrainTotal = getDb().transaction((): number => {
+            for (const entry of conversionPlan) {
+                updatePlayerCharacterSync(playerId, entry.characterId, { stack: 0 })
+            }
+            updatePlayerSync({ id: playerId, expPool: newExpPool })
+            return totalStarGrains > 0
+                ? givePlayerItemSync(playerId, rewardItemId, totalStarGrains)
+                : 0
+        })()
 
-        let newStarGrainTotal = 0
-        if (totalStarGrains > 0) {
-            newStarGrainTotal = givePlayerItemSync(playerId, rewardItemId, totalStarGrains)
-        }
+        const modifiedCharacters: Object[] = conversionPlan.map(({ characterId, character }) => ({
+            "viewer_id": viewerId,
+            "character_id": characterId,
+            "stack": 0,
+            "over_limit_step": character.overLimitStep,
+            "exp": character.exp,
+            "exp_total": character.exp,
+            "create_time": clientSerializeDate(character.joinTime),
+            "update_time": clientSerializeDate(character.updateTime),
+            "join_time": clientSerializeDate(character.joinTime)
+        }))
 
         const items = getPlayerItemsSync(playerId)
         if (totalStarGrains > 0) {
             items[String(rewardItemId)] = newStarGrainTotal
         }
 
-        console.log(`[BULK_STACK_EXP] player ${playerId}: ${processedCount} characters converted, exp +${totalExp}, starGrain +${totalStarGrains}, expPool ${player.expPool}→${newExpPool}`)
+        console.log(`[BULK_STACK_EXP] player ${playerId}: ${conversionPlan.length} characters converted, exp +${totalExp}, starGrain +${totalStarGrains}, expPool ${player.expPool}→${newExpPool}`)
 
         reply.header("content-type", "application/x-msgpack")
         return reply.status(200).send({
@@ -247,7 +266,7 @@ const routes = async (fastify: FastifyInstance) => {
                     "exp_pool": newExpPool,
                     "exp_pooled_time": getServerTime(player.expPooledTime)
                 },
-                "mail_arrived": false
+                "mail_arrived": getMailArrivedSync(playerId)
             }
         })
     })
@@ -285,7 +304,13 @@ const routes = async (fastify: FastifyInstance) => {
         })
 
         // make sure that the player has enough exp
-        const addExp = Math.abs(body.exp)
+        // The client sends a positive integer amount. Do not use Math.abs here:
+        // accepting a negative amount would turn an invalid request into a spend.
+        const addExp = body.exp
+        if (typeof addExp !== "number" || !Number.isSafeInteger(addExp) || addExp <= 0) return reply.status(400).send({
+            "error": "Bad Request",
+            "message": "Invalid exp amount."
+        })
         const playerExpPool = player.expPool
         if (addExp > playerExpPool) return reply.status(400).send({
             "error": "Internal Server Error",
@@ -294,14 +319,16 @@ const routes = async (fastify: FastifyInstance) => {
         
         const playerAfterExpPool = player.expPool - addExp
 
-        // decrease player exp
-        updatePlayerSync({
-            id: playerId,
-            expPool: playerAfterExpPool
-        })
-
-        // add exp to the character
-        const rewardResult = givePlayerCharactersExpSync(playerId, [characterId], addExp, false)
+        const rewardResult = getDb().transaction(() => {
+            // 经验池扣除、角色经验写入和首次注入动作计数必须原子提交。
+            updatePlayerSync({
+                id: playerId,
+                expPool: playerAfterExpPool,
+            })
+            const result = givePlayerCharactersExpSync(playerId, [characterId], addExp, false)
+            incrementActiveMissionInjectedExpCountSync(playerId)
+            return result
+        })()
 
         reply.header("content-type", "application/x-msgpack")
         return reply.status(200).send({
@@ -315,6 +342,7 @@ const routes = async (fastify: FastifyInstance) => {
                     "exp_pool": rewardResult.exp_pool,
                     "exp_pooled_time": getServerTime(player.expPooledTime)
                 },
+                "mail_arrived": getMailArrivedSync(playerId)
             }
         })
     })

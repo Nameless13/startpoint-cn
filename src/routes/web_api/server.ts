@@ -1,32 +1,151 @@
 import { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import { getServerTime, getServerDate, setServerTime, getTimeOffset } from "../../utils";
-import { getAllAccountsSync, getAccountPlayersSync, getPlayerSync, getPlayerCharactersSync, deletePlayerSync, deleteAccountSync, updatePlayerSync, insertDefaultPlayerSync, replacePlayerDataSync } from "../../data/wdfpData";
-import { getClientSerializedData, deserializePlayerData } from "../../data/utils";
-import { getActivePlayerId, setActivePlayerId, getSelectedAccountId, setSelectedAccountId, saveTimeOffset, saveAccountDefaultPlayer } from "../../data/activeAccount";
+import { getServerDate } from "../../utils";
+import { ServerTimeService, ServerTimeServiceError } from "../../runtime/server-time/service";
+import { validateServerTimePackage } from "../../runtime/server-time/store";
+import type { ServerTimePackage, ServerTimeSnapshot } from "../../runtime/server-time/types";
+import { deleteAccountSync, getAccountPlayersSync, getAllAccountsSync } from "../../data/domains/account"
+import { deletePlayerSync, getPlayerSync, insertDefaultPlayerSync, updatePlayerSync } from "../../data/domains/player"
+import { getAllDeviceBindingsSync, updateDeviceBindingNameSync } from "../../data/domains/session"
+import { getPlayerCharactersSync } from "../../data/domains/character"
+import { getActivePlayerId, setActivePlayerId, saveAccountDefaultPlayer, getAccountDefaultPlayer } from "../../data/activeAccount";
+import { saveDefaultSaveTemplate, loadDefaultSaveTemplate, clearDefaultSaveTemplate, getDefaultSaveMeta } from "../../data/defaultSave";
+import { getEffectiveVersion } from "../../lib/version";
+import { buildShortUpCharacterGachaTimeline } from "../../lib/admin-clairvoyance";
+import { buildAdminContentStatus } from "../../lib/admin-content-status";
+import { getContentSnapshot } from "../../content/runtime/content-snapshot";
+import type { CnRuntimeConfig } from "../../runtime/config";
+import path from "node:path";
+import { wantsJson } from "./http";
+import {
+    buildAdminMultiStatus,
+    type AdminMultiStatus,
+} from "../../lib/admin-multi-status";
+import { unavailableMultiRuntimeStatus } from "../../multi/runtime/status";
+import {
+    applyPlayerSaveTemplateSync,
+    clonePlayerSaveV2Sync,
+    exportPlayerSaveV2Sync,
+    validatePlayerSaveTemplateSync,
+} from "../../data/player-save";
 
 interface TimeQuery {
     time: string | undefined
 }
 
-const routes = async (fastify: FastifyInstance) => {
+export interface ServerRoutesOptions {
+    readonly getMultiStatus?: () => Promise<AdminMultiStatus> | AdminMultiStatus
+    readonly serverTimeService?: ServerTimeService
+    readonly runtimeConfig?: Pick<CnRuntimeConfig, "http" | "httpDisplayHost" | "assetProvider">
+    readonly getRuntimeConfig?: () => Pick<CnRuntimeConfig, "http" | "httpDisplayHost" | "assetProvider"> | null
+}
 
-    fastify.get("/currentTime", async (_request: FastifyRequest, reply: FastifyReply) => {
-        const date = getServerDate()
+function httpTimePackage(snapshot: ServerTimeSnapshot): ServerTimePackage {
+    return {
+        mode: snapshot.mode,
+        offsetMs: snapshot.offsetMs,
+        generatedAt: snapshot.generatedAt,
+    }
+}
+
+function legacyTimeResponse(
+    snapshot: ServerTimeSnapshot,
+    isCustom: boolean = snapshot.mode === "offset",
+) {
+    return {
+        servertime: Math.floor(snapshot.serverTimeMs / 1000),
+        date: new Date(snapshot.serverTimeMs).toISOString(),
+        isCustom,
+    }
+}
+
+const routes = async (fastify: FastifyInstance, options: ServerRoutesOptions) => {
+    const serverTimeService = options.serverTimeService ?? new ServerTimeService()
+    const fallbackRuntimeConfig: Pick<CnRuntimeConfig, "http" | "httpDisplayHost" | "assetProvider"> = {
+        http: { host: "127.0.0.1", port: 8001 },
+        httpDisplayHost: "127.0.0.1",
+        assetProvider: { mode: "client-owned" },
+    }
+
+    fastify.get("/status", async (_request: FastifyRequest, reply: FastifyReply) => {
+        const runtimeConfig = options.runtimeConfig
+            ?? options.getRuntimeConfig?.()
+            ?? fallbackRuntimeConfig
+        const configuredCdnDir = runtimeConfig.assetProvider.mode === "local"
+            ? path.dirname(runtimeConfig.assetProvider.cdnRoot)
+            : ".cdn"
+        const cdnStatus = buildAdminContentStatus({
+            snapshot: getContentSnapshot(),
+            assetProvider: runtimeConfig.assetProvider,
+            configuredCdnDir,
+        })
+        let multiplayer: AdminMultiStatus
+        try {
+            multiplayer = options.getMultiStatus
+                ? await options.getMultiStatus()
+                : buildAdminMultiStatus({
+                    runtime: unavailableMultiRuntimeStatus(),
+                    authority: null,
+                    latestCompatibilityRejection: null,
+                })
+        } catch {
+            multiplayer = buildAdminMultiStatus({
+                runtime: unavailableMultiRuntimeStatus(),
+                authority: null,
+                latestCompatibilityRejection: null,
+            })
+        }
+
         reply.status(200).send({
-            servertime: getServerTime(),
-            date: date.toISOString(),
-            isCustom: date.getTime() !== Date.now()
+            server: {
+                uptimeSeconds: Math.floor(process.uptime()),
+                nodeVersion: process.version,
+                platform: `${process.platform}/${process.arch}`,
+                pid: process.pid,
+                memory: process.memoryUsage(),
+                listenHost: runtimeConfig.http.host,
+                listenPort: String(runtimeConfig.http.port),
+            },
+            cdn: cdnStatus,
+            multiplayer,
         })
     })
 
-    fastify.get("/resetTime", async (_request: FastifyRequest, reply: FastifyReply) => {
-        setServerTime(null)
-        saveTimeOffset(null)
-        reply.status(200).send({
-            servertime: getServerTime(),
-            date: getServerDate().toISOString(),
-            isCustom: false
-        })
+    fastify.get("/currentTime", async (_request: FastifyRequest, reply: FastifyReply) => {
+        reply.status(200).send(legacyTimeResponse(serverTimeService.getState()))
+    })
+
+    fastify.get("/time-package", async (_request: FastifyRequest, reply: FastifyReply) => {
+        return reply.status(200).send(httpTimePackage(serverTimeService.exportPackage()))
+    })
+
+    fastify.put("/time-package", async (request: FastifyRequest, reply: FastifyReply) => {
+        try {
+            validateServerTimePackage(request.body)
+        } catch (error) {
+            return reply.status(400).send({
+                error: "Bad Request",
+                message: error instanceof Error ? error.message : "INVALID_SERVER_TIME_STATE",
+            })
+        }
+
+        try {
+            return reply.status(200).send(serverTimeService.importPackage(request.body))
+        } catch (error) {
+            if (error instanceof ServerTimeServiceError) {
+                return reply.status(400).send({ error: "Bad Request", message: error.message })
+            }
+            return reply.status(500).send({
+                error: "Internal Server Error",
+                message: error instanceof Error ? error.message : "Unknown error",
+            })
+        }
+    })
+
+    fastify.get("/resetTime", async (request: FastifyRequest, reply: FastifyReply) => {
+        reply.status(200).send(legacyTimeResponse(
+            serverTimeService.setSystemTime(),
+            false,
+        ))
     })
 
     fastify.get("/time", async (request: FastifyRequest, reply: FastifyReply) => {
@@ -51,13 +170,10 @@ const routes = async (fastify: FastifyInstance) => {
                     "message": `Invalid time format: "${newTime}". Use ISO format.`
                 })
             }
-            setServerTime(time)
-            saveTimeOffset(getTimeOffset())
-            reply.status(200).send({
-                servertime: getServerTime(),
-                date: getServerDate().toISOString(),
-                isCustom: true
-            })
+            reply.status(200).send(legacyTimeResponse(
+                serverTimeService.setAbsoluteTime(time.getTime()),
+                true,
+            ))
         } catch (error: any) {
             return reply.status(500).send({
                 "error": "Internal Server Error",
@@ -66,24 +182,100 @@ const routes = async (fastify: FastifyInstance) => {
         }
     })
 
-    // === Account & Save management (device-binding based) ===
-
-    // Select account to view saves
-    fastify.post("/selectAccount", async (request: FastifyRequest, reply: FastifyReply) => {
-        const { accountId } = (request.query || {}) as any
-        const aid = parseInt(accountId)
-        if (isNaN(aid)) return reply.redirect('/player')
-        setSelectedAccountId(aid)
-        return reply.redirect('/player')
+    fastify.get("/clairvoyance/gacha", async (_request: FastifyRequest, reply: FastifyReply) => {
+        return reply.status(200).send({
+            cdnVersion: getEffectiveVersion(),
+            baseline: "fixed-cn-final",
+            ...buildShortUpCharacterGachaTimeline(getServerDate()),
+        })
     })
+
+    // === Account list (JSON, for admin SPA) ===
+
+    fastify.get("/accounts", async (_request: FastifyRequest, reply: FastifyReply) => {
+        const accounts = getAllAccountsSync()
+        const activePlayerId = getActivePlayerId()
+        const devicesByAccount = new Map<number, Array<{ deviceId: number; name: string | null }>>()
+        for (const binding of getAllDeviceBindingsSync()) {
+            const devices = devicesByAccount.get(binding.account_id) ?? []
+            devices.push({ deviceId: binding.device_id, name: binding.name })
+            devicesByAccount.set(binding.account_id, devices)
+        }
+        const result = accounts.map(acc => {
+            const playerIds = getAccountPlayersSync(acc.id)
+            const savedDefaultPid = getAccountDefaultPlayer(acc.id)
+            const defaultPid = savedDefaultPid && playerIds.includes(savedDefaultPid)
+                ? savedDefaultPid
+                : (playerIds[0] ?? null)
+            const defaultPlayer = defaultPid ? getPlayerSync(defaultPid) : null
+            return {
+                id: acc.id,
+                saveCount: playerIds.length,
+                defaultPlayerId: defaultPid,
+                defaultPlayerName: defaultPlayer?.name ?? null,
+                activePlayerId,
+                devices: devicesByAccount.get(acc.id) ?? [],
+                players: playerIds.map(pid => {
+                    const player = getPlayerSync(pid)
+                    return {
+                        id: pid,
+                        accountId: acc.id,
+                        name: player?.name ?? `存档 #${pid}`,
+                        degreeId: player?.degreeId ?? 0,
+                        isDefault: defaultPid === pid,
+                        isActive: activePlayerId === pid,
+                    }
+                }),
+                playerIds
+            }
+        })
+        return reply.send(result)
+    })
+
+    // === Default save template (admin-uploaded, applied when a new save is created) ===
+
+    // 查询当前默认存档模板信息
+    fastify.get("/defaultSave", async (_request: FastifyRequest, reply: FastifyReply) => {
+        return reply.send(getDefaultSaveMeta())
+    })
+
+    // 上传默认存档模板（multipart，快照格式同 GET /api/player/save 导出）
+    fastify.post("/defaultSave", async (request: FastifyRequest, reply: FastifyReply) => {
+        try {
+            const file = await (request as any).file()
+            if (!file) return reply.status(400).send({ error: "未选择文件" })
+            const text = (await file.toBuffer()).toString("utf-8")
+            let parsed: any
+            try { parsed = JSON.parse(text) } catch { return reply.status(400).send({ error: "文件不是有效的 JSON" }) }
+            try {
+                validatePlayerSaveTemplateSync(parsed)
+            } catch (error: any) {
+                return reply.status(400).send({ error: `存档校验失败：${error?.message ?? error}` })
+            }
+            saveDefaultSaveTemplate(parsed)
+            return reply.send({ ok: true, ...getDefaultSaveMeta() })
+        } catch (e: any) {
+            return reply.status(500).send({ error: e?.message ?? "上传失败" })
+        }
+    })
+
+    // 清除默认存档模板
+    fastify.delete("/defaultSave", async (_request: FastifyRequest, reply: FastifyReply) => {
+        const removed = clearDefaultSaveTemplate()
+        return reply.send({ ok: true, removed })
+    })
+
+    // === Account & Save management (device-binding based) ===
 
     // Switch active save
     fastify.post("/activateSave", async (request: FastifyRequest, reply: FastifyReply) => {
         const { playerId } = (request.query || {}) as any
         const pid = parseInt(playerId)
-        if (isNaN(pid)) return reply.redirect('/player')
+        if (isNaN(pid)) {
+            if (wantsJson(request)) return reply.status(400).send({ error: "Invalid playerId" })
+            return reply.redirect('/player')
+        }
         setActivePlayerId(pid)
-        // Also persist as this account's default player
         const allAccounts = getAllAccountsSync()
         for (const a of allAccounts) {
             if (getAccountPlayersSync(a.id).includes(pid)) {
@@ -91,6 +283,7 @@ const routes = async (fastify: FastifyInstance) => {
                 break
             }
         }
+        if (wantsJson(request)) return reply.send({ ok: true, playerId: pid })
         return reply.redirect('/player')
     })
 
@@ -98,10 +291,23 @@ const routes = async (fastify: FastifyInstance) => {
     fastify.post("/newSave", async (request: FastifyRequest, reply: FastifyReply) => {
         const { accountId: aid } = (request.query || {}) as any
         const accId = parseInt(aid)
-        if (isNaN(accId)) return reply.redirect('/player')
+        if (isNaN(accId)) {
+            if (wantsJson(request)) return reply.status(400).send({ error: "Invalid accountId" })
+            return reply.redirect('/player')
+        }
         const player = insertDefaultPlayerSync(accId)
+        // 若管理员配置了默认存档模板，用它替换新建的空存档
+        let appliedTemplate = false
+        try {
+            const template = loadDefaultSaveTemplate()
+            if (template) {
+                applyPlayerSaveTemplateSync(template, player.id)
+                appliedTemplate = true
+            }
+        } catch (_) { /* 模板损坏则退回空存档 */ }
         setActivePlayerId(player.id)
         saveAccountDefaultPlayer(accId, player.id)
+        if (wantsJson(request)) return reply.send({ ok: true, playerId: player.id, appliedTemplate })
         return reply.redirect('/player')
     })
 
@@ -109,22 +315,22 @@ const routes = async (fastify: FastifyInstance) => {
     fastify.post("/deleteSave", async (request: FastifyRequest, reply: FastifyReply) => {
         const { playerId } = (request.query || {}) as any
         const pid = parseInt(playerId)
-        if (isNaN(pid)) return reply.redirect('/player')
+        if (isNaN(pid)) {
+            if (wantsJson(request)) return reply.status(400).send({ error: "Invalid playerId" })
+            return reply.redirect('/player')
+        }
         const allAccounts = getAllAccountsSync()
         let accountId = 0
         for (const a of allAccounts) {
             if (getAccountPlayersSync(a.id).includes(pid)) { accountId = a.id; break }
         }
         if (accountId && getAccountPlayersSync(accountId).length <= 1) {
-            // Last save — delete entire account + device binding + default player mapping
             deletePlayerSync(pid)
             deleteAccountSync(accountId)
-            // Clean up device bindings to prevent stale mapping on re-login
             try {
-                const db = require("../../data/wdfpData").getDb()
+                const db = require("../../data/db").getDb()
                 db.prepare(`DELETE FROM device_bindings WHERE account_id = ?`).run(accountId)
             } catch (_) {}
-            // Remove stale default player mapping
             try {
                 const { readState, writeState } = require("../../data/activeAccount")
                 const state = readState()
@@ -133,8 +339,14 @@ const routes = async (fastify: FastifyInstance) => {
             } catch (_) {}
         } else {
             deletePlayerSync(pid)
+            const remainingPlayerIds = getAccountPlayersSync(accountId)
+            if (getAccountDefaultPlayer(accountId) === pid && remainingPlayerIds.length > 0) {
+                saveAccountDefaultPlayer(accountId, remainingPlayerIds[0])
+            }
         }
+        const accountAlsoDeleted = accountId && getAccountPlayersSync(accountId).length === 0
         if (getActivePlayerId() === pid) setActivePlayerId(null)
+        if (wantsJson(request)) return reply.send({ ok: true, deleted: pid, accountAlsoDeleted: !!accountAlsoDeleted })
         return reply.redirect('/player')
     })
 
@@ -148,16 +360,16 @@ const routes = async (fastify: FastifyInstance) => {
             deletePlayerSync(pid)
         }
         // Remove device bindings pointing to this account
-        const db = require("../../data/wdfpData").getDb()
+        const db = require("../../data/db").getDb()
         db.prepare(`DELETE FROM device_bindings WHERE account_id = ?`).run(accountId)
         deleteAccountSync(accountId)
-        // Remove stale default player mapping
         try {
             const { readState, writeState } = require("../../data/activeAccount")
             const state = readState()
             delete state.defaultPlayers[accountId]
             writeState(state)
         } catch (_) {}
+        if (wantsJson(request)) return reply.send({ ok: true, accountId, deletedSaves: playerIds.length })
         return reply.redirect('/player')
     })
 
@@ -168,6 +380,7 @@ const routes = async (fastify: FastifyInstance) => {
         const name = body.name
         if (isNaN(playerId) || !name) return reply.status(400).send({ error: "Missing params" })
         updatePlayerSync({ id: playerId, name: String(name) })
+        if (wantsJson(request)) return reply.send({ ok: true, playerId, name: String(name) })
         return reply.redirect('/player')
     })
 
@@ -176,22 +389,53 @@ const routes = async (fastify: FastifyInstance) => {
         const { playerId: pid, accountId: aid } = (request.query || {}) as any
         const playerId = parseInt(pid)
         const accountId = parseInt(aid)
-        if (isNaN(playerId) || isNaN(accountId)) return reply.redirect('/player')
+        if (isNaN(playerId) || isNaN(accountId)) {
+            if (wantsJson(request)) return reply.status(400).send({ error: "Invalid playerId or accountId" })
+            return reply.redirect('/player')
+        }
 
-        // Read source player data
-        const serialized = getClientSerializedData(playerId, { viewerId: 0 })
-        if (!serialized) return reply.redirect('/player')
+        if (getPlayerSync(playerId) === null) {
+            if (wantsJson(request)) return reply.status(404).send({ error: "Source player not found" })
+            return reply.redirect('/player')
+        }
 
-        // Create new empty save
-        const newPlayer = insertDefaultPlayerSync(accountId)
-        setActivePlayerId(newPlayer.id)
+        let snapshot
+        try {
+            snapshot = exportPlayerSaveV2Sync(playerId)
+        } catch (error: any) {
+            const message = `存档导出失败：${error?.message ?? error}`
+            if (wantsJson(request)) return reply.status(500).send({ error: message })
+            return reply.redirect(`/player/${playerId}?error=${encodeURIComponent(message)}`)
+        }
 
-        // Deserialize source data and merge into new save
-        const mergedData = deserializePlayerData(newPlayer.id, serialized)
-        replacePlayerDataSync(mergedData)
+        const cloned = clonePlayerSaveV2Sync(snapshot, accountId)
+        setActivePlayerId(cloned.playerId)
 
-        saveAccountDefaultPlayer(accountId, newPlayer.id)
+        saveAccountDefaultPlayer(accountId, cloned.playerId)
+        if (wantsJson(request)) return reply.send({ ok: true, newPlayerId: cloned.playerId })
         return reply.redirect('/player')
+    })
+
+    // Device binding rename
+    fastify.post("/device/rename", async (request: FastifyRequest, reply: FastifyReply) => {
+        const body = request.body as { deviceId?: unknown; name?: unknown }
+        const deviceId = body.deviceId
+        if (!Number.isSafeInteger(deviceId) || (deviceId as number) <= 0) {
+            return reply.status(400).send({ error: "Invalid deviceId" })
+        }
+        if (body.name !== undefined && typeof body.name !== "string") {
+            return reply.status(400).send({ error: "Invalid device name" })
+        }
+        const name = typeof body.name === "string" && body.name.trim() !== ""
+            ? body.name.trim()
+            : null
+        if (name !== null && name.length > 64) {
+            return reply.status(400).send({ error: "Device name must not exceed 64 characters" })
+        }
+        if (!updateDeviceBindingNameSync(deviceId as number, name)) {
+            return reply.status(404).send({ error: "Device binding not found" })
+        }
+        return reply.status(200).send({ ok: true, deviceId, name })
     })
 }
 

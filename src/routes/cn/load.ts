@@ -1,9 +1,42 @@
 import { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import path from "node:path";
 import { generateDataHeaders, getServerTime, getServerDate } from "../../utils";
-import { getPlayerSync, dailyResetPlayerDataSync, collectPlayerDataPooledExpSync, updatePlayerSync, getPlayerActiveQuestSync } from "../../data/wdfpData";
+import { collectPlayerDataPooledExpSync, dailyResetPlayerDataSync, getPlayerSync, updatePlayerSync } from "../../data/domains/player"
+import {
+    getPlayerActiveQuestSync,
+    updatePlayerActiveQuestCoordinatorOriginSync,
+    updatePlayerActiveQuestEntryItemCountSync,
+} from "../../data/domains/quest_active"
+import { getSession } from "../../data/domains/session"
+import { findPendingForcedNews } from "../../lib/news-catalog"
 import { getClientSerializedData } from "../../data/utils";
 import { resolvePlayerIdSync } from "../../data/activeAccount";
-import { getDisplayHost } from "../../data/multiRoom";
+import { getRoom } from "../../multi/room/manager";
+import { runPermanentValidators } from "../../lib/validate";
+import { restoreActiveQuestFromStorage } from "../../lib/quest/entry-lifecycle";
+import { ActiveQuest, publishActiveQuest, runAbortActiveQuestTransaction } from "../../lib/quest/active-quest-service";
+import type { StartEntryCost } from "../../lib/quest/start-entry";
+import { getContentSnapshot } from "../../content/runtime/content-snapshot";
+import {
+    parseAssetProviderConfig,
+    resolveAssetLoadState,
+    type AssetProviderConfig,
+} from "../../content/cdn/asset-mode";
+import bundledQuestEntryCosts from "../../../assets/quest_entry_costs.json";
+import { getRuntimeContentTableSync } from "../../content/runtime/table-access";
+import { reconcileActiveMissionFacts } from "../../lib/mission/active-reconciliation";
+import { recordEventLoginMissionFactSync } from "../../lib/mission/event-entry-facts";
+import { setCnMsgpackPendingCommit } from "./msgpack";
+import {
+    isValidBattleSessionId,
+    isValidMultiRoomNumber,
+    type MultiCoordinatorOrigin,
+    type ParticipantIdentity,
+} from "../../multi/coordinator/contracts";
+import type {
+    MultiBattleRecoveryInspection,
+    MultiSettlementIdentity,
+} from "../../multi/settlement/verifier";
 
 interface CnLoadBody {
     device_id: number;
@@ -19,9 +52,12 @@ interface CnLoadBody {
     viewer_id?: number;
 }
 
-function wrapOptionFields(d: any, resVer?: string) {
-    // Align with CN CDN version from client res_ver header, fallback to .env CN_RES_VERSION
-    d.available_asset_version = resVer || process.env.CN_RES_VERSION || "1.4.54";
+function wrapOptionFields(
+    d: any,
+    availableAssetVersion: string,
+    crashEndpoint: { readonly host: string; readonly port: number },
+) {
+    d.available_asset_version = availableAssetVersion;
 
     if (d.user_info) {
         if (typeof d.user_info.last_login_time === 'number') {
@@ -48,7 +84,7 @@ function wrapOptionFields(d: any, resVer?: string) {
         d.user_option.stamina ??= false;
     }
 
-    d.cn_crash_url = `http://${getDisplayHost()}:${process.env.CN_LISTEN_PORT || "8001"}/crash`;
+    d.cn_crash_url = `http://${crashEndpoint.host}:${crashEndpoint.port}/crash`;
     d.survey_url = "";
     d.qq_group_url = "";
     d.bug_report_url = "";
@@ -71,7 +107,26 @@ function wrapOptionFields(d: any, resVer?: string) {
     d.special_exchange_campaign_list = [];
     d.win_lottery_active_mission_list = [];
     d.stars_gacha_campaign_list = [];
-    d.favorite_party_group_list = [];
+    // Build favorite_party_group_list from user_party_group_list
+    // Required for HomeScene kind=1 (profile_favorite) to work without F1010
+    // fromPartyInfo expects party_name/party_edited (not name/edited like fromPartyInfoLite)
+    d.favorite_party_group_list = Object.entries(d.user_party_group_list || {}).map(([groupId, group]: [string, any]) => ({
+        party_group_id: Number(groupId),
+        party_group_color_id: group.color_id,
+        party_list: Object.entries(group.list || {}).map(([partyId, party]: [string, any]) => ({
+            party_id: Number(partyId),
+            party_name: party.name,
+            character_ids: party.character_ids,
+            unison_character_ids: party.unison_character_ids,
+            equipment_ids: party.equipment_ids,
+            ability_soul_ids: party.ability_soul_ids,
+            options: party.options,
+            party_edited: party.edited,
+            current_battle_power: party.current_battle_power,
+            before_battle_power: party.before_battle_power,
+        }))
+    }));
+
     d.ranking_event_reward = [];
     d.party_list = [];
 
@@ -82,12 +137,60 @@ function wrapOptionFields(d: any, resVer?: string) {
     return d;
 }
 
-const routes = async (fastify: FastifyInstance) => {
+export interface CnLoadRouteOptions {
+    readonly assetProvider?: AssetProviderConfig;
+    readonly multiMode?: "embedded" | "host" | "client";
+    readonly multiRecoveryVerifier?: {
+        inspect(input: MultiSettlementIdentity): Promise<MultiBattleRecoveryInspection>;
+    };
+    readonly getMultiParticipant?: (viewerId: number) => ParticipantIdentity;
+    readonly httpDisplayHost?: string;
+    readonly httpPort?: number;
+    readonly summonComSeconds?: number;
+    readonly dailyResetHour?: number;
+}
+
+function hasStoredBattleIdentity(activeQuest: ActiveQuest): boolean {
+    return activeQuest.isMulti && activeQuest.battleSessionId !== null
+        && activeQuest.battleSessionId !== undefined;
+}
+
+function isValidStoredBattleIdentity(activeQuest: ActiveQuest): activeQuest is ActiveQuest & {
+    roomNumber: string;
+    battleSessionId: string;
+} {
+    return isValidMultiRoomNumber(activeQuest.roomNumber)
+        && isValidBattleSessionId(activeQuest.battleSessionId);
+}
+
+function fallbackParticipant(
+    mode: CnLoadRouteOptions["multiMode"],
+    viewerId: number,
+): ParticipantIdentity {
+    return {
+        nodeSessionId: mode === "client" ? "remote-pending" as any : "embedded" as any,
+        viewerId,
+    };
+}
+
+function inferLegacyCoordinatorOrigin(
+    mode: CnLoadRouteOptions["multiMode"],
+): MultiCoordinatorOrigin {
+    return mode === "client" ? "remote" : "local";
+}
+
+const routes = async (fastify: FastifyInstance, options: CnLoadRouteOptions) => {
+    const assetProvider = options.assetProvider ?? parseAssetProviderConfig({
+        projectRoot: path.resolve(__dirname, "../../.."),
+    });
+
     fastify.post("/load", async (request: FastifyRequest, reply: FastifyReply) => {
         try {
         const body = request.body as CnLoadBody;
-        const accountId = body.viewer_id || body.keychain || 1;
+        const viewerId = body.viewer_id || body.keychain || 1;
 
+        const session = await getSession(String(viewerId));
+        const accountId = session ? session.accountId : (body.viewer_id || body.keychain || 1);
         const playerId = resolvePlayerIdSync(accountId);
         if (!playerId) {
             return reply.status(400).send({ error: "Bad Request", message: "No player found" });
@@ -99,48 +202,130 @@ const routes = async (fastify: FastifyInstance) => {
         }
 
         const now = getServerDate();
-        dailyResetPlayerDataSync(player, now);
+        dailyResetPlayerDataSync(player, now, options.dailyResetHour);
         collectPlayerDataPooledExpSync(player, now);
+
+        // Run save validators (permanent fixes: max_level, etc.)
+        runPermanentValidators(playerId);
 
         // 若自定义时间与 lastLogin 不同步，强制对齐（防止客户端弹"日期变了"）
         if (now.toDateString() !== player.lastLoginTime.toDateString()) {
             updatePlayerSync({ id: player.id, lastLoginTime: now });
         }
 
-        const clientData = getClientSerializedData(playerId, { viewerId: accountId }) as any;
-        if (clientData === null) {
-            return reply.status(500).send({ error: "Internal Server Error", message: "No player data." });
+        let activeQuest: ActiveQuest | null = getPlayerActiveQuestSync(playerId);
+        if (activeQuest) {
+            if (activeQuest.isMulti && activeQuest.coordinatorOrigin === null) {
+                const coordinatorOrigin = inferLegacyCoordinatorOrigin(options.multiMode);
+                updatePlayerActiveQuestCoordinatorOriginSync(playerId, coordinatorOrigin);
+                activeQuest = { ...activeQuest, coordinatorOrigin };
+            }
+            let multiRecoveryState: MultiBattleRecoveryInspection["state"] | null = null;
+            if (hasStoredBattleIdentity(activeQuest)) {
+                if (!isValidStoredBattleIdentity(activeQuest)) {
+                    console.warn("[CN-LOAD] multi recovery skipped code=MULTI_RECOVERY_INVALID_IDENTITY");
+                } else if (options.multiRecoveryVerifier) {
+                    const participant = options.getMultiParticipant?.(viewerId)
+                        ?? fallbackParticipant(options.multiMode, viewerId);
+                    const recovery = await options.multiRecoveryVerifier.inspect({
+                        ...participant,
+                        roomNumber: activeQuest.roomNumber,
+                        battleSessionId: activeQuest.battleSessionId,
+                        coordinatorOrigin: activeQuest.coordinatorOrigin as MultiCoordinatorOrigin,
+                    });
+                    multiRecoveryState = recovery.state;
+                }
+            }
+            const legacyRoomMissing = activeQuest.coordinatorOrigin === "local"
+                && !hasStoredBattleIdentity(activeQuest)
+                && !!activeQuest.roomNumber
+                && getRoom(activeQuest.roomNumber) === undefined;
+            if (multiRecoveryState !== null || legacyRoomMissing) {
+                console.log(
+                    `[CN-LOAD] cancelling unrestorable multi active quest`
+                    + ` room=${activeQuest.roomNumber}`
+                    + ` state=${multiRecoveryState ?? "legacy-missing"}`,
+                );
+                const aborted = runAbortActiveQuestTransaction(playerId, {
+                    playId: activeQuest.playId,
+                    questId: activeQuest.questId,
+                    category: activeQuest.category,
+                });
+                activeQuest = aborted.cancelled ? null : getPlayerActiveQuestSync(playerId);
+            }
+            if (activeQuest) {
+                activeQuest = restoreActiveQuestFromStorage(playerId, activeQuest, {
+                    getEntryCost: (category, questId) => (
+                        getRuntimeContentTableSync(
+                            "quest_entry_costs.json",
+                            bundledQuestEntryCosts as Record<string, StartEntryCost>,
+                        )
+                    )[`${category}_${questId}`],
+                    persistEntryItemCount: updatePlayerActiveQuestEntryItemCountSync,
+                    publishActiveQuest,
+                });
+            }
         }
 
-        const resVer = request.headers['res_ver'] as string | undefined;
-        console.log(`[CN-LOAD] res_ver=${resVer || '(not sent)'} account=${accountId} player=${playerId} party_slot=${clientData?.user_info?.party_slot}`);
-        wrapOptionFields(clientData, resVer);
+        const contentSnapshot = getContentSnapshot();
+        reconcileActiveMissionFacts({
+            playerId,
+            repository: contentSnapshot.repository,
+            now: getServerTime() * 1000,
+        });
 
-        // Inject unfinished quest lists for battle recovery
-        const activeQuest = getPlayerActiveQuestSync(playerId);
-        if (activeQuest) {
-            const entry = { play_id: activeQuest.playId, continue_count: activeQuest.continueCount };
-            if (activeQuest.isMulti) {
-                clientData.unfinished_quest_list = [];
-                clientData.unfinished_multi_quest_list = [entry];
+        const responsePayload = (() => {
+            const clientData = getClientSerializedData(playerId, {
+                viewerId: accountId,
+                summonComSeconds: options.summonComSeconds,
+            }) as any;
+            if (clientData === null) throw new Error("No player data.");
+
+            const resVer = request.headers['res_ver'] as string | undefined;
+            console.log(`[CN-LOAD] res_ver=${resVer || '(not sent)'} account=${accountId} player=${playerId} party_slot=${clientData?.user_info?.party_slot}`);
+            const snapshotTargetVersion = assetProvider.mode === "client-owned"
+                ? ""
+                : contentSnapshot.cdn.targetVersion;
+            const assetState = resolveAssetLoadState(assetProvider, resVer, snapshotTargetVersion);
+            wrapOptionFields(clientData, assetState.availableAssetVersion, {
+                host: options.httpDisplayHost ?? "127.0.0.1",
+                port: options.httpPort ?? 8001,
+            });
+
+            // Inject unfinished quest lists for battle recovery
+            if (activeQuest) {
+                const entry = { play_id: activeQuest.playId, continue_count: activeQuest.continueCount };
+                if (activeQuest.isMulti) {
+                    clientData.unfinished_quest_list = [];
+                    clientData.unfinished_multi_quest_list = [entry];
+                } else {
+                    clientData.unfinished_quest_list = [entry];
+                    clientData.unfinished_multi_quest_list = [];
+                }
             } else {
-                clientData.unfinished_quest_list = [entry];
+                clientData.unfinished_quest_list = [];
                 clientData.unfinished_multi_quest_list = [];
             }
-        } else {
-            clientData.unfinished_quest_list = [];
-            clientData.unfinished_multi_quest_list = [];
-        }
+
+            const payload = {
+                data_headers: generateDataHeaders({
+                    asset_update: assetState.assetUpdate,
+                    viewer_id: accountId,
+                    servertime: getServerTime(),
+                }),
+                data: clientData
+            };
+            if (findPendingForcedNews(playerId) !== null) {
+                payload.data_headers.force_news = 1;
+            }
+            return payload;
+        })();
 
         reply.header("content-type", "application/x-msgpack");
-        reply.status(200).send({
-            data_headers: generateDataHeaders({
-                asset_update: true,
-                viewer_id: accountId,
-                servertime: getServerTime(),
-            }),
-            data: clientData
+        setCnMsgpackPendingCommit(reply, () => {
+            recordEventLoginMissionFactSync(playerId, now);
         });
+        reply.status(200).send(responsePayload);
         } catch(e: any) {
             console.error(`[CN-LOAD] ERROR:`, e.message, e.stack);
             return reply.status(500).send({ error: "Internal Server Error", message: e.message });

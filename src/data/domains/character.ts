@@ -1,6 +1,6 @@
 import { getDb } from "../db";
 import { PlayerCharacter, PlayerCharacterBondToken, PlayerCharacterExBoost, RawPlayerCharacter, RawPlayerCharacterBondToken, RawPlayerCharacterManaNode } from "../types";
-import { deserializeBoolean, deserializeNumberList, serializeBoolean, serializeNumberList } from "../utils";
+import { deserializeBoolean, deserializeNumberList, serializeBoolean, serializeNumberList } from "../utils/primitives";
 import { getCharacterDataSync } from "../../lib/assets";
 
 /**
@@ -491,6 +491,139 @@ export function insertPlayerCharactersManaNodesSync(
     getDb().transaction(() => {
         for (const [characterId, manaNodes] of Object.entries(charactersManaNodes)) {
             insertPlayerCharacterManaNodesSync(playerId, characterId, manaNodes)
+        }
+    })()
+}
+
+/**
+ * Gets the awake_level values for all mana nodes owned by a player.
+ * 
+ * @param playerId The ID of the player.
+ * @returns A record mapping character_id → { node_id → awake_level }.
+ */
+export function getPlayerCharactersManaNodeAwakeLevelsSync(
+    playerId: number
+): Record<string, Record<number, number>> {
+    const rawNodes = getDb().prepare(`
+    SELECT value, character_id, awake_level
+    FROM players_characters_mana_nodes
+    WHERE player_id = ?
+    `).all(playerId) as RawPlayerCharacterManaNode[]
+
+    const result: Record<string, Record<number, number>> = {}
+    for (const rawNode of rawNodes) {
+        const charId = rawNode.character_id.toString()
+        if (!result[charId]) result[charId] = {}
+        result[charId][rawNode.value] = rawNode.awake_level ?? 0
+    }
+    return result
+}
+
+export function hasPlayerCharacterManaNodeAwakeProgressSync(
+    playerId: number,
+    characterId: number
+): boolean {
+    return getDb().prepare(`
+    SELECT 1
+    FROM players_characters_mana_nodes
+    WHERE player_id = ? AND character_id = ? AND awake_level > 0
+    LIMIT 1
+    `).get(playerId, characterId) !== undefined
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+    if (value === null || typeof value !== "object" || Array.isArray(value)) return false
+    const prototype = Object.getPrototypeOf(value)
+    return prototype === Object.prototype || prototype === null
+}
+
+function parsePositiveSafeIntegerKey(key: string, path: string): number {
+    const value = Number(key)
+    if (!Number.isSafeInteger(value) || value <= 0 || String(value) !== key) {
+        throw new TypeError(`${path} must be a positive safe integer.`)
+    }
+    return value
+}
+
+/**
+ * Updates the awake_level for a player's character mana node.
+ * Only updates nodes that already exist from learn_mana_node.
+ * 
+ * @param playerId The ID of the player.
+ * @param characterId The character's ID.
+ * @param manaNodeId The mana node multiplied_id.
+ * @param awakeLevel The new awake_level to set.
+ */
+export function updatePlayerCharacterManaNodeAwakeLevelSync(
+    playerId: number,
+    characterId: number,
+    manaNodeId: number,
+    awakeLevel: number
+): boolean {
+    return getDb().prepare(`
+    UPDATE players_characters_mana_nodes
+    SET awake_level = ?
+    WHERE value = ? AND character_id = ? AND player_id = ?
+    `).run(awakeLevel, manaNodeId, characterId, playerId).changes > 0
+}
+
+export function updatePlayerCharactersManaNodeAwakeLevelsSync(
+    playerId: number,
+    awakeLevels: Record<string, Record<number, number>>
+): void {
+    if (!isPlainObject(awakeLevels)) {
+        throw new TypeError("characterManaNodeAwakeLevels must be a plain object.")
+    }
+
+    const validated: { characterId: number; manaNodeId: number; awakeLevel: number }[] = []
+    const characterIds = new Set<number>()
+    for (const [characterKey, rawNodeLevels] of Object.entries(awakeLevels)) {
+        const characterId = parsePositiveSafeIntegerKey(
+            characterKey,
+            "characterManaNodeAwakeLevels characterId",
+        )
+        characterIds.add(characterId)
+        if (!isPlainObject(rawNodeLevels)) {
+            throw new TypeError(`characterManaNodeAwakeLevels[${characterId}] must be a plain object.`)
+        }
+        for (const [nodeKey, awakeLevel] of Object.entries(rawNodeLevels)) {
+            const manaNodeId = parsePositiveSafeIntegerKey(
+                nodeKey,
+                `characterManaNodeAwakeLevels[${characterId}] manaNodeId`,
+            )
+            if (!Number.isSafeInteger(awakeLevel) || (awakeLevel as number) < 0) {
+                throw new TypeError(
+                    `characterManaNodeAwakeLevels[${characterId}][${manaNodeId}] awakeLevel must be a non-negative safe integer.`,
+                )
+            }
+            validated.push({ characterId, manaNodeId, awakeLevel: awakeLevel as number })
+        }
+    }
+
+    getDb().transaction(() => {
+        const characterExists = getDb().prepare(`
+            SELECT 1
+            FROM players_characters
+            WHERE player_id = ? AND id = ?
+        `)
+        for (const characterId of characterIds) {
+            if (characterExists.get(playerId, characterId) === undefined) {
+                throw new Error(
+                    `characterManaNodeAwakeLevels references unknown character ${characterId}.`,
+                )
+            }
+        }
+        for (const entry of validated) {
+            if (!updatePlayerCharacterManaNodeAwakeLevelSync(
+                playerId,
+                entry.characterId,
+                entry.manaNodeId,
+                entry.awakeLevel,
+            )) {
+                throw new Error(
+                    `characterManaNodeAwakeLevels references unknown character/node ${entry.characterId}/${entry.manaNodeId}.`,
+                )
+            }
         }
     })()
 }

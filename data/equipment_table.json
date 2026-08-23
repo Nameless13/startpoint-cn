@@ -1,0 +1,434 @@
+{
+  "3010007": {
+    "name": "短弯刀",
+    "rarity": 3,
+    "element": "水",
+    "source": "常驻"
+  },
+  "3010008": {
+    "name": "玻璃之刃",
+    "rarity": 3,
+    "element": "全",
+    "source": "常驻"
+  },
+  "3010013": {
+    "name": "焰形剑",
+    "rarity": 3,
+    "element": "光",
+    "source": "常驻"
+  },
+  "3010027": {
+    "name": "闪电匕首",
+    "rarity": 3,
+    "element": "雷",
+    "source": "常驻"
+  },
+  "3010035": {
+    "name": "高热剑",
+    "rarity": 3,
+    "element": "火",
+    "source": "常驻"
+  },
+  "3010053": {
+    "name": "野营刀",
+    "rarity": 3,
+    "element": "暗",
+    "source": "常驻"
+  },
+  "3020006": {
+    "name": "战争巨镰",
+    "rarity": 3,
+    "element": "雷",
+    "source": "常驻"
+  },
+  "3020011": {
+    "name": "维京斧",
+    "rarity": 3,
+    "element": "暗",
+    "source": "常驻"
+  },
+  "3020012": {
+    "name": "牛斧",
+    "rarity": 3,
+    "element": "全",
+    "source": "常驻"
+  },
+  "3030007": {
+    "name": "步兵长矛",
+    "rarity": 3,
+    "element": "火",
+    "source": "常驻"
+  },
+  "3030012": {
+    "name": "长柄刀",
+    "rarity": 3,
+    "element": "全",
+    "source": "常驻"
+  },
+  "3030013": {
+    "name": "偃月刀",
+    "rarity": 3,
+    "element": "光",
+    "source": "常驻"
+  },
+  "3030027": {
+    "name": "激光标枪",
+    "rarity": 3,
+    "element": "光",
+    "source": "常驻"
+  },
+  "3040003": {
+    "name": "长弓",
+    "rarity": 3,
+    "element": "风",
+    "source": "常驻"
+  },
+  "3040006": {
+    "name": "十字弓",
+    "rarity": 3,
+    "element": "全",
+    "source": "常驻"
+  },
+  "3040032": {
+    "name": "投石机",
+    "rarity": 3,
+    "element": "光",
+    "source": "常驻"
+  },
+  "3050002": {
+    "name": "罗洪特写本",
+    "rarity": 3,
+    "element": "暗",
+    "source": "常驻"
+  },
+  "3050005": {
+    "name": "谎言之书",
+    "rarity": 3,
+    "element": "全",
+    "source": "常驻"
+  },
+  "3050010": {
+    "name": "斐莱布篇",
+    "rarity": 3,
+    "element": "雷",
+    "source": "常驻"
+  },
+  "3060003": {
+    "name": "司祭之杖",
+    "rarity": 3,
+    "element": "水",
+    "source": "常驻"
+  },
+  "3060007": {
+    "name": "魔术手杖",
+    "rarity": 3,
+    "element": "全",
+    "source": "常驻"
+  },
+  "3070006": {
+    "name": "半月拳刃",
+    "rarity": 3,
+    "element": "火",
+    "source": "常驻"
+  },
+  "3070010": {
+    "name": "龙之拳套",
+    "rarity": 3,
+    "element": "全",
+    "source": "常驻"
+  },
+  "3070018": {
+    "name": "黄铜拳套",
+    "rarity": 3,
+    "element": "全",
+    "source": "常驻"
+  },
+  "3070022": {
+    "name": "混沌指虎",
+    "rarity": 3,
+    "element": "暗",
+    "source": "常驻"
+  },
+  "3080008": {
+    "name": "青金石盾",
+    "rarity": 3,
+    "element": "全",
+    "source": "常驻"
+  },
+  "3080009": {
+    "name": "骑士盾",
+    "rarity": 3,
+    "element": "风",
+    "source": "常驻"
+  },
+  "3080017": {
+    "name": "空气反应炉",
+    "rarity": 3,
+    "element": "风",
+    "source": "常驻"
+  },
+  "3090036": {
+    "name": "蓝晶耳坠",
+    "rarity": 3,
+    "element": "水",
+    "source": "常驻"
+  },
+  "3100007": {
+    "name": "虹彩起爆器",
+    "rarity": 3,
+    "element": "水",
+    "source": "常驻"
+  },
+  "4010010": {
+    "name": "伊文剑",
+    "rarity": 4,
+    "element": "光",
+    "source": "常驻"
+  },
+  "4020007": {
+    "name": "印第安战斧",
+    "rarity": 4,
+    "element": "全",
+    "source": "常驻"
+  },
+  "4020019": {
+    "name": "名匠之槌",
+    "rarity": 4,
+    "element": "光",
+    "source": "常驻"
+  },
+  "4030003": {
+    "name": "标枪",
+    "rarity": 4,
+    "element": "火",
+    "source": "常驻"
+  },
+  "4030004": {
+    "name": "螺旋长枪",
+    "rarity": 4,
+    "element": "全",
+    "source": "常驻"
+  },
+  "4030008": {
+    "name": "游击者",
+    "rarity": 4,
+    "element": "全",
+    "source": "常驻"
+  },
+  "4030009": {
+    "name": "珊瑚之枪",
+    "rarity": 4,
+    "element": "全",
+    "source": "常驻"
+  },
+  "4030024": {
+    "name": "风车",
+    "rarity": 4,
+    "element": "风",
+    "source": "常驻"
+  },
+  "4040007": {
+    "name": "合成弓",
+    "rarity": 4,
+    "element": "全",
+    "source": "常驻"
+  },
+  "4040008": {
+    "name": "梓弓",
+    "rarity": 4,
+    "element": "风",
+    "source": "常驻"
+  },
+  "4040021": {
+    "name": "旋涡之弓",
+    "rarity": 4,
+    "element": "水",
+    "source": "常驻"
+  },
+  "4050004": {
+    "name": "战国策写本",
+    "rarity": 4,
+    "element": "全",
+    "source": "常驻"
+  },
+  "4050007": {
+    "name": "尼伯龙根之歌",
+    "rarity": 4,
+    "element": "暗",
+    "source": "常驻"
+  },
+  "4060005": {
+    "name": "神圣之杖",
+    "rarity": 4,
+    "element": "全",
+    "source": "常驻"
+  },
+  "4060022": {
+    "name": "血脉之杖",
+    "rarity": 4,
+    "element": "暗",
+    "source": "常驻"
+  },
+  "4060028": {
+    "name": "熔岩长杖",
+    "rarity": 4,
+    "element": "火",
+    "source": "常驻"
+  },
+  "4060032": {
+    "name": "启明之杖",
+    "rarity": 4,
+    "element": "光",
+    "source": "常驻"
+  },
+  "4060035": {
+    "name": "高洁之伞",
+    "rarity": 4,
+    "element": "水",
+    "source": "常驻"
+  },
+  "4070004": {
+    "name": "赤鬼手套",
+    "rarity": 4,
+    "element": "雷",
+    "source": "常驻"
+  },
+  "4070007": {
+    "name": "强力拳",
+    "rarity": 4,
+    "element": "全",
+    "source": "常驻"
+  },
+  "4070016": {
+    "name": "灼炎龙拳",
+    "rarity": 4,
+    "element": "火",
+    "source": "常驻"
+  },
+  "4080003": {
+    "name": "钻石盾",
+    "rarity": 4,
+    "element": "水",
+    "source": "常驻"
+  },
+  "4080015": {
+    "name": "林德虫之盾",
+    "rarity": 4,
+    "element": "全",
+    "source": "常驻"
+  },
+  "4080019": {
+    "name": "四向巴纹盾",
+    "rarity": 4,
+    "element": "雷",
+    "source": "常驻"
+  },
+  "4080021": {
+    "name": "噪声划痕盾",
+    "rarity": 4,
+    "element": "光",
+    "source": "常驻"
+  },
+  "4080027": {
+    "name": "暴击大盾",
+    "rarity": 4,
+    "element": "暗",
+    "source": "常驻"
+  },
+  "5010028": {
+    "name": "提尔锋",
+    "rarity": 5,
+    "element": "暗",
+    "source": "常驻"
+  },
+  "5010061": {
+    "name": "水刃石剑",
+    "rarity": 5,
+    "element": "水",
+    "source": "常驻"
+  },
+  "5020008": {
+    "name": "乌贡瓦萨拉",
+    "rarity": 5,
+    "element": "光",
+    "source": "常驻"
+  },
+  "5020010": {
+    "name": "死亡镰刀",
+    "rarity": 5,
+    "element": "水",
+    "source": "常驻"
+  },
+  "5020030": {
+    "name": "灼钺",
+    "rarity": 5,
+    "element": "火",
+    "source": "常驻"
+  },
+  "5020037": {
+    "name": "悲叹死镰",
+    "rarity": 5,
+    "element": "暗",
+    "source": "常驻"
+  },
+  "5030025": {
+    "name": "伏特电击枪",
+    "rarity": 5,
+    "element": "雷",
+    "source": "常驻"
+  },
+  "5040010": {
+    "name": "流星弓",
+    "rarity": 5,
+    "element": "风",
+    "source": "常驻"
+  },
+  "5040016": {
+    "name": "捕食者",
+    "rarity": 5,
+    "element": "火",
+    "source": "常驻"
+  },
+  "5050009": {
+    "name": "占事略决",
+    "rarity": 5,
+    "element": "火",
+    "source": "常驻"
+  },
+  "5060009": {
+    "name": "星盘杖",
+    "rarity": 5,
+    "element": "雷",
+    "source": "常驻"
+  },
+  "5060025": {
+    "name": "湛蓝魔杖",
+    "rarity": 5,
+    "element": "水",
+    "source": "常驻"
+  },
+  "5070023": {
+    "name": "图腾拳套",
+    "rarity": 5,
+    "element": "光",
+    "source": "常驻"
+  },
+  "5070036": {
+    "name": "位高责重之环",
+    "rarity": 5,
+    "element": "光",
+    "source": "常驻"
+  },
+  "5080007": {
+    "name": "天磐盾",
+    "rarity": 5,
+    "element": "暗",
+    "source": "常驻"
+  },
+  "5100002": {
+    "name": "船上式343号铳",
+    "rarity": 5,
+    "element": "风",
+    "source": "常驻"
+  }
+}

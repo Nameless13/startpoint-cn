@@ -1,6 +1,6 @@
 import { getDb } from "../db";
 import { PlayerBoxGacha, PlayerBoxGachaDrawnReward, RawPlayerBoxGacha } from "../types";
-import { deserializeBoolean, serializeBoolean, deserializeNumberList } from "../utils";
+import { deserializeBoolean, serializeBoolean, deserializeNumberList } from "../utils/primitives";
 
 /**
  * Converts a RawPlayerBoxGacha object into a PlayerBoxGacha object.
@@ -182,6 +182,18 @@ export function getPlayerBoxGachaDrawnRewardsSync(
     FROM players_box_gacha_drawn_rewards
     WHERE box_id = ? AND gacha_id = ? AND player_id = ?
     `).all(Number(boxId), gachaId, playerId) as PlayerBoxGachaDrawnReward[]
+}
+
+/** Deletes drawn rewards for exactly one player's box. */
+export function deletePlayerBoxGachaDrawnRewardsSync(
+    playerId: number,
+    gachaId: number,
+    boxId: string | number
+) {
+    getDb().prepare(`
+    DELETE FROM players_box_gacha_drawn_rewards
+    WHERE player_id = ? AND gacha_id = ? AND box_id = ?
+    `).run(playerId, gachaId, Number(boxId))
 }
 
 /**

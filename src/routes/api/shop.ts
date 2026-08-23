@@ -1,102 +1,52 @@
 // Handles the insertion of mana into characters.
 
 import { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import { getAccountPlayers, getPlayerEquipmentSync, getPlayerItemSync, getPlayerSync, getSession, playerOwnsEquipmentSync, updatePlayerEquipmentSync, updatePlayerItemSync, updatePlayerSync, getPlayerShopPurchasesMapSync, getPlayerShopPurchaseCountSync, addPlayerShopPurchaseSync } from "../../data/wdfpData";
+import {
+    addPlayerShopPurchaseCountsByTypeSync,
+    getPlayerShopPurchaseCountsByTypeSync,
+} from "../../data/domains/shopPurchase"
+import {
+    getPlayerShopCampaignLineupSync,
+    getPlayerShopCampaignLineupsSync,
+    selectPlayerShopCampaignLineupSync,
+} from "../../data/domains/shop-campaign-lineup"
+import { getAccountPlayers } from "../../data/domains/account"
+import { getPlayerEquipmentSync, playerOwnsEquipmentSync, updatePlayerEquipmentSync } from "../../data/domains/equipment"
+import { getPlayerItemSync, updatePlayerItemSync } from "../../data/domains/item"
+import { incrementActiveMissionUsedManaCountSync } from "../../data/domains/active_mission_counters";
+import { getPlayerSync, updatePlayerSync } from "../../data/domains/player"
+import { getSession } from "../../data/domains/session"
+import { getDb } from "../../data/db"
 import { resolvePlayerIdSync } from "../../data/activeAccount";
-import { getBossCoinShopItemsSync, getConfigSync, getEventShopItemsSync, getGenericShopItemsSync, getShopItemSync } from "../../lib/assets";
-import { CharacterReward, CharacterShopItemReward, CurrencyReward, CurrencyShopItemReward, EquipmentItemReward, EquipmentItemShopItemReward, Reward, RewardType, ShopItem, ShopItemRewardType, ShopItems, ShopItemUserCostType, ShopType } from "../../lib/types";
-import { generateDataHeaders, getServerDate, getServerTime } from "../../utils";
+import { getBossCoinShopItemsSync, getConfigSync, getEventShopItemsSync, getGenericShopItemsSync, getShopItemSync, getShopSelectItemCampaignsSync } from "../../lib/assets";
+import { ShopItem, ShopItems, ShopItemUserCostType, ShopType } from "../../lib/types";
+import { generateDataHeaders, getServerTime, realToVirtual } from "../../utils";
 import { givePlayerRewardsSync } from "../../lib/quest";
+import { computeRealTimeStamina } from "../../lib/stamina";
 import { clientSerializeEquipment } from "../../lib/equipment";
-import CDN_GENERAL_SHOP_WHITELIST from "../../../assets/cdn_general_shop_whitelist.json";
-
-const GENERAL_SHOP_CDN_KEYS: Set<number> = new Set(CDN_GENERAL_SHOP_WHITELIST);
-
-interface EnhancementGroup {
-    groupId: number
-    items: { id: string, item: ShopItem, stage: number }[]
-    equipmentId: number
-}
-
-function buildEnhancementSalesList(playerId: number, items: ShopItems): Object[] {
-    if (Object.keys(items).length === 0) return []
-
-    // Group items by groupId
-    const groups = new Map<number, EnhancementGroup>()
-    for (const [itemId, item] of Object.entries(items)) {
-        const gid = item.groupId ?? 0
-        if (!groups.has(gid)) {
-            groups.set(gid, {
-                groupId: gid,
-                items: [],
-                equipmentId: item.equipmentId ?? 0
-            })
-        }
-        groups.get(gid)!.items.push({ id: itemId, item, stage: item.stage ?? 0 })
-    }
-
-    const result: Object[] = []
-
-    for (const [, group] of groups) {
-        // Sort by stage ascending
-        group.items.sort((a, b) => a.stage - b.stage)
-
-        const equipmentId = group.equipmentId
-        const enhancementLevel = playerOwnsEquipmentSync(playerId, equipmentId)
-            ? (getPlayerEquipmentSync(playerId, equipmentId)?.enhancementLevel ?? 0)
-            : -1
-
-        // Find target product: first item with enhancementMaxLevel > current enhancementLevel
-        let targetItem: { id: string, item: ShopItem } | null = null
-        let stockQuantity = 0
-        let totalPurchaseNum = 0
-
-        if (enhancementLevel < 0) {
-            // Player doesn't have the equipment
-            targetItem = group.items[0]
-            stockQuantity = targetItem.item.enhancementMaxLevel ?? 0
-            totalPurchaseNum = 0
-        } else {
-            for (const entry of group.items) {
-                const maxLv = entry.item.enhancementMaxLevel ?? 0
-                if (maxLv > enhancementLevel) {
-                    targetItem = entry
-                    stockQuantity = maxLv - enhancementLevel
-                    break
-                }
-            }
-            // If no target found (fully maxed), use last item with stock_quantity=0
-            if (!targetItem) {
-                targetItem = group.items[group.items.length - 1]
-                stockQuantity = 0
-            }
-            totalPurchaseNum = enhancementLevel
-        }
-
-        // Group info: max level from last item in group
-        const maxLevel = group.items[group.items.length - 1].item.enhancementMaxLevel ?? 0
-        const multiStage = group.items.length > 1
-
-        result.push({
-            "shop_item_id": Number(targetItem.id),
-            "stock_quantity": stockQuantity,
-            "today_purchase_num": 0,
-            "this_month_purchase_num": null,  // null → MsgPack nil / Option.None
-            "total_purchase_num": totalPurchaseNum,
-            "discount_id": null,
-            "discount_rate": null,
-            "discounted_price": null,
-            "group_info": {
-                "group_total_stock_quantity": maxLevel - totalPurchaseNum,
-                "group_total_purchase_num": totalPurchaseNum,
-                "multi_stage": multiStage
-            },
-            "shop_type": ShopType.TREASURE_EQUIPMENT
-        })
-    }
-
-    return result
-}
+import { planEquipmentEnhancementPurchase } from "../../lib/equipment-enhancement";
+import { reconcileAwakeUnlockCharacterList } from "../../lib/mission";
+import {
+    executeGenericShopBatchPurchaseSync,
+    executeGenericShopPurchaseSync,
+    getShopPurchasePeriodKeys,
+    ShopPeriodError,
+    ShopPurchaseError,
+    validateShopPurchaseAmount,
+} from "../../lib/event-shop-purchase";
+import { getMailArrivedSync } from "../../lib/mail-notification";
+import { recordMissionOperationFactsSync } from "../../lib/mission/degree-operation-facts";
+import {
+    isShopItemVisibleForCampaign,
+    requireAvailableShopCampaign,
+    ShopCampaignPeriodError,
+    ShopCampaignValidationError,
+} from "../../lib/shop-select-campaign";
+import { buildShopSalesListSync } from "../../lib/shop-sales-list";
+import {
+    addPlayerPassCardPointSync,
+} from "../../data/domains/pass-card"
+import { getActivePassCardEventDefinitionAt } from "../../lib/pass-card"
 
 interface GetSalesListBody {
     equipment_enhancement_shop_category_ids: number[],
@@ -118,6 +68,14 @@ interface BuyBody {
     viewer_id: number
 }
 
+interface BulkBuyBody {
+    shop_type: number
+    buy_item_list: Record<string, unknown>
+    viewer_id: number
+    api_count?: number
+    retry_count?: number
+}
+
 const routes = async (fastify: FastifyInstance) => {
     fastify.post("/buy", async (request: FastifyRequest, reply: FastifyReply) => {
         const body = request.body as BuyBody
@@ -126,12 +84,20 @@ const routes = async (fastify: FastifyInstance) => {
         const shopType = body.shop_type
         const rawPurchaseAmount = body.number
         const shopItemId = body.shop_item_id
-        if (isNaN(viewerId) || isNaN(shopType) || isNaN(rawPurchaseAmount) || isNaN(shopItemId)) return reply.status(400).send({
+        if (isNaN(viewerId) || isNaN(shopType) || isNaN(shopItemId)) return reply.status(400).send({
             "error": "Bad Request",
             "message": "Invalid request body."
         })
 
-        const purchaseAmount = Math.max(1, rawPurchaseAmount)
+        let purchaseAmount: number
+        try {
+            purchaseAmount = validateShopPurchaseAmount(rawPurchaseAmount)
+        } catch {
+            return reply.status(400).send({
+                "error": "Bad Request",
+                "message": "Purchase amount must be a positive integer."
+            })
+        }
 
         const viewerIdSession = await getSession(viewerId.toString())
         if (!viewerIdSession) return reply.status(400).send({
@@ -154,90 +120,35 @@ const routes = async (fastify: FastifyInstance) => {
             "error": "Bad Request",
             "message": "Shop item with specified id does not exist."
         })
-
-        // validate stock limit
-        if (shopItemData.stock !== undefined && shopItemData.stock > 0) {
-            const purchased = getPlayerShopPurchaseCountSync(playerId, shopItemId)
-            if (purchased + purchaseAmount > shopItemData.stock) {
-                return reply.status(400).send({
-                    "error": "Bad Request",
-                    "message": "Shop item purchase limit reached."
-                })
-            }
-        }
-
-        console.log(`[shop:buy] player=${playerId} shopType=${shopType} item=${shopItemId} x${purchaseAmount} before freeMana=${player.freeMana} freeVmoney=${player.freeVmoney}`)
-
-        // keep track of various stats
-        const itemList: Record<string, number> = {}
-        let freeVmoney = player.freeVmoney
-        let freeMana = player.freeMana
-        let bondTokens = player.bondToken
-
-        // verify user costs
-        const userCost = shopItemData.userCost
-        if (userCost !== undefined) {
-            switch (userCost.type) {
-                case ShopItemUserCostType.MANA:
-                    freeMana -= (userCost.amount * purchaseAmount)
-                    break;
-                case ShopItemUserCostType.BEADS:
-                    freeVmoney -= (userCost.amount * purchaseAmount)
-                    break;
-                case ShopItemUserCostType.AMITY_SCROLL:
-                    bondTokens -= (userCost.amount * purchaseAmount)
-            }
-
-            if (0 > freeVmoney) return reply.status(400).send({
-                "error": "Bad Request",
-                "message": `Not enough beads to purchase shop item.`
-            })
-            if (0 > freeMana) return reply.status(400).send({
-                "error": "Bad Request",
-                "message": `Not enough mana to purchase shop item.`
-            })
-            if (0 > bondTokens) return reply.status(400).send({
-                "error": "Bad Request",
-                "message": `Not enough amity scrolls to purchase shop item.`
-            })
-        }
-
-        // verify cost items
-        {
-            for (const cost of shopItemData.costs) {
-                const itemId = cost.id
-                const itemAmount = getPlayerItemSync(playerId, itemId) ?? 0
-                const newItemAmount = itemAmount - (cost.amount * purchaseAmount)
-                if (0 > newItemAmount) return reply.status(400).send({
-                    "error": "Bad Request",
-                    "message": `Not enough of item with id ${itemId} to purchase shop item.`
-                })
-
-                itemList[itemId] = newItemAmount
-            }
-
-            // deduct cost item
-            for (const [itemId, newAmount] of Object.entries(itemList)) {
-                updatePlayerItemSync(playerId, itemId, newAmount)
-            }
-        }
-
-        // update player
-        updatePlayerSync({
-            id: playerId,
-            freeMana: freeMana,
-            freeVmoney: freeVmoney,
-            bondToken: bondTokens
+        if (!isShopItemVisibleForCampaign(
+            shopItemData,
+            shopType,
+            getPlayerShopCampaignLineupsSync(playerId),
+        )) return reply.status(400).send({
+            "error": "Bad Request",
+            "message": "Shop campaign lineup is not selected."
         })
 
-        // Equipment enhancement shop: update equipment enhancement level
+        // buy_max_count is a per-request limit, not lifetime stock.
+        if (shopItemData.stock >= 0 && purchaseAmount > shopItemData.stock) {
+            return reply.status(400).send({
+                "error": "Bad Request",
+                "message": "Shop item purchase limit reached."
+            })
+        }
+
+        let enhancementEquipmentId: number | null = null
+        let enhancementNewLevel: number | null = null
         if (shopType === ShopType.TREASURE_EQUIPMENT) {
             const equipmentId = shopItemData.equipmentId
-            const targetLevel = shopItemData.enhancementMaxLevel
-            if (equipmentId === undefined || targetLevel === undefined) return reply.status(400).send({
-                "error": "Bad Request",
-                "message": "Enhancement item missing equipment_id or target level."
-            })
+            const stageMaxLevel = shopItemData.enhancementMaxLevel
+            const requiredAwakeningLevel = shopItemData.requireAwakeningLevel
+            if (equipmentId === undefined || stageMaxLevel === undefined || requiredAwakeningLevel === undefined) {
+                return reply.status(400).send({
+                    "error": "Bad Request",
+                    "message": "Enhancement item is missing equipment progression data."
+                })
+            }
 
             const currentEquipment = getPlayerEquipmentSync(playerId, equipmentId)
             if (currentEquipment === null) return reply.status(400).send({
@@ -245,15 +156,100 @@ const routes = async (fastify: FastifyInstance) => {
                 "message": "Player does not own the target equipment."
             })
 
-            // Update to target enhancement level
-            const newLevel = Math.max(currentEquipment.enhancementLevel, targetLevel)
-            updatePlayerEquipmentSync(playerId, equipmentId, { enhancementLevel: newLevel })
-            currentEquipment.enhancementLevel = newLevel
-
-            // Record purchase
-            for (let i = 0; i < purchaseAmount; i++) {
-                addPlayerShopPurchaseSync(playerId, shopItemId)
+            const groupItems = Object.entries(getGenericShopItemsSync(ShopType.TREASURE_EQUIPMENT) ?? {})
+                .filter(([, item]) => item.groupId === shopItemData.groupId && item.equipmentId === equipmentId)
+                .sort(([, a], [, b]) => (a.stage ?? 0) - (b.stage ?? 0))
+            const currentStage = groupItems.find(([, item]) =>
+                (item.enhancementMaxLevel ?? 0) > currentEquipment.enhancementLevel
+            )
+            if (!currentStage || Number(currentStage[0]) !== shopItemId) {
+                return reply.status(400).send({
+                    "error": "Bad Request",
+                    "message": "Enhancement item is not the current stage."
+                })
             }
+
+            const plan = planEquipmentEnhancementPurchase(
+                currentEquipment.enhancementLevel,
+                purchaseAmount,
+                stageMaxLevel,
+                currentEquipment.level,
+                requiredAwakeningLevel,
+            )
+            if (!plan.ok) return reply.status(400).send({
+                "error": "Bad Request",
+                "message": plan.message
+            })
+
+            enhancementEquipmentId = equipmentId
+            enhancementNewLevel = plan.newLevel
+        }
+
+        console.log(`[shop:buy] player=${playerId} shopType=${shopType} item=${shopItemId} x${purchaseAmount} before freeMana=${player.freeMana} freeVmoney=${player.freeVmoney}`)
+
+        // Equipment enhancement shop: update equipment enhancement level
+        if (shopType === ShopType.TREASURE_EQUIPMENT) {
+            const itemList: Record<string, number> = {}
+            let freeVmoney = player.freeVmoney
+            let freeMana = player.freeMana
+            let bondTokens = player.bondToken
+            const userCost = shopItemData.userCost
+            if (userCost !== undefined) {
+                const amount = userCost.amount * purchaseAmount
+                switch (userCost.type) {
+                    case ShopItemUserCostType.MANA:
+                        freeMana -= amount
+                        break
+                    case ShopItemUserCostType.BEADS:
+                        freeVmoney -= amount
+                        break
+                    case ShopItemUserCostType.AMITY_SCROLL:
+                        bondTokens -= amount
+                        break
+                }
+            }
+            if (freeVmoney < 0 || freeMana < 0 || bondTokens < 0) {
+                return reply.status(400).send({
+                    "error": "Bad Request",
+                    "message": "Not enough currency to purchase shop item."
+                })
+            }
+            for (const cost of shopItemData.costs) {
+                const nextAmount = (getPlayerItemSync(playerId, cost.id) ?? 0) - cost.amount * purchaseAmount
+                if (nextAmount < 0) return reply.status(400).send({
+                    "error": "Bad Request",
+                    "message": `Not enough of item with id ${cost.id} to purchase shop item.`
+                })
+                itemList[String(cost.id)] = nextAmount
+            }
+
+            const equipmentId = enhancementEquipmentId!
+            const newLevel = enhancementNewLevel!
+            const manaSpent = player.freeMana - freeMana
+            getDb().transaction(() => {
+                for (const [itemId, nextAmount] of Object.entries(itemList)) {
+                    updatePlayerItemSync(playerId, itemId, nextAmount)
+                }
+                updatePlayerSync({
+                    id: playerId,
+                    freeMana,
+                    freeVmoney,
+                    bondToken: bondTokens,
+                })
+                updatePlayerEquipmentSync(playerId, equipmentId, { enhancementLevel: newLevel })
+                incrementActiveMissionUsedManaCountSync(playerId, manaSpent)
+                for (let i = 0; i < purchaseAmount; i++) {
+                    addPlayerShopPurchaseCountsByTypeSync(
+                        playerId,
+                        shopType,
+                        shopItemId,
+                        1,
+                        getShopPurchasePeriodKeys(getServerTime() * 1000, shopItemData.specifiedMonths),
+                    )
+                }
+            })()
+
+            const currentEquipment = getPlayerEquipmentSync(playerId, equipmentId)!
 
             reply.header("content-type", "application/x-msgpack")
             return reply.status(200).send({
@@ -269,77 +265,69 @@ const routes = async (fastify: FastifyInstance) => {
                     "character_list": [],
                     "equipment_list": [clientSerializeEquipment(equipmentId, currentEquipment)],
                     "item_list": itemList,
-                    "mail_arrived": false
+                    "mail_arrived": getMailArrivedSync(playerId)
                 }
             })
         }
 
-        // build rewards array
-        const rewards: Reward[] = []
-        for (const reward of shopItemData.rewards) {
-            switch (reward.type) {
-                case ShopItemRewardType.ITEM: {
-                    const shopReward = reward as EquipmentItemShopItemReward
-                    rewards.push({
-                        name: "",
-                        type: RewardType.ITEM,
-                        id: shopReward.id,
-                        count: shopReward.count * purchaseAmount
-                    } as EquipmentItemReward)
-                    break;
-                }
-                case ShopItemRewardType.EXP: {
-                    const shopReward = reward as CurrencyShopItemReward
-                    rewards.push({
-                        name: "",
-                        type: RewardType.EXP,
-                        count: shopReward.count * purchaseAmount
-                    } as CurrencyReward)
-                    break;
-                }
-                case ShopItemRewardType.MANA:{
-                    const shopReward = reward as CurrencyShopItemReward
-                    rewards.push({
-                        name: "",
-                        type: RewardType.MANA,
-                        count: shopReward.count * purchaseAmount
-                    } as CurrencyReward)
-                    break;
-                }
-                case ShopItemRewardType.CHARACTER: {
-                    const shopReward = reward as CharacterShopItemReward
-                    for (let i = 0; i < purchaseAmount; i++) {
-                        rewards.push({
-                            name: "",
-                            type: RewardType.CHARACTER,
-                            id: shopReward.id
-                        } as CharacterReward)
+        let purchaseResult
+        try {
+            purchaseResult = executeGenericShopPurchaseSync({
+                playerId,
+                shopType,
+                shopItemId,
+                purchaseAmount,
+                shopItem: shopItemData,
+                nowMs: getServerTime() * 1000,
+                enforcePeriod: shopType === ShopType.EVENT_ITEM,
+            }, {
+                transaction: operation => getDb().transaction(operation)(),
+                getPlayer: getPlayerSync,
+                updatePlayer: nextPlayer => updatePlayerSync(nextPlayer),
+                getItem: (id, itemId) => getPlayerItemSync(id, itemId) ?? 0,
+                setItem: updatePlayerItemSync,
+                getPurchaseCounts: getPlayerShopPurchaseCountsByTypeSync,
+                addPurchaseCounts: addPlayerShopPurchaseCountsByTypeSync,
+                recordManaSpent: (id, amount) => {
+                    incrementActiveMissionUsedManaCountSync(id, amount)
+                    if (shopType === ShopType.TREASURE) {
+                        recordMissionOperationFactsSync(id, "treasure_mana", amount)
                     }
-                    break;
-                }
-                case ShopItemRewardType.EQUIPMENT: {
-                    const shopReward = reward as EquipmentItemShopItemReward
-                    rewards.push({
-                        name: "",
-                        type: RewardType.EQUIPMENT,
-                        id: shopReward.id,
-                        count: shopReward.count * purchaseAmount
-                    } as EquipmentItemReward)
-                    break;
-                }
-
+                },
+                grantRewards: givePlayerRewardsSync,
+                grantPassCardPoints: (id, amount) => {
+                    const activeEvent = getActivePassCardEventDefinitionAt(new Date(getServerTime() * 1000))
+                    if (!activeEvent) throw new ShopPurchaseError("No active pass card.")
+                    addPlayerPassCardPointSync(id, activeEvent.eventId, amount, activeEvent.thresholdPoint)
+                },
+            })
+        } catch (error) {
+            if (error instanceof ShopPeriodError) {
+                reply.header("content-type", "application/x-msgpack")
+                return reply.status(200).send({
+                    "data_headers": generateDataHeaders({
+                        viewer_id: viewerId,
+                        result_code: error.resultCode,
+                    }),
+                    "data": {}
+                })
             }
+            if (error instanceof ShopPurchaseError) {
+                return reply.status(400).send({
+                    "error": "Bad Request",
+                    "message": error.message,
+                })
+            }
+            throw error
         }
-        // give rewards
-        const rewardResult = givePlayerRewardsSync(playerId, rewards)
 
-        // record purchase for stock tracking
-        for (let i = 0; i < purchaseAmount; i++) {
-            addPlayerShopPurchaseSync(playerId, shopItemId)
-        }
+        const rewardResult = purchaseResult.rewardResult
+        const characterList = reconcileAwakeUnlockCharacterList(
+            playerId,
+            rewardResult.character_list as Record<string, unknown>[]
+        )
 
-        // verify DB write
-        const afterPlayer = getPlayerSync(playerId)!
+        const afterPlayer = purchaseResult.player
         console.log(`[shop:buy] after DB freeMana=${afterPlayer.freeMana} freeVmoney=${afterPlayer.freeVmoney} rewardItems=${JSON.stringify(rewardResult?.items ?? {})}`)
 
         reply.header("content-type", "application/x-msgpack")
@@ -349,18 +337,16 @@ const routes = async (fastify: FastifyInstance) => {
             }),
             "data": {
                 "user_info": {
-                    "free_vmoney": freeVmoney + (rewardResult?.user_info.free_vmoney ?? 0),
-                    "free_mana": freeMana + (rewardResult?.user_info.free_mana ?? 0),
-                    "bond_token": bondTokens,
-                    "exp_pool": player.expPool + (rewardResult?.user_info.exp_pool ?? 0),
+                    "vmoney": afterPlayer.vmoney,
+                    "free_vmoney": afterPlayer.freeVmoney,
+                    "free_mana": afterPlayer.freeMana,
+                    "bond_token": afterPlayer.bondToken,
+                    "exp_pool": afterPlayer.expPool,
                 },
-                "character_list": rewardResult?.character_list ?? [],
-                "equipment_list": rewardResult?.equipment_list ?? [],
-                "item_list": {
-                    ...itemList,
-                    ...(rewardResult?.items ?? {})
-                },
-                "mail_arrived": false
+                "character_list": characterList,
+                "equipment_list": rewardResult.equipment_list,
+                "item_list": purchaseResult.itemList,
+                "mail_arrived": getMailArrivedSync(playerId)
             }
         })
     })
@@ -420,79 +406,26 @@ const routes = async (fastify: FastifyInstance) => {
             toParseShopItems[ShopType.BOSS_COIN] = items === null ? existing : { ...existing, ...items }
         }
 
-        // parse shop items
-        const salesList: Object[] = []
+        const nowMs = getServerTime() * 1000
+        const campaignLineups = getPlayerShopCampaignLineupsSync(playerId)
+        const { salesList, filteredGeneralCount } = buildShopSalesListSync({
+            playerId,
+            itemsByType: toParseShopItems,
+            nowMs,
+            equipmentEnhancementCategoryIds,
+            isItemVisible: (item, shopType) => (
+                isShopItemVisibleForCampaign(item, shopType, campaignLineups)
+            ),
+        }, {
+            getEquipmentEnhancementLevel: (ownerId, equipmentId) => (
+                playerOwnsEquipmentSync(ownerId, equipmentId)
+                    ? (getPlayerEquipmentSync(ownerId, equipmentId)?.enhancementLevel ?? 0)
+                    : -1
+            ),
+        })
 
-        // Load purchase history for stock tracking
-        const purchasedMap = getPlayerShopPurchasesMapSync(playerId)
-        const totalPurchased = Object.values(purchasedMap).reduce((a, b) => a + b, 0)
-        console.log(`[shop:get_sales] player=${playerId} purchasedKeys=${Object.keys(purchasedMap).length} totalPurchased=${totalPurchased}`)
-
-        let filteredCdnCount = 0
-
-        // Collect enhancement shop items for group-level processing
-        const enhancementItems: ShopItems = {}
-
-        for (const [shopType, items] of Object.entries(toParseShopItems)) {
-            const shopTypeNum = Number(shopType)
-            for (const [itemId, item] of Object.entries(items)) {
-
-                if (shopTypeNum === ShopType.GENERAL && !GENERAL_SHOP_CDN_KEYS.has(Number(itemId))) {
-                    filteredCdnCount++
-                    continue
-                }
-
-                // Filter equipment enhancement shop by category IDs
-                if (shopTypeNum === ShopType.TREASURE_EQUIPMENT && equipmentEnhancementCategoryIds?.length) {
-                    if (item.shopCategoryId === undefined || !equipmentEnhancementCategoryIds.includes(item.shopCategoryId)) {
-                        continue
-                    }
-                }
-
-                // Date filtering: only show items active at current server time
-                {
-                    const now = getServerDate()
-                    if (item.availableFrom) {
-                        const fromStr = item.availableFrom.replace(' ', 'T') + 'Z'
-                        if (new Date(fromStr) > now) continue
-                    }
-                    if (item.availableUntil) {
-                        const untilStr = item.availableUntil.replace(' ', 'T') + 'Z'
-                        if (new Date(untilStr) < now) continue
-                    }
-                }
-
-                if (shopTypeNum === ShopType.TREASURE_EQUIPMENT) {
-                    // Collect for group-level processing later
-                    enhancementItems[itemId] = item
-                    continue
-                }
-
-                const purchased = purchasedMap[Number(itemId)] ?? 0
-                const stock = item.stock
-                const stockQuantity = stock !== undefined ? Math.max(0, stock - purchased) : -1
-                salesList.push({
-                    "shop_item_id": Number(itemId),
-                    "stock_quantity": stockQuantity,
-                    "today_purchase_num": purchased,
-                    "this_month_purchase_num": purchased,
-                    "total_purchase_num": purchased,
-                    "group_info": {
-                        "group_total_stock_quantity": stockQuantity,
-                        "group_total_purchase_num": purchased,
-                        "multi_stage": false
-                    },
-                    "shop_type": Number(shopType)
-                })
-            }
-        }
-
-        // Process equipment enhancement items by group
-        const enhancementSales = buildEnhancementSalesList(playerId, enhancementItems)
-        salesList.push(...enhancementSales)
-
-        if (filteredCdnCount > 0) {
-            console.log(`[shop] Filtered ${filteredCdnCount} general shop items not in CDN master data`)
+        if (filteredGeneralCount > 0) {
+            console.log(`[shop] Filtered ${filteredGeneralCount} general shop items not in CDN master data`)
         }
 
         const salesByType: Record<number, number> = {}
@@ -541,14 +474,9 @@ const routes = async (fastify: FastifyInstance) => {
         const config = getConfigSync()
         const recoveryCost = config.stamina_recovery_virtual_money
         const recoveryValue = config.stamina_recovery_value
-        const recoverySeconds = config.stamina_recovery_seconds
         const maxOverflow = config.max_stamina_overflow
 
-        // Compute real-time stamina using client formula
-        const staminaHealTimeSec = player.staminaHealTime.getTime() / 1000
-        const nowSec = Math.floor(Date.now() / 1000)
-        const elapsed = (nowSec - staminaHealTimeSec) / recoverySeconds
-        const currentStamina = Math.min(Math.max(0, player.stamina + Math.floor(elapsed)), maxOverflow)
+        const currentStamina = computeRealTimeStamina(player)
 
         // Already at max
         if (currentStamina >= maxOverflow) {
@@ -574,11 +502,12 @@ const routes = async (fastify: FastifyInstance) => {
         // Calculate recovery amount (capped at overflow)
         const afterStamina = Math.min(currentStamina + recoveryValue, maxOverflow)
         const actualRecovery = afterStamina - currentStamina
+        const recoveryTime = new Date()
 
         updatePlayerSync({
             id: playerId,
             stamina: afterStamina,
-            staminaHealTime: new Date(),
+            staminaHealTime: recoveryTime,
             freeVmoney: freeVmoney - recoveryCost
         })
 
@@ -590,47 +519,245 @@ const routes = async (fastify: FastifyInstance) => {
             "data": {
                 "user_info": {
                     "stamina": afterStamina,
-                    "stamina_heal_time": getServerTime(),
+                    "stamina_heal_time": realToVirtual(recoveryTime),
                     "free_vmoney": freeVmoney - recoveryCost
-                }
+                },
+                "mail_arrived": getMailArrivedSync(playerId)
             }
         })
     })
 
-    // bulk_buy — stub, returns empty (TODO: implement multi-item purchase)
     fastify.post("/bulk_buy", async (request: FastifyRequest, reply: FastifyReply) => {
-        const body = request.body as any
+        const body = request.body as BulkBuyBody
         const viewerId = body.viewer_id
-        if (!viewerId || isNaN(viewerId)) return reply.status(400).send({
+        const shopType = body.shop_type
+        if (!Number.isSafeInteger(viewerId) || viewerId <= 0
+            || (shopType !== ShopType.EVENT_ITEM && shopType !== ShopType.BOSS_COIN)
+            || body.buy_item_list === null
+            || typeof body.buy_item_list !== "object"
+            || Array.isArray(body.buy_item_list)) return reply.status(400).send({
             "error": "Bad Request", "message": "Invalid request body."
         })
+
+        const rawEntries = Object.entries(body.buy_item_list)
+        if (rawEntries.length === 0) return reply.status(400).send({
+            "error": "Bad Request", "message": "Bulk purchase must contain at least one item."
+        })
+
+        const viewerIdSession = await getSession(viewerId.toString())
+        if (!viewerIdSession) return reply.status(400).send({
+            "error": "Bad Request", "message": "Invalid viewer id."
+        })
+        const playerId = resolvePlayerIdSync(viewerIdSession.accountId)
+        if (playerId === null) return reply.status(500).send({
+            "error": "Internal Server Error", "message": "No players bound to account."
+        })
+
+        const purchases: Array<{ shopItemId: number, purchaseAmount: number, shopItem: ShopItem }> = []
+        const campaignLineups = getPlayerShopCampaignLineupsSync(playerId)
+        try {
+            for (const [shopItemIdText, rawAmount] of rawEntries) {
+                if (!/^[1-9]\d*$/.test(shopItemIdText)) throw new ShopPurchaseError("Invalid shop item id.")
+                const shopItemId = Number(shopItemIdText)
+                if (!Number.isSafeInteger(shopItemId)) throw new ShopPurchaseError("Invalid shop item id.")
+                const purchaseAmount = validateShopPurchaseAmount(rawAmount)
+                const shopItem = getShopItemSync(shopType, shopItemId)
+                if (shopItem === null) throw new ShopPurchaseError("Shop item with specified id does not exist.")
+                if (!isShopItemVisibleForCampaign(
+                    shopItem,
+                    shopType,
+                    campaignLineups,
+                )) throw new ShopPurchaseError("Shop campaign lineup is not selected.")
+                purchases.push({ shopItemId, purchaseAmount, shopItem })
+            }
+        } catch (error) {
+            if (error instanceof ShopPurchaseError) return reply.status(400).send({
+                "error": "Bad Request", "message": error.message,
+            })
+            throw error
+        }
+
+        let purchaseResult
+        try {
+            purchaseResult = executeGenericShopBatchPurchaseSync({
+                playerId,
+                shopType,
+                purchases,
+                nowMs: getServerTime() * 1000,
+                enforcePeriod: shopType === ShopType.EVENT_ITEM,
+            }, {
+                transaction: operation => getDb().transaction(operation)(),
+                getPlayer: getPlayerSync,
+                updatePlayer: nextPlayer => updatePlayerSync(nextPlayer),
+                getItem: (id, itemId) => getPlayerItemSync(id, itemId) ?? 0,
+                setItem: updatePlayerItemSync,
+                getPurchaseCounts: getPlayerShopPurchaseCountsByTypeSync,
+                addPurchaseCounts: addPlayerShopPurchaseCountsByTypeSync,
+                recordManaSpent: incrementActiveMissionUsedManaCountSync,
+                grantRewards: givePlayerRewardsSync,
+            })
+        } catch (error) {
+            if (error instanceof ShopPeriodError) {
+                reply.header("content-type", "application/x-msgpack")
+                return reply.status(200).send({
+                    "data_headers": generateDataHeaders({
+                        viewer_id: viewerId,
+                        result_code: error.resultCode,
+                    }),
+                    "data": {},
+                })
+            }
+            if (error instanceof ShopPurchaseError) return reply.status(400).send({
+                "error": "Bad Request", "message": error.message,
+            })
+            throw error
+        }
+
+        const afterPlayer = purchaseResult.player
+        const rewardResult = purchaseResult.rewardResult
+        const characterList = reconcileAwakeUnlockCharacterList(
+            playerId,
+            rewardResult.character_list as Record<string, unknown>[],
+        )
         reply.header("content-type", "application/x-msgpack")
         return reply.status(200).send({
             "data_headers": generateDataHeaders({ viewer_id: viewerId }),
-            "data": {}
+            "data": {
+                "user_info": {
+                    "free_vmoney": afterPlayer.freeVmoney,
+                    "free_mana": afterPlayer.freeMana,
+                    "bond_token": afterPlayer.bondToken,
+                    "exp_pool": afterPlayer.expPool,
+                },
+                "character_list": characterList,
+                "equipment_list": rewardResult.equipment_list,
+                "item_list": purchaseResult.itemList,
+                "mail_arrived": getMailArrivedSync(playerId),
+            }
         })
     })
 
-    // get_campaign_lineup_id — stub
     fastify.post("/get_campaign_lineup_id", async (request: FastifyRequest, reply: FastifyReply) => {
-        const body = request.body as any
+        const body = request.body as {
+            viewer_id?: number
+            shop_type?: number
+            campaign_id?: number
+        }
         const viewerId = body.viewer_id
-        if (!viewerId || isNaN(viewerId)) return reply.status(400).send({
+        const shopType = body.shop_type
+        const campaignId = body.campaign_id
+        if (!Number.isSafeInteger(viewerId) || viewerId! <= 0
+            || (shopType !== ShopType.EVENT_ITEM && shopType !== ShopType.BOSS_COIN)
+            || !Number.isSafeInteger(campaignId) || campaignId! <= 0) {
+            return reply.status(400).send({
             "error": "Bad Request", "message": "Invalid request body."
+            })
+        }
+        const session = await getSession(String(viewerId))
+        if (!session) return reply.status(400).send({
+            "error": "Bad Request", "message": "Invalid viewer id."
         })
+        const playerId = resolvePlayerIdSync(session.accountId)
+        if (playerId === null) return reply.status(500).send({
+            "error": "Internal Server Error", "message": "No players bound to account."
+        })
+        try {
+            requireAvailableShopCampaign(
+                getShopSelectItemCampaignsSync(),
+                shopType,
+                campaignId!,
+                null,
+                getServerTime() * 1000,
+            )
+        } catch (error) {
+            if (error instanceof ShopCampaignPeriodError) {
+                reply.header("content-type", "application/x-msgpack")
+                return reply.status(200).send({
+                    "data_headers": generateDataHeaders({
+                        viewer_id: viewerId,
+                        result_code: error.resultCode,
+                    }),
+                    "data": {},
+                })
+            }
+            if (error instanceof ShopCampaignValidationError) return reply.status(400).send({
+                "error": "Bad Request", "message": error.message,
+            })
+            throw error
+        }
         reply.header("content-type", "application/x-msgpack")
         return reply.status(200).send({
             "data_headers": generateDataHeaders({ viewer_id: viewerId }),
-            "data": { "lineup_id": null }
+            "data": {
+                "lineup_id": getPlayerShopCampaignLineupSync(playerId, shopType, campaignId!),
+            }
         })
     })
 
-    // set_campaign_lineup_id — stub
     fastify.post("/set_campaign_lineup_id", async (request: FastifyRequest, reply: FastifyReply) => {
-        const body = request.body as any
+        const body = request.body as {
+            viewer_id?: number
+            shop_type?: number
+            campaign_id?: number
+            lineup_id?: number
+        }
         const viewerId = body.viewer_id
-        if (!viewerId || isNaN(viewerId)) return reply.status(400).send({
+        const shopType = body.shop_type
+        const campaignId = body.campaign_id
+        const lineupId = body.lineup_id
+        if (!Number.isSafeInteger(viewerId) || viewerId! <= 0
+            || (shopType !== ShopType.EVENT_ITEM && shopType !== ShopType.BOSS_COIN)
+            || !Number.isSafeInteger(campaignId) || campaignId! <= 0
+            || !Number.isSafeInteger(lineupId) || lineupId! <= 0) {
+            return reply.status(400).send({
             "error": "Bad Request", "message": "Invalid request body."
+            })
+        }
+        const session = await getSession(String(viewerId))
+        if (!session) return reply.status(400).send({
+            "error": "Bad Request", "message": "Invalid viewer id."
+        })
+        const playerId = resolvePlayerIdSync(session.accountId)
+        if (playerId === null) return reply.status(500).send({
+            "error": "Internal Server Error", "message": "No players bound to account."
+        })
+        try {
+            requireAvailableShopCampaign(
+                getShopSelectItemCampaignsSync(),
+                shopType,
+                campaignId!,
+                lineupId!,
+                getServerTime() * 1000,
+            )
+        } catch (error) {
+            if (error instanceof ShopCampaignPeriodError) {
+                reply.header("content-type", "application/x-msgpack")
+                return reply.status(200).send({
+                    "data_headers": generateDataHeaders({
+                        viewer_id: viewerId,
+                        result_code: error.resultCode,
+                    }),
+                    "data": {},
+                })
+            }
+            if (error instanceof ShopCampaignValidationError) return reply.status(400).send({
+                "error": "Bad Request", "message": error.message,
+            })
+            throw error
+        }
+        const selectedAt = new Date(getServerTime() * 1000)
+        const selectionResult = getDb().transaction(() => (
+            selectPlayerShopCampaignLineupSync(
+                playerId,
+                shopType,
+                campaignId!,
+                lineupId!,
+                selectedAt,
+            )
+        ))()
+        if (selectionResult === "conflict") return reply.status(400).send({
+            "error": "Bad Request",
+            "message": "Shop campaign lineup has already been selected."
         })
         reply.header("content-type", "application/x-msgpack")
         return reply.status(200).send({

@@ -150,7 +150,7 @@ export function getAccountPlayers(
  * @param account An Account object that doesn't include its id, firstLoginTime, lastLoginTime, nor regTime.
  * @returns The Account that was inserted into the database.
  */
-function insertAccountSync(
+export function insertAccountSync(
     account: Omit<Account, "id" | "firstLoginTime" | "regTime" | "lastLoginTime">
 ): Account {
     const db = getDb();

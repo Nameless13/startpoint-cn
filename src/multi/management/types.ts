@@ -1,0 +1,63 @@
+import type { AdminMultiStatus } from "../../lib/admin-multi-status"
+import type { CoordinatorResult } from "../coordinator/contracts"
+import type { MultiHubControlStatus } from "../hub/control-routes"
+import type {
+    IssuedMultiHubCredential,
+    MultiHubCredential,
+    MultiHubCredentialStore,
+} from "../hub/credential-store"
+import type { MultiRuntimeAuthenticationDiagnostics } from "../runtime/service"
+
+export type MultiManagementMode = "embedded" | "host" | "client"
+
+export type MultiProbeState =
+    | "ready"
+    | "degraded"
+    | "unavailable"
+    | "not_applicable"
+
+export const CLIENT_MULTI_MANAGEMENT_UNAVAILABLE =
+    "CLIENT_MULTI_MANAGEMENT_UNAVAILABLE" as const
+
+export type MultiManagementErrorCode = typeof CLIENT_MULTI_MANAGEMENT_UNAVAILABLE
+
+export interface MultiProbeResult {
+    readonly state: MultiProbeState
+    readonly checkedAt: string | null
+}
+
+export interface MultiAuthenticationCredentialHint {
+    readonly label: string
+    readonly shortId: string
+}
+
+export interface MultiAuthenticationRejectionSummary {
+    readonly timestamp: string
+    readonly reason: "malformed" | "unknown" | "revoked"
+    readonly credential: MultiAuthenticationCredentialHint | null
+}
+
+export interface MultiAuthenticationDiagnostics {
+    readonly mode: MultiManagementMode
+    readonly clientState: "authentication_rejected" | null
+    readonly rejections: readonly MultiAuthenticationRejectionSummary[]
+}
+
+export interface MultiManagementDependencies {
+    readonly mode: MultiManagementMode
+    readonly credentials: Pick<MultiHubCredentialStore, "create" | "list" | "revoke">
+    readonly getStatus: () => Promise<AdminMultiStatus> | AdminMultiStatus
+    readonly probe: () => Promise<CoordinatorResult<MultiHubControlStatus>>
+        | CoordinatorResult<MultiHubControlStatus>
+    readonly getAuthenticationDiagnostics: () => MultiRuntimeAuthenticationDiagnostics
+    readonly now?: () => number
+}
+
+export interface MultiManagementServiceContract {
+    createCredential(label: string): IssuedMultiHubCredential
+    listCredentials(): readonly MultiHubCredential[]
+    revokeCredential(credentialId: string): MultiHubCredential
+    getStatus(): Promise<AdminMultiStatus>
+    probeHub(): Promise<MultiProbeResult>
+    getAuthenticationDiagnostics(): MultiAuthenticationDiagnostics
+}

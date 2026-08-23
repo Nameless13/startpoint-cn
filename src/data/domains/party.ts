@@ -1,6 +1,7 @@
 import { getDb } from "../db";
 import { PartyCategory, PlayerParty, PlayerPartyGroup, RawPlayerParty, RawPlayerPartyGroup } from "../types";
-import { deserializeBoolean, serializeBoolean } from "../utils";
+import { deserializeBoolean, serializeBoolean } from "../utils/primitives";
+import { insertMissingPartyGroupListSync } from "../../lib/party-group-persistence";
 
 export function getPlayerPartyGroupListSync(
     playerId: number,
@@ -60,10 +61,33 @@ export function getPlayerPartyGroupListSync(
     return final
 }
 
+export function getPlayerPartyLoadoutSync(
+    playerId: number,
+    groupId: number,
+    slot: number,
+    category: PartyCategory,
+): Pick<PlayerParty, "equipmentIds" | "abilitySoulIds"> | null {
+    const raw = getDb().prepare(`
+    SELECT equipment_1, equipment_2, equipment_3,
+        ability_soul_1, ability_soul_2, ability_soul_3
+    FROM players_parties
+    WHERE player_id = ? AND group_id = ? AND slot = ? AND category = ?
+    `).get(playerId, groupId, slot, category) as Pick<
+        RawPlayerParty,
+        "equipment_1" | "equipment_2" | "equipment_3"
+            | "ability_soul_1" | "ability_soul_2" | "ability_soul_3"
+    > | undefined
+    if (!raw) return null
+    return {
+        equipmentIds: [raw.equipment_1, raw.equipment_2, raw.equipment_3],
+        abilitySoulIds: [raw.ability_soul_1, raw.ability_soul_2, raw.ability_soul_3],
+    }
+}
+
 function insertPlayerPartySync(playerId: number, slot: number | string, groupId: number | string, party: PlayerParty) {
     const db = getDb();
     db.prepare(`
-    INSERT INTO players_parties (slot, name, character_id_1, character_id_2, character_id_3, 
+    INSERT INTO players_parties (slot, name, character_id_1, character_id_2, character_id_3,
         unison_character_1, unison_character_2, unison_character_3, equipment_1, equipment_2,
         equipment_3, ability_soul_1, ability_soul_2, ability_soul_3, edited, player_id, group_id, category,
         current_battle_power, before_battle_power)
@@ -98,6 +122,13 @@ export function insertPlayerPartyGroupListSync(playerId: number, groups: Record<
             insertPlayerPartyGroupSync(playerId, groupId, group)
         }
     })()
+}
+
+export function ensurePlayerPartyGroupListSync(
+    playerId: number,
+    groups: Record<string, PlayerPartyGroup>,
+) {
+    insertMissingPartyGroupListSync(getDb(), playerId, groups)
 }
 
 export function updatePlayerPartySync(playerId: number, slot: number, party: PlayerParty, groupId: number = 1) {
@@ -137,10 +168,28 @@ export function updatePlayerPartySync(playerId: number, slot: number, party: Pla
 export function updatePlayerPartyGroupSync(
     playerId: number, groupId: number, colorId: number,
     category: PartyCategory = PartyCategory.NORMAL
-) {
+): boolean {
     const db = getDb();
-    db.prepare(`
+    const result = db.prepare(`
     UPDATE players_party_groups SET color_id = ?
     WHERE id = ? AND player_id = ? AND category = ?
     `).run(colorId, groupId, playerId, category)
+    return result.changes === 1
+}
+
+/**
+ * Count how many parties currently have the given ability soul equipped.
+ * Used by /item/sell to prevent selling souls that are in use.
+ */
+export function countAbilitySoulUsedInPartiesSync(
+    playerId: number,
+    abilitySoulId: number
+): number {
+    const db = getDb()
+    const row = db.prepare(`
+    SELECT COUNT(*) AS cnt FROM players_parties
+    WHERE player_id = ?
+    AND (ability_soul_1 = ? OR ability_soul_2 = ? OR ability_soul_3 = ?)
+    `).get(playerId, abilitySoulId, abilitySoulId, abilitySoulId) as { cnt: number } | undefined
+    return row?.cnt ?? 0
 }

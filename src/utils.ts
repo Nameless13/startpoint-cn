@@ -31,6 +31,11 @@ export function getServerDate(): Date {
     return timeOffset !== null ? new Date(Date.now() + timeOffset) : new Date();
 }
 
+/** Convert a real Date (as stored in DB) to virtual epoch seconds for client. */
+export function realToVirtual(date: Date): number {
+    return Math.floor((date.getTime() + (timeOffset ?? 0)) / 1000);
+}
+
 /**
  * Sets a custom server time from an absolute date.
  * The offset (target - real time) is computed and stored.
@@ -54,21 +59,6 @@ export function setServerTimeOffset(offset: number | null) {
  */
 export function getTimeOffset(): number | null {
     return timeOffset;
-}
-
-/**
- * Returns server time for a specific player.
- * Uses player.time_offset if set, otherwise falls back to global server offset.
- */
-export function getServerTimeForPlayer(playerId?: number): number {
-    if (playerId) {
-        try {
-            const { getPlayerTimeOffsetSync } = require("./data/activeAccount");
-            const offset = getPlayerTimeOffsetSync(playerId);
-            if (offset !== null) return Math.floor((Date.now() + offset) / 1000);
-        } catch {}
-    }
-    return getServerTime();
 }
 
 /**
@@ -108,6 +98,7 @@ export function generateViewerId(): number {
 
 export interface DataHeaders {
     force_update?: boolean
+    force_news?: number
     asset_update?: boolean
     short_udid?: number
     viewer_id?: number

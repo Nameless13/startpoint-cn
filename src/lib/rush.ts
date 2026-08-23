@@ -1,6 +1,20 @@
 import { Player, PlayerRushEvent, RushEventBattleType, UserRushEventEndlessBattleMyRankingPartyMemberListItem, UserRushEventEndlessBattleRanking, UserRushEventPlayedPartyList } from "../data/types";
-import { getPlayerIdFromRushEventEndlessRankSync, getPlayerRushEventPlayedPartiesSync, getPlayerRushEventSync, getPlayerSync, serializePlayerRushEventPlayedParty } from "../data/wdfpData";
+import { getPlayerIdFromRushEventEndlessRankSync, getPlayerRushEventPlayedPartiesSync, getPlayerRushEventSync, serializePlayerRushEventPlayedParty } from "../data/domains/rushEvent"
+import { getPlayerSync } from "../data/domains/player"
 import { SerializedPlayerRushEventPlayedPartyList, SerializedPlayerRushEventPlayedParties } from "./types";
+import { dispatchModeRushParties } from "../modes/registry";
+import { createModeHost } from "../modes/loader";
+import type { ModeHost } from "../modes/registry";
+
+// Built on first use, not at module load: the mode host pulls in asset and
+// domain helpers, and constructing it during module initialization would
+// close an import cycle through this file.
+let rushModeHost: ModeHost | null = null;
+
+function modeHost(): ModeHost {
+    if (rushModeHost === null) rushModeHost = createModeHost(message => console.log(message));
+    return rushModeHost;
+}
 
 /**
  * Gets all of a player's played parties, serializes them into client formant, and organizes them by their RushEventBattleType.
@@ -24,7 +38,17 @@ export function getSerializedPlayerRushEventPlayedPartiesSync(
         const record = party.battleType === RushEventBattleType.FOLDER ? rushBattlePlayedPartyList : endlessBattlePlayedPartyList;
         record[party.round] = serializePlayerRushEventPlayedParty(party)
     }
-    
+
+    // Mode seam: installed mode modules may rewrite the played-party records
+    // (client character locking is derived purely from these lists). No
+    // modules → no-op.
+    dispatchModeRushParties({
+        playerId,
+        eventId,
+        folderParties: rushBattlePlayedPartyList as unknown as Record<number, Record<string, unknown>>,
+        endlessParties: endlessBattlePlayedPartyList as unknown as Record<number, Record<string, unknown>>,
+    }, modeHost())
+
     // return parties
     return {
         folderParties: rushBattlePlayedPartyList,

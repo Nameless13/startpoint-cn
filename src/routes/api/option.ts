@@ -1,5 +1,6 @@
 import { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import { getSession, updatePlayerOptionsSync } from "../../data/wdfpData";
+import { getSession } from "../../data/domains/session"
+import { updatePlayerOptionsSync } from "../../data/domains/option"
 import { resolvePlayerIdSync } from "../../data/activeAccount";
 import { generateDataHeaders } from "../../utils";
 
