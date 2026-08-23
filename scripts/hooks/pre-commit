@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# pre-commit:提交卫生检查(由 git config core.hooksPath=scripts/hooks 启用)
+# git 以仓库根为工作目录运行钩子。
+exec bash scripts/check-hygiene.sh

@@ -1,0 +1,25 @@
+node_modules
+out
+mitm_redirect
+.database
+scripts/in
+.cdn
+.misc
+web/public/tailwind.css
+scripts/__pycache__
+dist
+build
+.coredns/coredns.exe
+.mitmproxy/mitmproxy.exe
+.mitmproxy/mitmweb.exe
+.mitmproxy/mitmdump.exe
+.unzip-temp
+.cn-cdn.env
+web/public/comic/
+
+# Local env (commit .env.example only)
+.env
+
+# mitmproxy traffic captures (may contain real tokens/PII — local only)
+docs/cn-traffic/
+
