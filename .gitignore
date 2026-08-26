@@ -77,3 +77,6 @@ hs_err_pid*.log
 
 # GUI 写入的本地运行时调参(领域数值倍率,构建端缺省容忍)
 mod-tools/rogue_field_tuning.json
+
+# 本地服务器切换脚本(不提交)
+switch-server.sh
