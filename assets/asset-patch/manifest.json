@@ -255,8 +255,8 @@
     },
     {
      "name": "pinball-1.4.277-1.4.312-2-localsync0806.zip",
-     "size": 3602526,
-     "sha256": "e32877b4af4f173cdc84e77b74f57f691f141b6e8fce748551fcf3cb62c50bbd"
+     "size": 3744754,
+     "sha256": "82eb674e75a402a3229a172f0faa4913bce8d3bc36d8aa273f6dc0782345d335"
     },
     {
      "name": "pinball-1.4.277-1.4.312-3-localsync0806.zip",
@@ -305,8 +305,8 @@
    "archive_integrity": [
     {
      "name": "pinball-1.4.311-1.4.312-1-localsync0806.zip",
-     "size": 2929710,
-     "sha256": "958566d04eb5351b0ea00a97ca18b04bea7cc61edfa4e95e44bbd783506cfc76"
+     "size": 2920334,
+     "sha256": "7c0a8aca4e094b2cdc42d3f0f0ed8fa8b576d5f030d423bcc82a0764338bb9f5"
     }
    ],
    "created_at": "2026-08-06"
@@ -325,8 +325,8 @@
    "archive_integrity": [
     {
      "name": "pinball-1.4.312-1.4.318-1-fixups0807.zip",
-     "size": 453606,
-     "sha256": "236d27be1a2f95c021ee7a8ac355f972b4719f3c777dafced0ba729b18b8a701"
+     "size": 629129,
+     "sha256": "36339ec3221b21c35a469e9e4badb03b827f9e107c79561dae4ba34fe1f9b559"
     }
    ],
    "created_at": "2026-08-07"
@@ -356,6 +356,26 @@
     }
    ],
    "created_at": "2026-08-07"
+  },
+  {
+   "id": "c3502-multiball-trigger-fix",
+   "type": "patch",
+   "name": "C3502 多球触发器修复",
+   "description": "修复 leader_ability(27处) 和 ability(104处) 表中多球触发器的 trigger_puller=Leader 问题。错误码 C3502 'マルチボールに指定できないTriggerが指定されています。(Leader)' 的根因是部分多球类触发器的 trigger_puller 被设为 1(Leader) 而非 9/10(OneOfMultiball)，以及部分持续型 KIND 被错放在瞬时触发器位置。本补丁直接投递修复后的 ability 和 leader_ability 字节。",
+   "version": "1.4.324",
+   "depends_on": "1.4.323",
+   "enabled": true,
+   "chain": [
+    "pinball-1.4.323-1.4.324-1-c3502fix0827.zip"
+   ],
+   "archive_integrity": [
+    {
+     "name": "pinball-1.4.323-1.4.324-1-c3502fix0827.zip",
+     "size": 176199,
+     "sha256": "47a846ec0cbc0469fd80c8bcffd4ea4c789c120cb21ee2d05ddaa4a5ad145316"
+    }
+   ],
+   "created_at": "2026-08-27"
   }
  ]
 }

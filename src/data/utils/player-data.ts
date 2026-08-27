@@ -42,7 +42,7 @@ export function getDefaultPlayerData(): Omit<Player, 'id'> {
         rankPoint: 0,
         starCrumb: 2,
         bondToken: 10,
-        expPool: 0,
+        expPool: 2272000,
         expPooledTime: now,
         leaderCharacterId: 1,
         partySlot: 1,
