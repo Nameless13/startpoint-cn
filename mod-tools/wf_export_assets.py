@@ -195,7 +195,7 @@ def collect(root: Path, stores):
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--base", help="下载包 production 目录(不填自动查找)")
-    ap.add_argument("--bundle", default=r"D:\WF\wf-bundle\production")
+    ap.add_argument("--bundle", default=None, help="Bundle production 目录(不填自动查找)")
     ap.add_argument("--out", default=r"D:\WF\wf-decrypted")
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--workers", type=int, default=8)
@@ -210,9 +210,27 @@ def main() -> None:
 
     files = []
     if not args.only_bundle:
-        base = Path(args.base) if args.base else core.find_world_upload(mod_dir.parent).parent
+        if args.base:
+            base = Path(args.base)
+        else:
+            upload = core.find_world_upload(mod_dir.parent)
+            if upload is not None:
+                base = upload.parent
+            else:
+                local_store = mod_dir.parent / "wf-store-fresh" / "production"
+                if local_store.exists():
+                    base = local_store
+                else:
+                    ap.error(
+                        "找不到下载包 production 目录；请使用 "
+                        "--base <production目录>，例如 "
+                        "--base D:\\Documents\\startpoint_cn\\wf-store-fresh\\production"
+                    )
         files += collect(base, DL_STORES)
-    bundle_root = Path(args.bundle)
+    if args.bundle:
+        bundle_root = Path(args.bundle)
+    else:
+        bundle_root = mod_dir.parent / "wf-bundle" / "production"
     if bundle_root.exists():
         files += collect(bundle_root, BUNDLE_STORES)
     if args.limit:

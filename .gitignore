@@ -104,3 +104,8 @@ mod-tools/export_orderedmap_to_json_v2.py
 mod-tools/export_orderedmap_to_json_v3.py
 mod-tools/export_orderedmap_to_json_v4.py
 mod-tools/export_orderedmap_to_json_v5.py
+
+flutter_worldflipper/assets/exported/
+flutter_worldflipper/assets/game/
+flutter_worldflipper/build/
+flutter_worldflipper/.dart_tool/
