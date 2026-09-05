@@ -8,7 +8,7 @@
     "build:server": "tsc && node scripts/write-build-stamp.mjs",
     "typecheck": "tsc --noEmit",
     "test:node": "npm run build:server && node scripts/run-node-tests.mjs",
-    "test:python": "python -m unittest discover -s mod-tools/tests -p \"test_*.py\"",
+    "test:python": "python3 -m unittest discover -s mod-tools/tests -p \"test_*.py\"",
     "verify:local-release": "python -X utf8 mod-tools/wf_local_release_verify.py",
     "css": "npx tailwindcss -i ./src/input.css -o ./web/public/tailwind.css",
     "css:watch": "npx tailwindcss -i ./src/input.css -o ./web/public/tailwind.css --watch --poll",
