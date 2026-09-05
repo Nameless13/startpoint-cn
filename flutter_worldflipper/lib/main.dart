@@ -246,6 +246,51 @@ class _CharacterHomePageState extends State<CharacterHomePage> {
   late final Future<CharacterRepository> _repository = CharacterRepository.load();
   String _search = '';
   int? _element;
+  List<OwnedCharacter>? _ownedCharacters;
+  bool _showLocked = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadOwnedCharacters();
+  }
+
+  Future<void> _loadOwnedCharacters() async {
+    try {
+      final ownedList = await AuthService().getOwnedCharacters();
+      debugPrint('获取到已拥有角色列表，共 ${ownedList.length} 个');
+      for (var i = 0; i < ownedList.length && i < 15; i++) {
+        final c = ownedList[i];
+        debugPrint('  [$i] id=${c.id} (type: ${c.id.runtimeType}), entryCount=${c.entryCount}');
+      }
+      if (mounted) {
+        setState(() {
+          _ownedCharacters = ownedList;
+        });
+      }
+    } catch (e) {
+      debugPrint('获取已拥有角色列表失败: $e');
+      if (mounted) {
+        setState(() {
+          _ownedCharacters = [];
+        });
+      }
+    }
+  }
+
+  /// 获取角色的拥有信息（用于显示重复数等）
+  OwnedCharacter? _getOwnedInfo(String characterId) {
+    try {
+      final idAsInt = int.tryParse(characterId);
+      if (idAsInt == null) return null;
+      return _ownedCharacters!.firstWhere(
+        (c) => c.id == idAsInt,
+      );
+    } catch (e) {
+      debugPrint('_getOwnedInfo 错误: $e');
+      return null;
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -270,9 +315,33 @@ class _CharacterHomePageState extends State<CharacterHomePage> {
             return const Center(child: CircularProgressIndicator());
           }
           final characters = snapshot.data!.characters.where(_matches).toList();
+          final ownedCount = _ownedCharacters?.length ?? 0;
+          final totalCount = characters.length;
           return Column(
             children: [
               if (widget.player != null) _PlayerStatusBar(player: widget.player!),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 12, 20, 8),
+                child: Row(
+                  children: [
+                    const Text('角色列表', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                    const Spacer(),
+                    if (_ownedCharacters != null)
+                      Text(
+                        '已拥有 $ownedCount / $totalCount',
+                        style: const TextStyle(fontSize: 12, color: Colors.grey),
+                      ),
+                    const SizedBox(width: 8),
+                    Switch(
+                      value: _showLocked,
+                      onChanged: (value) => setState(() => _showLocked = value),
+                      trackColor: WidgetStateProperty.all(Colors.grey),
+                    ),
+                    const SizedBox(width: 4),
+                    const Text('显示未拥有'),
+                  ],
+                ),
+              ),
               _buildHeader(snapshot.data!.characters.length, characters.length),
               Expanded(
                 child: characters.isEmpty
@@ -286,10 +355,21 @@ class _CharacterHomePageState extends State<CharacterHomePage> {
                           mainAxisSpacing: 12,
                         ),
                         itemCount: characters.length,
-                        itemBuilder: (context, index) => _CharacterCard(
-                          character: characters[index],
-                          onTap: () => _showDetails(context, snapshot.data!, characters[index]),
-                        ),
+                        itemBuilder: (context, index) {
+                          final character = characters[index];
+                          debugPrint('角色 ${character.id} (${character.codeName}) 检查中...');
+                          final ownedInfo = _getOwnedInfo(character.id);
+                          final isOwned = ownedInfo != null;
+                          if (index < 5) {
+                            debugPrint('  [前5个] character.id=${character.id}, isOwned=$isOwned');
+                          }
+                          return _CharacterCard(
+                            character: character,
+                            isOwned: isOwned,
+                            ownedInfo: ownedInfo,
+                            onTap: isOwned ? () => _showDetails(context, snapshot.data!, character) : null,
+                          );
+                        },
                       ),
               ),
             ],
@@ -484,40 +564,111 @@ class _PlayerStatusBar extends StatelessWidget {
 }
 
 class _CharacterCard extends StatelessWidget {
-  const _CharacterCard({required this.character, required this.onTap});
+  const _CharacterCard({
+    required this.character,
+    required this.isOwned,
+    required this.ownedInfo,
+    required this.onTap,
+  });
 
   final CharacterRecord character;
-  final VoidCallback onTap;
+  final bool isOwned;
+  final OwnedCharacter? ownedInfo;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
     return Card(
       clipBehavior: Clip.antiAlias,
+      color: isOwned ? null : Colors.grey.withValues(alpha: 0.3),
       child: InkWell(
         onTap: onTap,
-        child: Row(
+        child: Stack(
           children: [
-            Container(width: 9, color: _elementColor(character.element)),
-            Padding(
-              padding: const EdgeInsets.all(12),
-              child: CharacterAvatar(character: character, size: 76),
+            Row(
+              children: [
+                Container(width: 9, color: isOwned ? _elementColor(character.element) : Colors.grey),
+                Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: CharacterAvatar(character: character, size: 76),
+                ),
+                Expanded(
+                  child: Padding(
+                    padding: const EdgeInsets.all(15),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                character.displayName,
+                                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                                  color: isOwned ? null : Colors.grey,
+                                ),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                            if (isOwned && ownedInfo!.entryCount > 1)
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                margin: const EdgeInsets.only(left: 4),
+                                decoration: BoxDecoration(
+                                  color: Colors.orange.shade100,
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: Text(
+                                  'x${ownedInfo!.entryCount}',
+                                  style: const TextStyle(fontSize: 11, color: Colors.orange),
+                                ),
+                              ),
+                          ],
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          character.englishName,
+                          style: const TextStyle(fontSize: 12, color: Colors.grey),
+                        ),
+                        Text(
+                          character.title.isEmpty ? character.id : character.title,
+                          style: const TextStyle(fontSize: 12, color: Colors.grey),
+                        ),
+                        if (!isOwned) ...[
+                          const SizedBox(height: 8),
+                          const Row(
+                            children: [
+                              Icon(Icons.lock_outline, size: 14, color: Colors.grey),
+                              SizedBox(width: 4),
+                              Text('未获得', style: TextStyle(fontSize: 12, color: Colors.grey)),
+                            ],
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.only(right: 12),
+                  child: isOwned
+                      ? (ownedInfo != null && (ownedInfo!.evolutionLevel > 0 || ownedInfo!.overLimitStep > 0)
+                          ? Text(
+                              '${ownedInfo!.evolutionLevel}.${ownedInfo!.overLimitStep}',
+                              style: const TextStyle(fontSize: 10, color: Colors.grey),
+                            )
+                          : const Icon(Icons.chevron_right, size: 20, color: Colors.grey))
+                      : null,
+                ),
+              ],
             ),
-            Expanded(
-              child: Padding(
-                padding: const EdgeInsets.all(15),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Text(character.displayName, style: Theme.of(context).textTheme.titleMedium),
-                    const SizedBox(height: 8),
-                    Text(character.englishName),
-                    Text(character.title.isEmpty ? character.id : character.title),
-                  ],
+            if (!isOwned)
+              Container(
+                color: Colors.black.withValues(alpha: 0.4),
+                child: const Center(
+                  child: Icon(Icons.lock, color: Colors.white, size: 32),
                 ),
               ),
-            ),
-            const Padding(padding: EdgeInsets.only(right: 12), child: Icon(Icons.chevron_right)),
           ],
         ),
       ),

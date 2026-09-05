@@ -1,11 +1,28 @@
-import 'dart:convert';
-
+﻿import 'dart:convert';
+import 'dart:developer' as developer;
 import 'package:dio/dio.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/player.dart';
 import '../network/dio_client.dart';
+
+/// 玩家拥有的角色数据
+class OwnedCharacter {
+  const OwnedCharacter({
+    required this.id,
+    required this.entryCount,
+    required this.evolutionLevel,
+    required this.overLimitStep,
+    required this.joinTime,
+  });
+
+  final int id;
+  final int entryCount;
+  final int evolutionLevel;
+  final int overLimitStep;
+  final DateTime joinTime;
+}
 
 class AuthService {
   AuthService({Dio? client}) : _client = client ?? DioClient.instance;
@@ -30,7 +47,6 @@ class AuthService {
       await preferences.setString(tokenKey, DioClient.sessionToken!);
       await _savePlayer(preferences, player);
     } on MissingPluginException {
-      // The in-memory token keeps this session usable until a full restart.
     }
     return player;
   }
@@ -41,7 +57,6 @@ class AuthService {
       final preferences = await SharedPreferences.getInstance();
       token = preferences.getString(tokenKey) ?? token;
     } on MissingPluginException {
-      // The plugin becomes available after a full application restart.
     }
     if (token == null || token.isEmpty) return false;
     try {
@@ -57,7 +72,6 @@ class AuthService {
     try {
       preferences = await SharedPreferences.getInstance();
     } on MissingPluginException {
-      // Fetching from the server still works without local cache support.
     }
     final cached = preferences?.getString(playerKey);
     Player? player = cached == null ? null : Player.fromJson(jsonDecode(cached));
@@ -76,6 +90,58 @@ class AuthService {
     return player;
   }
 
+  Future<List<OwnedCharacter>> getOwnedCharacters() async {
+    developer.log('调用 getOwnedCharacters API...');
+    final sessionResponse = await _client.get<Map<String, dynamic>>('/api/v2/game/session');
+    final sessionData = sessionResponse.data ?? const <String, dynamic>{};
+    final playerId = sessionData['playerId'] as int?;
+    
+    if (playerId == null) {
+      developer.log('未获取到 playerId');
+      return [];
+    }
+    
+    developer.log('使用 playerId=$playerId 获取角色详情');
+    
+    final response = await _client.get<Map<String, dynamic>>(
+      '/api/v2/game/player/$playerId/detail',
+    );
+    developer.log('响应状态码: ${response.statusCode}');
+    
+    final data = response.data ?? const <String, dynamic>{};
+    
+    List<dynamic> raw;
+    if (data['characters'] is List) {
+      raw = data['characters'] as List<dynamic>;
+      developer.log('从 characters 字段提取，共 ${raw.length} 个角色');
+    } else {
+      developer.log('未找到 characters 字段，可用字段: ${data.keys}');
+      raw = [];
+    }
+    
+    return raw.map((e) {
+      if (e is Map<String, dynamic>) {
+        final code = e['code'] ?? e['id'];
+        final intId = code is int ? code : int.tryParse(code.toString());
+        if (intId == null) {
+          developer.log('  无效的角色ID: $code');
+          return null;
+        }
+        developer.log('  角色: code=$code, entryCount=${e['entryCount']}');
+        return OwnedCharacter(
+          id: intId,
+          entryCount: e['entryCount'] as int? ?? 1,
+          evolutionLevel: e['evolutionLevel'] as int? ?? 0,
+          overLimitStep: e['overLimitStep'] as int? ?? 0,
+          joinTime: DateTime.tryParse(e['joinTime'] as String? ?? '') ?? DateTime.now(),
+        );
+      } else {
+        developer.log('  意外的角色数据类型: ${e.runtimeType}');
+        return null;
+      }
+    }).whereType<OwnedCharacter>().toList();
+  }
+
   Future<void> logout() async {
     DioClient.sessionToken = null;
     try {
@@ -83,7 +149,6 @@ class AuthService {
       await preferences.remove(tokenKey);
       await preferences.remove(playerKey);
     } on MissingPluginException {
-      // Nothing else is required for an in-memory session.
     }
   }
 
@@ -94,9 +159,7 @@ class AuthService {
 
 class AuthException implements Exception {
   const AuthException(this.code);
-
   final String code;
-
   @override
   String toString() => code;
 }

@@ -95,30 +95,54 @@ class _GachaPageState extends State<GachaPage> {
   Future<void> _draw(BuildContext context, String gachaId, int count) async {
     final service = _service;
     if (service == null) return;
-    final results = await service.drawGacha(gachaId, count: count);
-    if (!context.mounted) return;
-    await showDialog<void>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text(count == 1 ? '单抽结果' : '十连抽结果'),
-        content: SizedBox(
-          width: 440,
-          child: Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              for (final result in results)
-                Chip(
-                  avatar: CircleAvatar(child: Text('${result.character.rarity}')),
-                  label: Text('${result.character.name}  ★${result.character.rarity}'),
-                ),
-            ],
+    final showLoading = count > 1;
+    if (showLoading && context.mounted) {
+      showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => const Center(child: CircularProgressIndicator()),
+      );
+    }
+    try {
+      final results = await service.draw(gachaId, count: count);
+      if (!context.mounted) return;
+      if (showLoading) Navigator.pop(context);
+      await showDialog<void>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Text(count == 1 ? '单抽结果' : '十连抽结果'),
+          content: SizedBox(
+            width: 440,
+            child: Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (final result in results)
+                  Chip(
+                    avatar: CircleAvatar(child: Text('${result.character.rarity}')),
+                    label: Text('${result.character.name}  ★${result.character.rarity}'),
+                  ),
+              ],
+            ),
           ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(context), child: const Text('关闭')),
+          ],
         ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('关闭')),
-        ],
-      ),
-    );
+      );
+    } on GachaException catch (error) {
+      if (!context.mounted) return;
+      if (showLoading) Navigator.pop(context);
+      await showDialog<void>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('抽卡失败'),
+          content: Text(error.toString()),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(context), child: const Text('确定')),
+          ],
+        ),
+      );
+    }
   }
 }
