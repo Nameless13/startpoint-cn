@@ -514,7 +514,11 @@ fastify.register(itemApiPlugin, { prefix: `${apiPrefix}/item` });
 
 // Web management panel
 fastify.register(indexWebPlugin);
-fastify.register(indexWebApiPlugin, { prefix: "/api", adminAuthConfig });
+fastify.register(indexWebApiPlugin, {
+    prefix: "/api",
+    adminAuthConfig,
+    gameAuthJwtSecret: process.env.GAME_AUTH_JWT_SECRET || "",
+});
 fastify.register(seedsWebApiPlugin, { prefix: "/api/seeds" });
 fastify.register(modAdminApiPlugin, { prefix: "/api/mod-admin" });
 

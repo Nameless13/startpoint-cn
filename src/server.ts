@@ -138,7 +138,7 @@ fastify.register(infodeskPlugin, { prefix: "/infodesk" })
 fastify.register(indexWebPlugin, { prefix: "/" })
 
 // web api routes
-fastify.register(indexWebApiPlugin, { prefix: "/api", adminAuthConfig })
+fastify.register(indexWebApiPlugin, { prefix: "/api", adminAuthConfig, gameAuthJwtSecret: process.env.GAME_AUTH_JWT_SECRET || "" })
 
 // web static
 fastify.register(fastifyStatic, {

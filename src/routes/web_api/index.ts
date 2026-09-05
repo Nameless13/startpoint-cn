@@ -6,10 +6,12 @@ import playerApiPlugin from "./player";
 import serverApiPlugin from "./server";
 import mailApiPlugin from "./mail";
 import lookupApiPlugin from "./lookup";
+import gameAuthApiPlugin from "./game-auth";
 
 
 interface WebApiRouteOptions {
     adminAuthConfig: AdminAuthConfig;
+    gameAuthJwtSecret: string;
 }
 
 const routes: FastifyPluginAsync<WebApiRouteOptions> = async (fastify, options) => {
@@ -33,6 +35,10 @@ const routes: FastifyPluginAsync<WebApiRouteOptions> = async (fastify, options) 
     fastify.register(serverApiPlugin, { prefix: "/server" });
     fastify.register(mailApiPlugin, { prefix: "/mail" });
     fastify.register(lookupApiPlugin, { prefix: "/lookup" });
+    fastify.register(gameAuthApiPlugin, {
+        prefix: "/v2/game",
+        jwtSecret: options.gameAuthJwtSecret,
+    });
 };
 
 export default routes;

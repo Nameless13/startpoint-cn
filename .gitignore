@@ -82,3 +82,25 @@ mod-tools/rogue_field_tuning.json
 switch-server.sh
 
 wf-store-fresh/
+
+# --- 导出资产数据(已解包的 JSON，本地开发用，不提交)---
+assets_exported/
+assets_exported_v6/
+data/starpoint.db
+
+# --- 本地工具/脚本(不提交)---
+Icon.icns
+soleditor.bat
+translator.sh
+ffdec/
+com.jpexs.decompiler.flash.metainfo.xml
+
+# --- AI 对话文档(本地工作区,不提交)---
+.trae/
+
+# --- mod-tools 迭代版本(只保留最新版)---
+mod-tools/export_orderedmap_to_json.py
+mod-tools/export_orderedmap_to_json_v2.py
+mod-tools/export_orderedmap_to_json_v3.py
+mod-tools/export_orderedmap_to_json_v4.py
+mod-tools/export_orderedmap_to_json_v5.py

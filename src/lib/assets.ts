@@ -72,6 +72,7 @@ const MOD_ASSET_FILES = [
     "equipment_enhancement_shop.json",
     "rogue_event.json",
     "rush_event_quest_folder.json",
+    "gacha.json",
 ] as const;
 
 let characters: any;

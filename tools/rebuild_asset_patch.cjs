@@ -39,8 +39,8 @@ function buildFeatureContentPatch(gacha) {
         row: JSON.stringify(value),
     }));
 
-    // Write: production/upload/14/dd5a36...
-    const fp = "orderedmap/gacha/gacha_feature_content.json";
+    // Write: production/upload/c8/79a1b7...
+    const fp = "master/gacha/gacha_feature_content.orderedmap";
     const hash = hashResourcePath(fp);
     const outDir = path.join(PATCH_DIR, "production", "upload", hash.relativePath.split("/")[0]);
     const outFile = path.join(outDir, hash.relativePath.split("/")[1]);
@@ -96,8 +96,8 @@ function buildGachaTablePatch(gacha) {
 
     console.log(`\n  Fixed: ${fixed} banners, Total entries: ${entries.length}`);
 
-    // Write: production/upload/2d/61c787b4c237441691b6a4c4e8b4367f35b889
-    const fp = "orderedmap/gacha/gacha.json";
+    // Write: production/upload/15/83d96a...
+    const fp = "master/gacha/gacha.orderedmap";
     const hash = hashResourcePath(fp);
     const outDir = path.join(PATCH_DIR, "production", "upload", hash.relativePath.split("/")[0]);
     const outFile = path.join(outDir, hash.relativePath.split("/")[1]);
