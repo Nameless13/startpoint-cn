@@ -65,6 +65,22 @@ const fastify = Fastify({
     bodyLimit: 262144  // 256KB — covers /single_battle_quest/finish large battle stats
 });
 
+// CORS support for Flutter web client (development)
+fastify.addHook("onRequest", async (request, reply) => {
+    const origin = request.headers.origin;
+    if (origin) {
+        reply.header("Access-Control-Allow-Origin", origin);
+        reply.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+        reply.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
+        reply.header("Access-Control-Allow-Credentials", "true");
+    }
+    // Handle preflight requests
+    if (request.method === "OPTIONS") {
+        reply.send();
+        return;
+    }
+});
+
 const configuredListenHost = process.env.CN_LISTEN_HOST ?? "127.0.0.1";
 const adminAuthConfig = loadAdminAuthConfig(process.env, configuredListenHost);
 installAdminGuard(fastify, adminAuthConfig);
