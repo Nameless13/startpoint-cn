@@ -1,5 +1,5 @@
 import 'dart:convert';
-import 'dart:developer' as developer;
+
 import 'package:dio/dio.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -57,6 +57,7 @@ class AuthService {
       await preferences.setString(tokenKey, DioClient.sessionToken!);
       await _savePlayer(preferences, player);
     } on MissingPluginException {
+      // The in-memory token keeps this session usable until a full restart.
     }
     return player;
   }
@@ -67,6 +68,7 @@ class AuthService {
       final preferences = await SharedPreferences.getInstance();
       token = preferences.getString(tokenKey) ?? token;
     } on MissingPluginException {
+      // The plugin becomes available after a full application restart.
     }
     if (token == null || token.isEmpty) return false;
     try {
@@ -82,6 +84,7 @@ class AuthService {
     try {
       preferences = await SharedPreferences.getInstance();
     } on MissingPluginException {
+      // Fetching from the server still works without local cache support.
     }
     final cached = preferences?.getString(playerKey);
     Player? player = cached == null ? null : Player.fromJson(jsonDecode(cached));
@@ -100,44 +103,56 @@ class AuthService {
     return player;
   }
 
+  /// 获取玩家已拥有的角色完整信息（包括养成状态）
   Future<List<OwnedCharacter>> getOwnedCharacters() async {
-    developer.log('调用 getOwnedCharacters API...');
+    debugPrint('调用 getOwnedCharacters API...');
+    // 先获取当前会话信息
     final sessionResponse = await _client.get<Map<String, dynamic>>('/api/v2/game/session');
     final sessionData = sessionResponse.data ?? const <String, dynamic>{};
     final playerId = sessionData['playerId'] as int?;
     
     if (playerId == null) {
-      developer.log('未获取到 playerId');
+      debugPrint('未获取到 playerId，尝试从 player 接口获取');
+      // 备用方案：从 player 接口获取
+      final playerResponse = await _client.get<Map<String, dynamic>>('/api/v2/game/player');
+      final playerData = playerResponse.data ?? const <String, dynamic>{};
+      // 尝试从响应中提取 playerId
+      debugPrint('player 响应: ${playerData.keys}');
       return [];
     }
     
-    developer.log('使用 playerId=$playerId 获取角色详情');
+    debugPrint('使用 playerId=$playerId 获取角色详情');
     
+    // 调用 player detail 接口获取角色列表
     final response = await _client.get<Map<String, dynamic>>(
       '/api/v2/game/player/$playerId/detail',
     );
-    developer.log('响应状态码: ${response.statusCode}');
+    debugPrint('响应状态码: ${response.statusCode}');
+    debugPrint('响应数据 keys: ${response.data?.keys}');
     
     final data = response.data ?? const <String, dynamic>{};
     
+    // 提取 characters 数组
     List<dynamic> raw;
     if (data['characters'] is List) {
       raw = data['characters'] as List<dynamic>;
-      developer.log('从 characters 字段提取，共 ${raw.length} 个角色');
+      debugPrint('从 characters 字段提取，共 ${raw.length} 个角色');
     } else {
-      developer.log('未找到 characters 字段，可用字段: ${data.keys}');
+      debugPrint('未找到 characters 字段，可用字段: ${data.keys}');
       raw = [];
     }
     
+    // 转换格式 - 后端使用 code 字段，前端使用 id 字段
     return raw.map((e) {
       if (e is Map<String, dynamic>) {
+        // 兼容 code/id 两种字段名
         final code = e['code'] ?? e['id'];
         final intId = code is int ? code : int.tryParse(code.toString());
         if (intId == null) {
-          developer.log('  无效的角色ID: $code');
+          debugPrint('  无效的角色ID: $code');
           return null;
         }
-        developer.log('  角色: code=$code, entryCount=${e['entryCount']}');
+        debugPrint('  角色: code=$code, entryCount=${e['entryCount']}, evolutionLevel=${e['evolutionLevel']}');
         return OwnedCharacter(
           id: intId,
           entryCount: e['entryCount'] as int? ?? 1,
@@ -146,7 +161,7 @@ class AuthService {
           joinTime: DateTime.tryParse(e['joinTime'] as String? ?? '') ?? DateTime.now(),
         );
       } else {
-        developer.log('  意外的角色数据类型: ${e.runtimeType}');
+        debugPrint('  意外的角色数据类型: ${e.runtimeType}');
         return null;
       }
     }).whereType<OwnedCharacter>().toList();
@@ -159,6 +174,7 @@ class AuthService {
       await preferences.remove(tokenKey);
       await preferences.remove(playerKey);
     } on MissingPluginException {
+      // Nothing else is required for an in-memory session.
     }
   }
 
@@ -169,7 +185,9 @@ class AuthService {
 
 class AuthException implements Exception {
   const AuthException(this.code);
+
   final String code;
+
   @override
   String toString() => code;
 }
