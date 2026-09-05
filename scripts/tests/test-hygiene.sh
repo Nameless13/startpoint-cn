@@ -81,7 +81,7 @@ repo=$(new_repo allowed_patch)
 mkdir -p "$repo/assets/asset-patch/active"
 (
     cd "$repo"
-    python - <<'PY'
+    python3 - <<'PY'
 import os
 import zipfile
 from pathlib import Path
@@ -98,7 +98,7 @@ repo=$(new_repo wrong_patch_name)
 mkdir -p "$repo/assets/asset-patch/active"
 (
     cd "$repo"
-    python - <<'PY'
+    python3 - <<'PY'
 import os
 import zipfile
 from pathlib import Path
