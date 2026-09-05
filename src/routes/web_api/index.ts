@@ -7,6 +7,7 @@ import serverApiPlugin from "./server";
 import mailApiPlugin from "./mail";
 import lookupApiPlugin from "./lookup";
 import gameAuthApiPlugin from "./game-auth";
+import gameV2ApiPlugin from "./game-v2";
 
 
 interface WebApiRouteOptions {
@@ -37,6 +38,10 @@ const routes: FastifyPluginAsync<WebApiRouteOptions> = async (fastify, options) 
     fastify.register(lookupApiPlugin, { prefix: "/lookup" });
     fastify.register(gameAuthApiPlugin, {
         prefix: "/v2/game",
+        jwtSecret: options.gameAuthJwtSecret,
+    });
+    fastify.register(gameV2ApiPlugin, {
+        prefix: "/v2",
         jwtSecret: options.gameAuthJwtSecret,
     });
 };
