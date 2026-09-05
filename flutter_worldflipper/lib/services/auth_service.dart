@@ -1,4 +1,4 @@
-﻿import 'dart:convert';
+import 'dart:convert';
 import 'dart:developer' as developer;
 import 'package:dio/dio.dart';
 import 'package:flutter/services.dart';
@@ -18,10 +18,20 @@ class OwnedCharacter {
   });
 
   final int id;
-  final int entryCount;
-  final int evolutionLevel;
-  final int overLimitStep;
-  final DateTime joinTime;
+  final int entryCount; // 同调次数（重复抽到会累加）
+  final int evolutionLevel; // 进化等级
+  final int overLimitStep; // 超限步数
+  final DateTime joinTime; // 获得时间
+
+  factory OwnedCharacter.fromJson(Map<String, dynamic> json) {
+    return OwnedCharacter(
+      id: json['id'] as int,
+      entryCount: json['entryCount'] as int? ?? 1,
+      evolutionLevel: json['evolutionLevel'] as int? ?? 0,
+      overLimitStep: json['overLimitStep'] as int? ?? 0,
+      joinTime: DateTime.tryParse(json['joinTime'] as String? ?? '') ?? DateTime.now(),
+    );
+  }
 }
 
 class AuthService {
