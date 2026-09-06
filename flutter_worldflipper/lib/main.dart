@@ -280,6 +280,9 @@ class _CharacterHomePageState extends State<CharacterHomePage> {
 
   /// 获取角色的拥有信息（用于显示重复数等）
   OwnedCharacter? _getOwnedInfo(String characterId) {
+    if (_ownedCharacters == null || _ownedCharacters!.isEmpty) {
+      return null;
+    }
     try {
       final idAsInt = int.tryParse(characterId);
       if (idAsInt == null) return null;
