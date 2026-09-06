@@ -66,7 +66,7 @@ class GachaService {
   }) async {
     try {
       final response = await DioClient.instance.post<Map<String, dynamic>>(
-        '/api/v2/gacha/draw',
+        '/api/v2/game/gacha/draw',
         data: {'gachaId': gachaId, 'times': count},
       );
 

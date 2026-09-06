@@ -5,7 +5,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 class DioClient {
   DioClient._();
 
-  static const String baseUrl = 'http://100.67.116.109:8088';
+  // 本地开发使用 127.0.0.1:8001
+  static const String baseUrl = 'http://127.0.0.1:8001';
   static String? sessionToken;
   static final Dio instance = Dio(
     BaseOptions(

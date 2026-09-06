@@ -3,8 +3,10 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'character_loader.dart';
 import 'gacha_page.dart';
 import 'models/player.dart';
+import 'pages/battle_page.dart';
 import 'pages/login_page.dart';
 import 'services/auth_service.dart';
 
@@ -221,23 +223,66 @@ class ResearchHomePage extends StatefulWidget {
 }
 
 class _ResearchHomePageState extends State<ResearchHomePage> {
-  int _selectedIndex = 0;
+  int _selectedIndex = 2; // 默认选中战斗页
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       body: IndexedStack(
         index: _selectedIndex,
-        children: [CharacterHomePage(player: widget.player), const GachaPage()],
+        children: [
+          const GachaPage(),
+          CharacterHomePage(player: widget.player),
+          _BattlePageLoader(
+            player: widget.player,
+            onBack: () => setState(() => _selectedIndex = 2),
+          ),
+        ],
       ),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _selectedIndex,
         onDestinationSelected: (index) => setState(() => _selectedIndex = index),
         destinations: const [
-          NavigationDestination(icon: Icon(Icons.people_outline), label: '角色'),
           NavigationDestination(icon: Icon(Icons.casino_outlined), label: '扭蛋'),
+          NavigationDestination(icon: Icon(Icons.people_outline), label: '角色'),
+          NavigationDestination(icon: Icon(Icons.sports_martial_arts_outlined), label: '战斗'),
         ],
       ),
+    );
+  }
+}
+
+/// 加载角色数据后再渲染战斗页
+class _BattlePageLoader extends StatefulWidget {
+  const _BattlePageLoader({
+    required this.player,
+    required this.onBack,
+  });
+
+  final Player player;
+  final VoidCallback onBack;
+
+  @override
+  State<_BattlePageLoader> createState() => _BattlePageLoaderState();
+}
+
+class _BattlePageLoaderState extends State<_BattlePageLoader> {
+  late final Future<List<String>> _characterIdsFuture = loadCharacterIds();
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<List<String>>(
+      future: _characterIdsFuture,
+      builder: (context, snapshot) {
+        if (!snapshot.hasData) {
+          return const Center(child: CircularProgressIndicator());
+        }
+        return BattlePage(
+          player: widget.player,
+          characterIds: snapshot.data!,
+          onBack: widget.onBack,
+        );
+      },
     );
   }
 }
