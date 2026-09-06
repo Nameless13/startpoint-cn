@@ -41,6 +41,11 @@ const routes: FastifyPluginAsync<WebApiRouteOptions> = async (fastify, options) 
         jwtSecret: options.gameAuthJwtSecret,
     });
     fastify.register(gameV2ApiPlugin, {
+        prefix: "/v2/game",
+        jwtSecret: options.gameAuthJwtSecret,
+    });
+    // gacha/mission/shop/battle 等路由同时挂在 /v2 下（不带 /game），供 Flutter 调用
+    fastify.register(gameV2ApiPlugin, {
         prefix: "/v2",
         jwtSecret: options.gameAuthJwtSecret,
     });

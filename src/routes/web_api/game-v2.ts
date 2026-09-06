@@ -257,6 +257,56 @@ interface BattleContinueResponse {
 const routes: FastifyPluginAsync<V2RouteOptions> = async (fastify, options) => {
     const { jwtSecret } = options;
 
+    // ── GET /api/v2/player (当前玩家基础信息) ────────────────────────────────
+    fastify.get("/player", async (request: FastifyRequest, reply: FastifyReply) => {
+        const auth = request.headers.authorization;
+        const payload = verifyJwt(auth, jwtSecret);
+        if (!payload) {
+            return reply.status(401).send({ ok: false, error: "unauthorized" });
+        }
+        const player = getPlayerSync(payload.playerId);
+        if (!player) {
+            return reply.status(404).send({ ok: false, error: "player_not_found" });
+        }
+        return reply.send({
+            ok: true,
+            player: {
+                id: player.id,
+                name: player.name,
+                stamina: player.stamina,
+                staminaHealTime: player.staminaHealTime.toISOString(),
+                vmoney: player.vmoney,
+                freeVmoney: player.freeVmoney,
+                rankPoint: player.rankPoint,
+                role: player.role,
+                totalLoginDays: player.totalLoginDays,
+            },
+        });
+    });
+
+    // ── GET /api/v2/player/:id/detail (玩家详情，含角色列表) ───────────────────
+    fastify.get("/player/:id/detail", async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+        const auth = request.headers.authorization;
+        const payload = verifyJwt(auth, jwtSecret);
+        if (!payload) {
+            return reply.status(401).send({ ok: false, error: "unauthorized" });
+        }
+        const playerId = Number((request.params as { id: string }).id);
+        if (isNaN(playerId)) {
+            return reply.status(400).send({ ok: false, error: "invalid_id" });
+        }
+        const characters = getPlayerCharactersSync(playerId);
+        const characterList: CharacterInfo[] = Object.entries(characters).map(([id, char]) => ({
+            id: Number(id),
+            entryCount: char.entryCount,
+            evolutionLevel: char.evolutionLevel,
+            overLimitStep: char.overLimitStep,
+            exp: char.exp,
+            joinTime: char.joinTime.toISOString(),
+        }));
+        return reply.send({ ok: true, characters: characterList });
+    });
+
     // ── GET /api/v2/player/info ────────────────────────────────────────────
     fastify.get("/player/info", async (request: FastifyRequest, reply: FastifyReply) => {
         const auth = request.headers.authorization;
